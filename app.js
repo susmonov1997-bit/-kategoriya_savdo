@@ -58,8 +58,8 @@ let META = null;
 const st = {
   cat: null, from: null, to: null, preset: '7', compare: 'prev',
   f: {},                 // dim -> Set(key)   (kalitlar API'dagidek matn)
-  rows: 'region', cols: '', sort: 'amount',
-  crumbs: [],            // [{dim, key, label, prevRows, prevSet}]
+  mode: 'tree',          // tree (daraxt) | pivot (kesma)
+  rows: 'region', cols: 'attr:0', sort: 'amount',
   chartMetric: 'amount', shareView: 'struct', pvMode: 'amount',
   aExpand: {}, showAll: false,
 };
@@ -107,39 +107,142 @@ function cmpRange() {
   return [addDays(st.from, -len), addDays(st.from, -1)];
 }
 
-// ---------------------------------------------------------------- yuqori panel
-function renderCats() {
-  $('cats').innerHTML = META.categories.map(c => `<button data-id="${c.id}" aria-pressed="${c.id === st.cat}">${esc(c.name)}</button>`).join('');
-  $('cats').querySelectorAll('button').forEach(b => b.onclick = () => {
-    st.cat = +b.dataset.id; st.f = {}; st.crumbs = []; st.rows = 'region'; st.cols = ''; st.showAll = false; st.aExpand = {};
-    load();
-  });
-}
+// ---------------------------------------------------------------- yuqori panel (A variant)
+const PERIODS = [
+  ['1', 'Kecha'], ['7', 'Oxirgi 7 kun'], ['14', 'Oxirgi 14 kun'], ['30', 'Oxirgi 30 kun'],
+  ['week', 'Shu hafta'], ['lweek', "O'tgan hafta"], ['month', 'Shu oy'], ['lmonth', "O'tgan oy"]];
+const PERIOD_NAME = Object.fromEntries(PERIODS);
+const CMP_NAME = {prev: "O'tgan davr", yoy: "O'tgan yil", none: "Yo'q"};
 function presetRange(k) {
-  const to = META.data_to;
-  if (k === 'month') return [to.slice(0, 8) + '01', to];
-  return [addDays(to, -(+k - 1)), to];
+  const to = META.data_to, dow = (D(to).getUTCDay() + 6) % 7;          // Du = 0
+  const clamp = s => (META.data_from && s < META.data_from ? META.data_from : s);
+  if (k === 'week') return [clamp(addDays(to, -dow)), to];
+  if (k === 'lweek') { const mon = addDays(to, -dow - 7); return [clamp(mon), addDays(mon, 6)]; }
+  if (k === 'month') return [clamp(to.slice(0, 8) + '01'), to];
+  if (k === 'lmonth') { const last = addDays(to.slice(0, 8) + '01', -1); return [last.slice(0, 8) + '01', last]; }
+  return [clamp(addDays(to, -(+k - 1))), to];
 }
-const PRESETS = [['1', 'Kecha'], ['7', '7 kun'], ['14', '14 kun'], ['30', '30 kun'], ['month', 'Oy boshidan']];
-function renderPeriods() {
-  $('periods').innerHTML = PRESETS.map(([k, t]) => `<button class="chip" data-k="${k}" aria-pressed="${st.preset === k}">${t}</button>`).join('');
-  $('periods').querySelectorAll('button').forEach(b => b.onclick = () => {
-    st.preset = b.dataset.k; [st.from, st.to] = presetRange(st.preset); load();
+const periodText = () => (st.preset && PERIOD_NAME[st.preset]) ? PERIOD_NAME[st.preset]
+  : (st.from === st.to ? dm(st.from) : `${dm(st.from)}–${dm(st.to)}`);
+const LOC_DIMS = ['region', 'cluster', 'branch'];
+const prodDims = () => [...attrDims(), 'brand', 'status'];
+function renderHeader() {
+  const nf = Object.values(st.f).filter(s => s.size).length;
+  $('catBtn').innerHTML = `${esc(cat().name)} <span class="car">▾</span>`;
+  $('perBtn').innerHTML = `📅 ${periodText()} <span class="car">▾</span>`;
+  $('filBtn').innerHTML = `⚙ Filtr${nf ? ` <span class="badge">${nf}</span>` : ''}`;
+  $('filBtn').classList.toggle('acc', nf > 0);
+  const chips = [];
+  for (const d of [...LOC_DIMS, ...prodDims()]) {
+    const s = st.f[d]; if (!s || !s.size) continue;
+    const val = s.size === 1 ? (labels[d + '|' + [...s][0]] || [...s][0]) : `${s.size} ta`;
+    chips.push(`<button class="fchip" data-d="${d}" title="Olib tashlash"><b>${esc(dimName(d))}:</b> ${esc(val)} ✕</button>`);
+  }
+  if (chips.length > 1) chips.push(`<button class="fchip clr" id="clrAll">Tozalash</button>`);
+  $('fchips').innerHTML = chips.join('');
+  $('fchips').hidden = !chips.length;
+  $('fchips').querySelectorAll('.fchip[data-d]').forEach(b => b.onclick = () => { delete st.f[b.dataset.d]; resetView(); load(); });
+  const ca = $('clrAll'); if (ca) ca.onclick = () => { st.f = {}; resetView(); load(); };
+}
+function resetView() { st.showAll = false; TREE = null; }
+
+// --- pastki oyna (umumiy)
+function openSheetBox(title, bodyHtml, footHtml) {
+  const host = $('sheetHost');
+  host.innerHTML = `<div class="scrim" id="scrim"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="shT">
+    <header><div class="t"><h3 id="shT">${title}</h3><button class="x" id="shX" aria-label="Yopish">✕</button></div></header>
+    <div class="sbody">${bodyHtml}</div>${footHtml ? `<footer>${footHtml}</footer>` : ''}</div></div>`;
+  host.querySelector('#scrim').onclick = e => { if (e.target.id === 'scrim') closeSheet(); };
+  host.querySelector('#shX').onclick = closeSheet;
+  syncBack();
+  return host;
+}
+function closeSheet() { $('sheetHost').innerHTML = ''; syncBack(); }
+const sheetOpen = () => !!$('sheetHost').firstChild;
+
+function openCatSheet() {
+  const host = openSheetBox('Kategoriya', `<div class="optlist">${META.categories.map(c =>
+    `<button class="optrow ${c.id === st.cat ? 'on' : ''}" data-id="${c.id}"><span>${esc(c.name)}</span><span class="a num">${c.skus} SKU</span></button>`).join('')}</div>`);
+  host.querySelectorAll('.optrow').forEach(b => b.onclick = () => {
+    const id = +b.dataset.id; closeSheet();
+    if (id === st.cat) return;
+    st.cat = id; st.f = {}; st.aExpand = {}; st.rows = 'region'; st.cols = ''; resetView(); load();
   });
-  const f = $('dFrom'), t = $('dTo');
-  f.min = t.min = META.data_from; f.max = t.max = META.data_to;
-  f.value = st.from; t.value = st.to;
-  $('cmp').value = st.compare;
 }
-function renderFilterChips() {
-  const dims = ['region', 'cluster', 'branch', ...attrDims(), 'brand', 'status'];
-  const any = Object.values(st.f).some(s => s.size);
-  $('filters').innerHTML = dims.map(d => {
-    const n = st.f[d] ? st.f[d].size : 0;
-    return `<button class="chip ${n ? 'active' : ''}" data-d="${d}">${esc(dimName(d))}${n ? ` <span class="cnt">${n}</span>` : ''}</button>`;
-  }).join('') + (any ? `<button class="chip" id="clearAll">Tozalash ✕</button>` : '');
-  $('filters').querySelectorAll('button[data-d]').forEach(b => b.onclick = () => openSheet(b.dataset.d));
-  const ca = $('clearAll'); if (ca) ca.onclick = () => { st.f = {}; st.crumbs = []; load(); };
+
+function openPeriodSheet() {
+  let dPreset = st.preset, dFrom = st.from, dTo = st.to, dCmp = st.compare;
+  const body = () => `
+    <div class="pgrid">${PERIODS.map(([k, t]) => `<button class="opt2 ${dPreset === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('')}</div>
+    <div class="lbl">Ixtiyoriy davr <span class="hint">(ma'lumot: ${dm(META.data_from)}–${dm(META.data_to)})</span></div>
+    <div class="dates2"><input type="date" id="pF" value="${dFrom}" min="${META.data_from}" max="${META.data_to}" aria-label="Boshlanish">
+      <span>—</span><input type="date" id="pT" value="${dTo}" min="${META.data_from}" max="${META.data_to}" aria-label="Tugash"></div>
+    <div class="lbl">Solishtirish</div>
+    <div class="pgrid three">${Object.entries(CMP_NAME).map(([k, t]) => `<button class="opt2 cmp ${dCmp === k ? 'on' : ''}" data-c="${k}">${t}</button>`).join('')}</div>`;
+  const host = openSheetBox('Davr', body(), `<button class="btn primary" id="pApply">Qo'llash</button>`);
+  const wire = () => {
+    const sb = host.querySelector('.sbody');
+    sb.querySelectorAll('.opt2[data-k]').forEach(b => b.onclick = () => { dPreset = b.dataset.k; [dFrom, dTo] = presetRange(dPreset); sb.innerHTML = body(); wire(); });
+    sb.querySelectorAll('.opt2[data-c]').forEach(b => b.onclick = () => { dCmp = b.dataset.c; sb.innerHTML = body(); wire(); });
+    sb.querySelector('#pF').onchange = e => { if (e.target.value) { dFrom = e.target.value; dPreset = ''; if (dFrom > dTo) dTo = dFrom; sb.innerHTML = body(); wire(); } };
+    sb.querySelector('#pT').onchange = e => { if (e.target.value) { dTo = e.target.value; dPreset = ''; if (dTo < dFrom) dFrom = dTo; sb.innerHTML = body(); wire(); } };
+  };
+  wire();
+  host.querySelector('#pApply').onclick = () => {
+    st.preset = dPreset; st.from = dFrom; st.to = dTo; st.compare = dCmp; closeSheet(); resetView(); load();
+  };
+}
+
+async function openFilterSheet() {
+  const host = openSheetBox('Filtr', `<div class="empty">Yuklanmoqda…</div>`);
+  let opts;
+  try { opts = await api('options', filters()); }
+  catch (e) { closeSheet(); showError(e); return; }
+  const draft = {}; for (const d in st.f) draft[d] = new Set(st.f[d]);
+  const open = new Set(Object.keys(draft).filter(d => draft[d].size));
+  if (!open.size) open.add('region');
+  for (const d in opts) opts[d].forEach(o => remember(d, o.key, o.label));
+  for (const d in draft) for (const k of draft[d]) if (opts[d] && !opts[d].some(o => o.key === k)) opts[d].push({key: k, label: labels[d + '|' + k] || k, amount: 0});
+  let q = '';
+  const dimBlock = d => {
+    const list = (opts[d] || []).filter(o => !q || String(o.label).toLowerCase().includes(q));
+    const sel = draft[d] || new Set();
+    if (q && !list.length) return '';
+    const isOpen = q ? true : open.has(d);
+    return `<div class="fgrp">
+      <button class="fgrp-h" data-d="${d}"><span>${esc(dimName(d))}</span><span class="s">${sel.size ? `${sel.size} tanlangan · ` : ''}${(opts[d] || []).length} ta ${isOpen ? '▾' : '▸'}</span></button>
+      ${isOpen ? `<div class="opts">${list.slice(0, 200).map(o => `<label class="opt ${o.amount ? '' : 'zero'}">
+        <input type="checkbox" data-d="${d}" data-k="${esc(o.key)}" ${sel.has(o.key) ? 'checked' : ''}><span>${esc(o.label)}</span><span class="a num">${money(o.amount)}</span></label>`).join('')}
+        ${list.length > 200 ? `<div class="hint" style="padding:6px 16px">Yana ${list.length - 200} ta — qidiruvdan foydalaning</div>` : ''}</div>` : ''}
+    </div>`;
+  };
+  const body = () => {
+    const loc = LOC_DIMS.map(dimBlock).join(''), prod = prodDims().map(dimBlock).join('');
+    return `<input type="search" id="fQ" placeholder="Qidirish: hudud, filial, brend, qiymat…" autocomplete="off" value="${esc(q)}">
+      ${loc ? `<div class="fsec">📍 Joy</div>${loc}` : ''}${prod ? `<div class="fsec">📦 Tovar</div>${prod}` : ''}
+      ${!loc && !prod ? `<div class="empty">Hech narsa topilmadi</div>` : ''}`;
+  };
+  host.querySelector('.sbody').innerHTML = body();
+  host.querySelector('.sheet').insertAdjacentHTML('beforeend',
+    `<footer><button class="btn" id="fClr">Tozalash</button><button class="btn primary" id="fApply">Ko'rsatish</button></footer>`);
+  const wire = () => {
+    const sb = host.querySelector('.sbody');
+    const qi = sb.querySelector('#fQ');
+    qi.oninput = () => { q = qi.value.trim().toLowerCase(); sb.innerHTML = body(); wire(); const n = sb.querySelector('#fQ'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
+    sb.querySelectorAll('.fgrp-h').forEach(b => b.onclick = () => { const d = b.dataset.d; open.has(d) ? open.delete(d) : open.add(d); sb.innerHTML = body(); wire(); });
+    sb.querySelectorAll('input[type=checkbox]').forEach(i => i.onchange = () => {
+      const d = i.dataset.d, k = i.dataset.k; draft[d] = draft[d] || new Set();
+      i.checked ? draft[d].add(k) : draft[d].delete(k);
+      const h = i.closest('.fgrp').querySelector('.fgrp-h .s');
+      h.textContent = `${draft[d].size ? `${draft[d].size} tanlangan · ` : ''}${(opts[d] || []).length} ta ▾`;
+    });
+  };
+  wire();
+  host.querySelector('#fClr').onclick = () => { for (const d in draft) draft[d].clear(); host.querySelector('.sbody').innerHTML = body(); wire(); };
+  host.querySelector('#fApply').onclick = () => {
+    st.f = {}; for (const d in draft) if (draft[d].size) st.f[d] = new Set(draft[d]);
+    closeSheet(); resetView(); load();
+  };
 }
 
 // ---------------------------------------------------------------- KPI
@@ -225,85 +328,179 @@ function renderChart() {
   hit.addEventListener('pointerleave', () => { hov.setAttribute('visibility', 'hidden'); tip.hidden = true; });
 }
 
-// ---------------------------------------------------------------- qirqim
-let BD = null;
-const SLOTS = 8;
+// ---------------------------------------------------------------- qirqim: daraxt va kesma
+let BD = null;          // kesma rejimi uchun
+let TREE = null;        // daraxt ildizi (Jami)
+let FOCUS = null;       // ulush kartasi ko'rsatadigan tugun
+const OPEN = new Set(); // ochiq tugunlar (qayta yuklanganda saqlanadi): "dim=key/dim=key"
+const SLOTS = 8, CHILD_LIMIT = 15;
 function dimOptions(sel, includeNone) {
   const dims = [...LOC_PATH, ...attrDims(), 'brand', 'status', 'sku'];
   return (includeNone ? `<option value="">—</option>` : '') + dims.map(d => `<option value="${d}" ${d === sel ? 'selected' : ''}>${esc(dimName(d))}</option>`).join('');
 }
-function renderCrumbs() {
-  const cr = $('crumbs');
-  cr.innerHTML = st.crumbs.length ? [`<button data-i="-1">Jami</button>`, ...st.crumbs.map((c, i) =>
-    i === st.crumbs.length - 1 ? `<span class="sep">›</span><span class="cur">${esc(c.label)}</span>`
-                               : `<span class="sep">›</span><button data-i="${i}">${esc(c.label)}</button>`)].join('') : '';
-  cr.querySelectorAll('button').forEach(b => b.onclick = () => popCrumbs(+b.dataset.i));
-  if (tg && tg.BackButton) { st.crumbs.length ? tg.BackButton.show() : tg.BackButton.hide(); }
+const sig = path => path.map(p => `${p.dim}=${p.key}`).join('/');
+function childDimFor(path) {
+  // drill yo'li: Hudud → Klaster → Filial → xususiyatlar → Brend → SKU; yo'lda bor yoki bitta qiymatga filtrlangan daraja o'tkaziladi
+  const used = new Set(path.map(p => p.dim));
+  for (const d of drillPath()) {
+    if (used.has(d)) continue;
+    if (st.f[d] && st.f[d].size === 1) continue;
+    return d;
+  }
+  return null;
 }
-function sortedItems() {
-  const items = BD.rows.slice();
-  if (st.sort === 'delta') items.sort((a, b) => (b.delta.amount ?? -1e9) - (a.delta.amount ?? -1e9));
-  return items;
+function pathFilters(path) {
+  const F = filters();
+  for (const p of path) {
+    if (NUM_DIMS[p.dim]) F[NUM_DIMS[p.dim]] = [Number(p.key)];
+    else if (p.dim === 'brand') F.brands = [p.key];
+    else if (p.dim === 'status') F.statuses = [p.key];
+    else if (p.dim.startsWith('attr:')) F.attrs = {...F.attrs, [p.dim.slice(5)]: [p.key]};
+  }
+  return F;
 }
+const apiSort = () => (st.sort === 'delta' ? 'amount' : st.sort);
+function sortRows(rows) {
+  if (st.sort === 'delta') rows.sort((a, b) => (b.delta.amount ?? -1e9) - (a.delta.amount ?? -1e9));
+  return rows;
+}
+async function fetchChildren(node) {
+  const res = await api('breakdown', {...pathFilters(node.path), rows: node.childDim, sort: apiSort(), desc: st.sort !== 'name', limit: 500});
+  node.total = res.total; node.total_rows = res.total_rows; node.raw = sortRows(res.rows);
+  node.children = node.raw.map(r => {
+    remember(node.childDim, r.key, r.label);
+    const path = [...node.path, {dim: node.childDim, key: r.key}];
+    return {path, dim: node.childDim, key: r.key, label: r.label, sub: r.sub, row: r, depth: node.depth + 1,
+            childDim: childDimFor(path), children: null, open: false, showAll: false};
+  });
+  return res;
+}
+async function buildTree() {
+  const root = {path: [], dim: null, key: null, label: 'Jami', depth: 0, childDim: childDimFor([]), children: null, open: true, showAll: false};
+  if (root.childDim) await fetchChildren(root);
+  TREE = root; FOCUS = root;
+  // oldin ochilgan shoxlarni qayta ochish
+  const reopen = async node => {
+    for (const ch of node.children || []) {
+      if (OPEN.has(sig(ch.path)) && ch.childDim) {
+        try { await fetchChildren(ch); ch.open = true; FOCUS = ch; await reopen(ch); } catch (e) { OPEN.delete(sig(ch.path)); }
+      }
+    }
+  };
+  await reopen(root);
+}
+async function toggleNode(node) {
+  if (!node.childDim) return;
+  if (node.open) {
+    node.open = false; OPEN.delete(sig(node.path));
+    if (FOCUS && sig(FOCUS.path).startsWith(sig(node.path))) FOCUS = findParent(node) || TREE;
+    renderTree(); renderShare(); return;
+  }
+  node.loading = true; renderTree();
+  try { if (!node.children) await fetchChildren(node); node.open = true; OPEN.add(sig(node.path)); FOCUS = node; }
+  catch (e) { showError(e); }
+  node.loading = false;
+  try { tg && tg.HapticFeedback && tg.HapticFeedback.selectionChanged(); } catch (e) {}
+  renderTree(); renderShare();
+}
+function findParent(node) {
+  const want = sig(node.path.slice(0, -1));
+  let hit = null;
+  const walk = n => { if (sig(n.path) === want) hit = n; (n.children || []).forEach(walk); };
+  walk(TREE); return hit;
+}
+function findBySig(s) { let hit = null; const walk = n => { if (sig(n.path) === s) hit = n; (n.children || []).forEach(walk); }; walk(TREE); return hit; }
+
 function renderBreakdown() {
-  $('rowsDim').innerHTML = dimOptions(st.rows, false);
-  $('colsDim').innerHTML = dimOptions(st.cols, true);
   $('sortBy').value = st.sort;
-  renderCrumbs();
+  document.querySelectorAll('#brMode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.m === st.mode));
+  $('pvCtl').hidden = st.mode !== 'pivot';
+  if (st.mode === 'pivot') {
+    $('rowsDim').innerHTML = dimOptions(st.rows, false);
+    $('colsDim').innerHTML = dimOptions(st.cols, false);
+    $('brHint').textContent = BD ? `${BD.total_rows} ta qator` : '';
+    $('shareHost').innerHTML = '';
+    if (BD) renderPivot($('breakdown'));
+    return;
+  }
+  $('brHint').textContent = 'qatorni bosing — ichi ochiladi';
+  renderShare(); renderTree();
+}
+function rowHtml(node, parentAmount, rootAmount) {
+  const r = node.row, hasCmp = !!cmpRange(), can = !!node.childDim;
+  const shareTot = rootAmount ? r.current.amount / rootAmount * 100 : null;
+  return `<button class="tr lv${Math.min(node.depth, 6)} ${can ? 'can' : ''} ${node.open ? 'op' : ''}" data-s="${esc(sig(node.path))}" ${can ? '' : 'tabindex="-1"'}
+      style="--ind:${(node.depth - 1) * 14}px" title="Jami savdodan ${pct(shareTot)}">
+    <span class="n"><span class="c">${node.loading ? '…' : can ? (node.open ? '▾' : '▸') : '·'}</span><span class="nl">${esc(node.label)}${node.sub && node.dim === 'sku' ? ` <span class="sub2">· ${esc(node.sub)}</span>` : ''}</span>
+      <span class="lvtag">${esc(dimName(node.dim))}</span></span>
+    <span class="v num">${money(r.current.amount)}</span>
+    <span class="m num"><span class="bar"><span style="width:${Math.min(100, r.share || 0)}%"></span></span><span>${pct(r.share)}</span>${hasCmp ? pill(r.delta.amount) : ''}<span class="${r.current.margin_pct < 0 ? 'neg' : ''}">M ${pct(r.current.margin_pct)}</span></span>
+  </button>`;
+}
+function renderTree() {
   const host = $('breakdown');
-  if (!BD) return;
-  BD.rows.forEach(i => remember(st.rows, i.key, i.label));
-  $('brHint').textContent = `${BD.total_rows} ta · ${dimName(st.rows).toLowerCase()}`;
-  if (st.cols) { renderPivot(host); return; }
-  const items = sortedItems(), T = BD.total, hasCmp = !!cmpRange();
-  if (!items.length) { host.innerHTML = `<div class="list"><div class="empty">Tanlangan filtrlar bo'yicha savdo yo'q.</div></div>`; return; }
-  const canDrill = !!nextDim(st.rows);
-  const maxShare = Math.max(...items.map(i => i.share || 0), 1);
-  const LIMIT = 12, shown = st.showAll ? items : items.slice(0, LIMIT);
-  host.innerHTML = shareCard() + `<div class="list">
-    <div class="row total"><div class="nm">Jami</div><div class="amt num">${money(T.amount)}</div>
-      <div class="meta num" style="grid-column:1/-1;justify-content:flex-start">dona ${nf0.format(T.qty)} · valovka ${pct(T.gross_pct)} · marja ${pct(T.margin_pct)}</div></div>
-    ${shown.map(i => `<button class="row ${canDrill ? 'drill' : ''}" data-k="${esc(i.key)}" ${canDrill ? '' : 'disabled style="cursor:default"'}>
-      <div class="nm"><span>${esc(i.label)}${i.sub ? ` <span class="sub2">· ${esc(i.sub)}</span>` : ''}</span>${canDrill ? '<span class="chev">›</span>' : ''}</div>
-      <div class="amt num">${money(i.current.amount)}</div>
-      <div class="bar" title="Ulush ${pct(i.share)}"><span style="width:${(i.share || 0) / maxShare * 100}%"></span></div>
-      <div class="meta num"><span>${pct(i.share)}</span>${hasCmp ? pill(i.delta.amount) : ''}<span class="${i.current.margin_pct < 0 ? 'neg' : ''}">M ${pct(i.current.margin_pct)}</span></div>
-    </button>`).join('')}
-    ${items.length > LIMIT ? `<button class="more" id="more">${st.showAll ? 'Qisqartirish' : `Yana ${items.length - LIMIT} ta ko'rsatish`}</button>` : ''}
-    ${BD.total_rows > items.length ? `<div class="empty">Ro'yxatda birinchi ${items.length} ta (jami ${BD.total_rows})</div>` : ''}
-  </div>`;
-  host.querySelectorAll('.row.drill, .srow.drill').forEach(b => b.onclick = () => drill(st.rows, b.dataset.k));
-  const mo = $('more'); if (mo) mo.onclick = () => { st.showAll = !st.showAll; renderBreakdown(); };
-  wireShareCard();
+  if (!TREE) { host.innerHTML = ''; return; }
+  const T = TREE.total, rootAmt = T ? T.amount : 0;
+  if (!TREE.childDim || !T) { host.innerHTML = `<div class="list"><div class="empty">Tanlangan filtrlar bo'yicha savdo yo'q.</div></div>`; return; }
+  const out = [`<button class="tr lv0 can ${TREE.open ? 'op' : ''}" data-s="">
+      <span class="n"><span class="c">${TREE.open ? '▾' : '▸'}</span><b>Jami</b></span><span class="v num">${money(T.amount)}</span>
+      <span class="m num">${nf0.format(T.qty)} dona · valovka ${pct(T.gross_pct)} · marja ${pct(T.margin_pct)}</span></button>`];
+  const walk = node => {
+    if (!node.open || !node.children) return;
+    if (!node.children.length) { out.push(`<div class="tr-empty" style="--ind:${node.depth * 14}px">Savdo yo'q</div>`); return; }
+    const shown = node.showAll ? node.children : node.children.slice(0, CHILD_LIMIT);
+    for (const ch of shown) { out.push(rowHtml(ch, node.total ? node.total.amount : 0, rootAmt)); walk(ch); }
+    const rest = node.children.length - shown.length;
+    if (rest > 0) out.push(`<button class="tr-more" data-more="${esc(sig(node.path))}" style="--ind:${node.depth * 14}px">Yana ${rest} ta ${esc(dimName(node.childDim)).toLowerCase()} ko'rsatish</button>`);
+    if (node.total_rows > node.children.length) out.push(`<div class="tr-empty" style="--ind:${node.depth * 14}px">Birinchi ${node.children.length} ta ko'rsatilgan (jami ${node.total_rows})</div>`);
+  };
+  walk(TREE);
+  host.innerHTML = `<div class="tw">${out.join('')}</div>`;
+  host.querySelectorAll('.tr.can').forEach(b => b.onclick = () => { const n = b.dataset.s === '' ? TREE : findBySig(b.dataset.s); if (n) toggleNode(n); });
+  host.querySelectorAll('.tr-more').forEach(b => b.onclick = () => { const n = b.dataset.more === '' ? TREE : findBySig(b.dataset.more); if (n) { n.showAll = true; renderTree(); } });
 }
 
-// --- ulush kartasi
-function shareCard() {
-  return `<div class="chartcard sharecard">
-    <div class="sh"><span class="label">Savdo ulushi · ${esc(dimName(st.rows))}</span>
+// --- ulush kartasi: FOCUS tugunining ichki tarkibi
+function renderShare() {
+  const host = $('shareHost');
+  const node = FOCUS && FOCUS.open && FOCUS.children ? FOCUS : TREE;
+  if (!node || !node.children || !node.children.length) { host.innerHTML = ''; return; }
+  const ctx = node.path.length ? node.path.map(p => labels[p.dim + '|' + p.key] || p.key).join(' › ') : 'Jami';
+  host.innerHTML = `<div class="chartcard sharecard">
+    <div class="sh"><span class="label">Savdo ulushi · ${esc(dimName(node.childDim))}</span>
       <div class="seg mini" id="shareView">
         <button data-v="struct" aria-pressed="${st.shareView === 'struct'}">Tuzilma</button>
         <button data-v="dyn" aria-pressed="${st.shareView === 'dyn'}">Kunlar bo'yicha</button>
       </div></div>
-    <div id="shareBody">${st.shareView === 'struct' ? shareStruct() : '<div class="empty">Yuklanmoqda…</div>'}</div>
+    <div class="hint">${esc(ctx)}</div>
+    <div id="shareBody">${st.shareView === 'struct' ? shareStruct(node) : '<div class="empty">Yuklanmoqda…</div>'}</div>
   </div>`;
+  const wireRows = () => host.querySelectorAll('.srow.drill').forEach(x => x.onclick = () => {
+    const ch = node.children.find(c => String(c.key) === x.dataset.k); if (ch) toggleNode(ch); });
+  wireRows();
+  host.querySelectorAll('#shareView button').forEach(b => b.onclick = () => {
+    st.shareView = b.dataset.v;
+    host.querySelectorAll('#shareView button').forEach(x => x.setAttribute('aria-pressed', x === b));
+    if (st.shareView === 'struct') { $('shareBody').innerHTML = shareStruct(node); wireRows(); } else shareDyn(node);
+  });
+  if (st.shareView === 'dyn') shareDyn(node);
 }
-function shareStruct() {
+function shareStruct(node) {
   const hasCmp = !!cmpRange();
-  const byAmt = BD.rows.slice().sort((a, b) => b.current.amount - a.current.amount);
-  const top = byAmt.slice(0, SLOTS), rest = byAmt.slice(SLOTS);
+  const byAmt = node.raw.slice().sort((a, b) => b.current.amount - a.current.amount);
+  const top = byAmt.slice(0, SLOTS);
   const rows = top.map((i, n) => ({key: i.key, label: i.label, share: i.share || 0, pshare: i.prev_share, pp: i.share_pp, color: `var(--s${n + 1})`}));
-  const restCount = BD.total_rows - top.length;
+  const restCount = node.total_rows - top.length;
   if (restCount > 0) {
     const sh = Math.max(0, 100 - top.reduce((s, i) => s + (i.share || 0), 0));
     const ps = hasCmp && top.every(i => i.prev_share != null) ? Math.max(0, 100 - top.reduce((s, i) => s + i.prev_share, 0)) : null;
     rows.push({key: null, label: `Boshqalar (${restCount})`, share: sh, pshare: ps, pp: ps != null ? sh - ps : null, color: 'var(--so)'});
   }
   const max = Math.max(...rows.map(r => Math.max(r.share || 0, hasCmp ? r.pshare || 0 : 0)), 1);
-  const canDrill = !!nextDim(st.rows);
+  const can = !!childDimFor([...node.path, {dim: node.childDim, key: ''}]);
   return `<div class="strip" role="img" aria-label="Ulushlar tuzilmasi">${rows.map(r => `<span style="width:${r.share}%;background:${r.color}" title="${esc(r.label)}: ${pct(r.share)}"></span>`).join('')}</div>
     ${hasCmp ? `<div class="legend" style="margin:2px 0 4px"><span><i style="background:var(--ink-2);width:3px;height:12px"></i>o'tgan davrdagi ulush</span></div>` : ''}
-    <div class="srows">${rows.map(r => `<button class="srow ${r.key != null && canDrill ? 'drill' : ''}" ${r.key != null ? `data-k="${esc(r.key)}"` : ''} ${r.key != null && canDrill ? '' : 'disabled'}>
+    <div class="srows">${rows.map(r => `<button class="srow ${r.key != null && can ? 'drill' : ''}" ${r.key != null ? `data-k="${esc(r.key)}"` : ''} ${r.key != null && can ? '' : 'disabled'}>
       <span class="sw" style="background:${r.color}"></span>
       <span class="sl" title="${esc(r.label)}">${esc(r.label)}</span>
       <span class="sv num">${pct(r.share)}</span>
@@ -312,11 +509,11 @@ function shareStruct() {
       <span class="spp">${hasCmp ? pill(r.pp, true) : ''}</span>
     </button>`).join('')}</div>`;
 }
-async function shareDyn() {
+async function shareDyn(node) {
   const body = $('shareBody');
   const req = ++reqSeq.dyn;
   let data;
-  try { data = await api('share-daily', {...filters(), rows: st.rows, limit: 5}); }
+  try { data = await api('share-daily', {...pathFilters(node.path), rows: node.childDim, limit: 5}); }
   catch (e) { body.innerHTML = `<div class="errbox">${esc(e.message)}</div>`; return; }
   if (req !== reqSeq.dyn || !$('shareBody')) return;
   const days = data.days, n = days.length, names = data.series.map(s => s.label);
@@ -349,19 +546,9 @@ async function shareDyn() {
     el.addEventListener('pointerleave', () => tip.hidden = true);
   });
 }
-function wireShareCard() {
-  document.querySelectorAll('#shareView button').forEach(b => b.onclick = () => {
-    st.shareView = b.dataset.v;
-    document.querySelectorAll('#shareView button').forEach(x => x.setAttribute('aria-pressed', x === b));
-    if (st.shareView === 'struct') {
-      $('shareBody').innerHTML = shareStruct();
-      $('shareBody').querySelectorAll('.srow.drill').forEach(x => x.onclick = () => drill(st.rows, x.dataset.k));
-    } else shareDyn();
-  });
-  if (st.shareView === 'dyn') shareDyn();
-}
 
-// --- kesma
+// --- kesma (ikki o'lchov)
+function sortedItems() { return sortRows(BD.rows.slice()); }
 function renderPivot(host) {
   const items = sortedItems(), T = BD.total, cols = BD.cols || [], cells = BD.cells || {};
   const rowsShown = items.slice(0, st.showAll ? items.length : 20);
@@ -391,25 +578,6 @@ function renderPivot(host) {
   const mo = $('more'); if (mo) mo.onclick = () => { st.showAll = true; renderBreakdown(); };
   host.querySelectorAll('#pvMode button').forEach(b => b.onclick = () => { st.pvMode = b.dataset.v; renderBreakdown(); });
 }
-
-// --- drill-down
-function drill(d, k) {
-  const nd = nextDim(d); if (!nd) return;
-  const label = labels[d + '|' + k] || k;
-  st.crumbs.push({dim: d, key: k, label, prevRows: st.rows, prevSet: st.f[d] ? new Set(st.f[d]) : null});
-  st.f[d] = new Set([k]); st.rows = nd; st.showAll = false;
-  try { tg && tg.HapticFeedback && tg.HapticFeedback.selectionChanged(); } catch (e) {}
-  load();
-}
-function popCrumbs(i) {
-  while (st.crumbs.length > i + 1) {
-    const c = st.crumbs.pop();
-    if (c.prevSet) st.f[c.dim] = c.prevSet; else delete st.f[c.dim];
-    st.rows = c.prevRows;
-  }
-  st.showAll = false; load();
-}
-if (tg && tg.BackButton) tg.BackButton.onClick(() => { if (st.crumbs.length) popCrumbs(st.crumbs.length - 2); });
 
 // ---------------------------------------------------------------- xususiyatlar bloklari
 let ATTR = null;
@@ -453,8 +621,7 @@ function renderAttrBlocks() {
     const d = b.dataset.d, k = b.dataset.k;
     const set = new Set(st.f[d] || []); set.has(k) ? set.delete(k) : set.add(k);
     if (set.size) st.f[d] = set; else delete st.f[d];
-    st.crumbs = st.crumbs.filter(c => c.dim !== d); st.showAll = false;
-    load();
+    resetView(); load();
   });
   host.querySelectorAll('.amore').forEach(b => b.onclick = () => { st.aExpand[b.dataset.d] = !st.aExpand[b.dataset.d]; renderAttrBlocks(); });
 }
@@ -465,38 +632,6 @@ function renderTop(t) {
     <span class="rk num">${n + 1}</span><span class="nm">${esc(i.label)}</span><span class="amt num">${money(i.current.amount)}</span>
     <span class="br">${esc(i.sub || '')} · ${nf0.format(i.current.qty)} dona</span><span class="mt num ${i.current.margin_pct < 0 ? 'neg' : ''}">marja ${pct(i.current.margin_pct)}</span>
   </div>`).join('') : `<div class="empty">Savdo yo'q.</div>`;
-}
-
-// ---------------------------------------------------------------- filtr oynasi
-async function openSheet(d) {
-  const host = $('sheetHost');
-  host.innerHTML = `<div class="scrim" id="scrim"><div class="sheet"><header><div class="t"><h3>${esc(dimName(d))}</h3></div></header><div class="empty">Yuklanmoqda…</div></div></div>`;
-  let opts;
-  try { opts = (await api('options', filters()))[d] || []; }
-  catch (e) { host.innerHTML = ''; showError(e); return; }
-  const sel = new Set(st.f[d] || []);
-  opts.forEach(o => remember(d, o.key, o.label));
-  for (const k of sel) if (!opts.some(o => o.key === k)) opts.push({key: k, label: labels[d + '|' + k] || k, amount: 0});
-  host.innerHTML = `<div class="scrim" id="scrim"><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="shT">
-    <header><div class="t"><h3 id="shT">${esc(dimName(d))}</h3><button class="x" id="shX" aria-label="Yopish">✕</button></div>
-      ${opts.length > 8 ? `<input type="search" id="shQ" placeholder="Qidirish…" autocomplete="off">` : ''}
-      <div class="foot">Joriy davr savdosi, boshqa filtrlar hisobga olingan</div></header>
-    <div class="opts">${opts.map((o, i) => `<label class="opt ${o.amount ? '' : 'zero'}" data-l="${esc(String(o.label).toLowerCase())}">
-      <input type="checkbox" data-i="${i}" ${sel.has(o.key) ? 'checked' : ''}><span>${esc(o.label)}</span><span class="a num">${money(o.amount)}</span></label>`).join('')}</div>
-    <footer><button class="btn" id="shC">Tozalash</button><button class="btn primary" id="shA">Qo'llash</button></footer>
-  </div></div>`;
-  const close = () => { host.innerHTML = ''; };
-  host.querySelector('#scrim').onclick = e => { if (e.target.id === 'scrim') close(); };
-  host.querySelector('#shX').onclick = close;
-  const q = host.querySelector('#shQ');
-  if (q) q.oninput = () => { const v = q.value.toLowerCase(); host.querySelectorAll('.opt').forEach(o => o.hidden = !o.dataset.l.includes(v)); };
-  host.querySelector('#shC').onclick = () => host.querySelectorAll('.opt input').forEach(i => i.checked = false);
-  host.querySelector('#shA').onclick = () => {
-    const s = new Set(); host.querySelectorAll('.opt input').forEach(i => { if (i.checked) s.add(opts[+i.dataset.i].key); });
-    if (s.size) st.f[d] = s; else delete st.f[d];
-    st.crumbs = st.crumbs.filter(c => c.dim !== d); st.showAll = false;
-    close(); load();
-  };
 }
 
 // ---------------------------------------------------------------- yuklash
@@ -515,23 +650,21 @@ function showError(e) {
   $('kpis').replaceChildren(box);
 }
 async function load() {
-  renderCats(); renderPeriods(); renderFilterChips(); renderCrumbs();
+  renderHeader();
   const F = filters(), seq = ++reqSeq.main;
   const secs = ['kpis', 'chart', 'breakdown', 'ablocks', 'top'].map($);
   secs.forEach(s => s.classList.add('loading'));
-  const apiSort = st.sort === 'delta' ? 'amount' : st.sort;
   try {
-    const [sum, daily, bd, attrs, top] = await Promise.all([
-      api('summary', F),
-      api('daily', F),
-      api('breakdown', {...F, rows: st.rows, cols: st.cols || null, sort: apiSort, desc: st.sort !== 'name', limit: 500}),
-      api('attributes', F),
-      api('breakdown', {...F, rows: 'sku', sort: 'amount', limit: 10}),
-    ]);
+    const tasks = [api('summary', F), api('daily', F), api('attributes', F), api('breakdown', {...F, rows: 'sku', sort: 'amount', limit: 10})];
+    if (st.mode === 'pivot') {
+      if (!st.cols || st.cols === st.rows) st.cols = attrDims().find(d => d !== st.rows) || (st.rows === 'brand' ? 'region' : 'brand');
+      tasks.push(api('breakdown', {...F, rows: st.rows, cols: st.cols, sort: apiSort(), desc: st.sort !== 'name', limit: 500}));
+    } else tasks.push(buildTree());
+    const [sum, daily, attrs, top, bd] = await Promise.all(tasks);
     if (seq !== reqSeq.main) return;          // eskirgan javob
-    DAILY = daily; BD = bd; ATTR = attrs;
+    DAILY = daily; ATTR = attrs; if (st.mode === 'pivot') BD = bd;
     renderKpis(sum); renderChart(); renderBreakdown(); renderAttrBlocks(); renderTop(top);
-    renderFilterChips(); renderCrumbs();
+    renderHeader();
   } catch (e) {
     if (seq === reqSeq.main) showError(e);
   } finally {
@@ -540,18 +673,24 @@ async function load() {
 }
 
 // ---------------------------------------------------------------- boshqaruv
-$('dFrom').onchange = e => { if (e.target.value) { st.from = e.target.value > st.to ? st.to : e.target.value; st.preset = ''; load(); } };
-$('dTo').onchange = e => { if (e.target.value) { st.to = e.target.value < st.from ? st.from : e.target.value; st.preset = ''; load(); } };
-$('cmp').onchange = e => { st.compare = e.target.value; load(); };
+$('catBtn').onclick = openCatSheet;
+$('perBtn').onclick = openPeriodSheet;
+$('filBtn').onclick = openFilterSheet;
 $('rowsDim').onchange = e => { st.rows = e.target.value; if (st.cols === st.rows) st.cols = ''; st.showAll = false; load(); };
 $('colsDim').onchange = e => { st.cols = e.target.value === st.rows ? '' : e.target.value; st.showAll = false; load(); };
-$('sortBy').onchange = e => { st.sort = e.target.value; load(); };
+$('sortBy').onchange = e => { st.sort = e.target.value; resetView(); load(); };
+document.querySelectorAll('#brMode button').forEach(b => b.onclick = () => { if (st.mode === b.dataset.m) return; st.mode = b.dataset.m; resetView(); load(); });
+function syncBack() {
+  if (!(tg && tg.BackButton)) return;
+  (sheetOpen() || VIEW === 'upload') ? tg.BackButton.show() : tg.BackButton.hide();
+}
+if (tg && tg.BackButton) tg.BackButton.onClick(() => { if (sheetOpen()) closeSheet(); else if (VIEW === 'upload') setView('analytics'); });
 document.querySelectorAll('#chartMetric button').forEach(b => b.onclick = () => {
   st.chartMetric = b.dataset.m;
   document.querySelectorAll('#chartMetric button').forEach(x => x.setAttribute('aria-pressed', x === b));
   renderChart();
 });
-let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { renderChart(); if (st.shareView === 'dyn' && !st.cols) shareDyn(); }, 150); });
+let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { renderChart(); if (st.shareView === 'dyn' && st.mode === 'tree') renderShare(); }, 150); });
 
 
 // ---------------------------------------------------------------- bo'limlar: Tahlil / Yuklash
@@ -559,15 +698,17 @@ let VIEW = 'analytics';
 let NEED_REFRESH = false;   // yangi fayl yuklangach tahlil qayta o'qiladi
 function setView(v) {
   VIEW = v;
-  document.querySelectorAll('#views button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === v));
+  $('upBtn').textContent = v === 'upload' ? '📊' : '📥';
+  $('upBtn').title = v === 'upload' ? 'Tahlilga qaytish' : 'Fayl yuklash';
   $('topAnalytics').hidden = v !== 'analytics';
   $('viewAnalytics').hidden = v !== 'analytics';
   $('viewUpload').hidden = v !== 'upload';
   if (v === 'upload') loadHistory();
   if (v === 'analytics' && NEED_REFRESH) { NEED_REFRESH = false; refreshMeta(); }
+  syncBack();
   window.scrollTo(0, 0);
 }
-document.querySelectorAll('#views button').forEach(b => b.onclick = () => setView(b.dataset.v));
+$('upBtn').onclick = () => setView(VIEW === 'upload' ? 'analytics' : 'upload');
 
 // ---------------------------------------------------------------- yuklash
 let UP = null;          // joriy job
@@ -664,6 +805,7 @@ async function loadHistory() {
 async function refreshMeta() {
   try { META = await api('meta'); $('dataInfo').textContent = `ma'lumot: ${dm(META.data_from)}–${dm(META.data_to)}`; } catch (e) {}
   if (!st.cat && META.categories.length) st.cat = META.categories[0].id;
+  resetView();
   if (META.data_to) { if (st.preset) [st.from, st.to] = presetRange(st.preset); load(); }
 }
 (() => {
@@ -678,7 +820,7 @@ async function refreshMeta() {
 async function init() {
   try { META = await api('meta'); }
   catch (e) { showError(e); return; }
-  if (META.can_upload) { $('views').hidden = false; $('upLimit').textContent = `.xlsx, ${META.max_upload_mb} MB gacha`; }
+  if (META.can_upload) { $('upBtn').hidden = false; $('upLimit').textContent = `.xlsx, ${META.max_upload_mb} MB gacha`; }
   if (!META.categories.length || !META.data_to) {
     $('kpis').innerHTML = `<div class="errbox">${!META.categories.length ? "Hali kategoriya yo'q" : "Bazada hali savdo yo'q"} — ${META.can_upload ? "«📥 Yuklash» bo'limidan fayllarni yuklang: tovar spravochnigi, filial spravochnigi, keyin savdo." : "administrator ma'lumot yuklashini kuting."}</div>`;
     if (META.can_upload) setView('upload');

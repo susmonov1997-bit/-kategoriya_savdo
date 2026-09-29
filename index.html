@@ -16,30 +16,16 @@
   <div class="top">
     <div class="brandrow">
       <h1>Savdo</h1>
-      <span class="proto" id="dataInfo"></span>
-    </div>
-    <div class="seg views" id="views" role="group" aria-label="Bo'lim" hidden>
-      <button data-v="analytics" aria-pressed="true">📊 Tahlil</button>
-      <button data-v="upload" aria-pressed="false">📥 Yuklash</button>
+      <div class="hdr-r"><span class="proto num" id="dataInfo"></span>
+        <button class="icon" id="upBtn" title="Fayl yuklash" aria-label="Fayl yuklash" hidden>📥</button></div>
     </div>
     <div class="an" id="topAnalytics">
-    <div class="seg" id="cats" role="group" aria-label="Kategoriya"></div>
-    <div class="chips" id="periods" role="group" aria-label="Davr"></div>
-    <div class="periodline">
-      <div class="dates">
-        <input type="date" id="dFrom" aria-label="Boshlanish sanasi">
-        <span>—</span>
-        <input type="date" id="dTo" aria-label="Tugash sanasi">
+      <div class="bar3">
+        <button class="pbtn" id="catBtn" aria-label="Kategoriya">…</button>
+        <button class="pbtn" id="perBtn" aria-label="Davr">📅</button>
+        <button class="pbtn" id="filBtn" aria-label="Filtr">⚙ Filtr</button>
       </div>
-      <label>solishtirish
-        <select id="cmp">
-          <option value="prev">o'tgan teng davr</option>
-          <option value="yoy">o'tgan yil</option>
-          <option value="none">yo'q</option>
-        </select>
-      </label>
-    </div>
-    <div class="chips" id="filters" role="group" aria-label="Filtrlar"></div>
+      <div class="fchips" id="fchips" hidden></div>
     </div>
   </div>
 
@@ -79,11 +65,15 @@
   </section>
 
   <section aria-labelledby="brH">
-    <div class="sh"><h2 id="brH">Qirqim</h2><span class="hint num" id="brHint"></span></div>
+    <div class="sh"><h2 id="brH">Qirqim</h2>
+      <div class="seg mini" id="brMode" style="flex:0 0 auto">
+        <button data-m="tree" aria-pressed="true">🌳 Daraxt</button>
+        <button data-m="pivot" aria-pressed="false">▦ Kesma</button>
+      </div></div>
     <div class="ctl">
-      <label>Qatorlar <select id="rowsDim"></select></label>
-      <label>Ustun <select id="colsDim"></select></label>
-      <label>Saralash <select id="sortBy">
+      <span class="hint" id="brHint"></span>
+      <span id="pvCtl" hidden><label>Qatorlar <select id="rowsDim"></select></label> <label>Ustun <select id="colsDim"></select></label></span>
+      <label style="margin-left:auto">Saralash <select id="sortBy">
         <option value="amount">savdo</option>
         <option value="margin">marja</option>
         <option value="margin_pct">marja %</option>
@@ -92,7 +82,7 @@
         <option value="name">nomi</option>
       </select></label>
     </div>
-    <div class="crumbs" id="crumbs"></div>
+    <div id="shareHost"></div>
     <div id="breakdown"></div>
   </section>
 
