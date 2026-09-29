@@ -228,7 +228,7 @@ async def attrs(m: Message, pool: asyncpg.Pool) -> None:
     if not (await get_access(pool, m.from_user.id)).can_view:
         return
     rows = await pool.fetch(
-        """SELECT c.name cat, a.slot, a.source_col, a.name, a.data_type, a.unit,
+        """SELECT c.name cat, a.slot, a.source_col, a.name, a.data_type, a.unit, a.is_filter,
                   (SELECT count(*) FROM products p WHERE p.category_id = c.id) skus
            FROM categories c LEFT JOIN category_attributes a ON a.category_id = c.id
            ORDER BY c.name, a.sort_order, a.slot"""
@@ -240,7 +240,8 @@ async def attrs(m: Message, pool: asyncpg.Pool) -> None:
             out.append(f"\n<b>{html.escape(cur)}</b> — {r['skus']} SKU")
         if r["slot"] is not None:
             unit = f", {r['unit']}" if r["unit"] else ""
-            out.append(f"  {r['slot']}. {html.escape(r['name'])}{unit} <i>({html.escape(r['source_col'])}, {r['data_type']})</i>")
+            off = "" if r["is_filter"] else " 🙈 yashirin"
+            out.append(f"  {r['slot']}. {html.escape(r['name'])}{unit} <i>({html.escape(r['source_col'])}, {r['data_type']})</i>{off}")
     await send_long(m, "\n".join(out).strip() or "Hozircha bo'sh.")
 
 

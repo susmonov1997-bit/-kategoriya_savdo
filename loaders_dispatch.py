@@ -50,7 +50,7 @@ async def load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int 
     raise LoaderError(
         "Fayl turi aniqlanmadi. Kutilgan sarlavhalar:\n"
         "• Savdo: Филиал, Категория, Товар ИД, Сана, Сони, Жами(Кирим нархи), Жами(Чиқим нархи)\n"
-        "• Tovar spravochnigi: Категория, Товар Ид, Товар номи, Бренд, Подкатегория…\n"
+        "• Tovar spravochnigi: Категория, Товар Ид, Товар номи, Бренд + xususiyat ustunlari (Turi, Balandlik (sm), Rang…)\n"
         "• Filial spravochnigi: Территория, Филиал, Кластер\n"
         "• Qo'shimcha daromad: Категория, Бренд, Қўшимча даромад %")
 

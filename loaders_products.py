@@ -3,13 +3,18 @@
 Kutilgan ustunlar (nomi bo'yicha qidiriladi, joylashuvi muhim emas):
   majburiy : Категория, Товар Ид, Товар номи, Бренд
   ixtiyoriy: Группа, Статус
-  xususiyat: Подкатегория (slot 0), "1-Субкатегория" (slot 1), "2-Субкатегория" (slot 2) ...
+  xususiyat: QOLGAN BARCHA ustunlar. Ustun nomi = xususiyat nomi, qavsda birlik bo'lishi mumkin:
+             "Turi", "Balandlik (sm)", "Umumiy hajm (l)", "Rang" ...
+             Eski format ("Подкатегория", "1-Субкатегория", ...) ham qabul qilinadi — u holda nom
+             bazadagi shu tartib raqamidan olinadi.
 
 Qoidalar:
   * Kalit — "Товар Ид". Takrorlansa: statusi 'матричный' bo'lgan qator ustun, teng bo'lsa faylda oxirgisi.
   * Faylda yo'q, bazada bor tovarlar o'chirilmaydi (savdo tarixi uchun) — faqat soni hisobotda.
-  * Yangi kategoriya / yangi xususiyat darajasi avtomatik qo'shiladi (nomi = Excel ustun nomi),
-    keyin category_attributes jadvalida nomini o'zgartirish mumkin.
+  * Har bir kategoriyaning xususiyatlari = shu kategoriya tovarlarida qiymati bor ustunlar (fayldagi tartibda).
+    Xususiyat bazada NOMI bo'yicha topiladi (ustun joyi muhim emas); yangi nom — yangi xususiyat.
+  * Faylda kelgan kategoriyaning endi faylda yo'q xususiyati Mini App'dan yashiriladi (ma'lumot o'chirilmaydi;
+    ustun qaytsa yana ko'rinadi).
 """
 from __future__ import annotations
 
@@ -38,6 +43,20 @@ DEFAULT_GROUP = "—"
 NUMERIC_SHARE_FOR_AUTO = 0.9      # yangi xususiyat: qiymatlarning 90%+ son bo'lsa → number
 
 _SUB_RE = re.compile(r"^(\d+)-Субкатегория$", re.IGNORECASE)
+_UNIT_RE = re.compile(r"^(.*?)\s*[\(\[]\s*([^\)\]]*?)\s*[\)\]]\s*$")
+META_COLS = {"Группа", "Категория", "Товар Ид", "Товар номи", "Бренд", "Статус", "_excel_row"}
+
+
+def split_name_unit(col: str) -> tuple[str, str | None]:
+    """'Balandlik (sm)' → ('Balandlik', 'sm');  'Rang' → ('Rang', None)."""
+    m = _UNIT_RE.match(col)
+    if m and m.group(1).strip():
+        return m.group(1).strip(), (m.group(2).strip() or None)
+    return col.strip(), None
+
+
+def _norm(s: str | None) -> str:
+    return re.sub(r"\s+", " ", (s or "")).strip().lower()
 
 
 def attr_slot(col: str) -> int | None:
@@ -48,8 +67,8 @@ def attr_slot(col: str) -> int | None:
 
 
 def is_products_file(headers: list[str]) -> bool:
-    hs = set(headers)
-    return set(REQUIRED) <= hs and any(attr_slot(h) is not None for h in hs)
+    hs = {str(h).strip() for h in headers if h is not None}
+    return set(REQUIRED) <= hs
 
 
 # ---------------------------------------------------------------------------
@@ -63,14 +82,14 @@ class ParsedProduct:
     category: str
     brand: str
     status: str | None
-    raw_attrs: dict[int, Any]          # slot → xom qiymat
+    raw_attrs: dict[str, Any]          # ustun nomi → xom qiymat
     excel_row: int
 
 
 @dataclass
 class ProductsParseResult:
     products: dict[int, ParsedProduct]
-    attr_cols: dict[int, str]          # slot → Excel ustun nomi
+    attr_cols: list[str]               # xususiyat ustunlari (fayldagi tartibda)
     rows_total: int
     errors: list[str] = field(default_factory=list)          # yuklanmagan qatorlar
     duplicates: list[dict] = field(default_factory=list)     # takrorlangan Ид lar
@@ -83,11 +102,16 @@ def parse_products(data: bytes) -> ProductsParseResult:
     if missing:
         raise LoaderError("Majburiy ustun(lar) yo'q: " + ", ".join(missing))
 
-    attr_cols = {s: c for c in df.columns if (s := attr_slot(c)) is not None}
+    attr_cols = [c for c in df.columns if c not in META_COLS and not str(c).lower().startswith("unnamed")]
     if not attr_cols:
-        raise LoaderError("Xususiyat ustunlari topilmadi (Подкатегория, 1-Субкатегория, ...)")
+        raise LoaderError("Xususiyat ustunlari topilmadi — majburiy ustunlardan keyin xususiyat ustunlari "
+                          "bo'lishi kerak (masalan: Turi, Balandlik (sm), Rang)")
+    names = [_norm(split_name_unit(c)[0]) for c in attr_cols]
+    dup = sorted({c for c, n in zip(attr_cols, names) if names.count(n) > 1})
+    if dup:
+        raise LoaderError("Bir xil nomli xususiyat ustunlari: " + ", ".join(dup))
 
-    res = ProductsParseResult(products={}, attr_cols=dict(sorted(attr_cols.items())), rows_total=len(df))
+    res = ProductsParseResult(products={}, attr_cols=attr_cols, rows_total=len(df))
     seen_rows: dict[int, list[ParsedProduct]] = {}
 
     for rec in df.to_dict("records"):
@@ -102,13 +126,13 @@ def parse_products(data: bytes) -> ProductsParseResult:
             res.errors.append(f"{r}-qator (Ид {pid}): bo'sh — {', '.join(empty)}")
             continue
 
-        raw_attrs: dict[int, Any] = {}
-        for slot, col in attr_cols.items():
+        raw_attrs: dict[str, Any] = {}
+        for col in attr_cols:
             v = rec.get(col)
             num = to_number(v) if not isinstance(v, str) else None
             val = num if num is not None else clean_text(v)
             if val is not None:
-                raw_attrs[slot] = val
+                raw_attrs[col] = val
 
         p = ParsedProduct(
             product_id=pid, name=name, grp=clean_text(rec.get(COL_GROUP)) or DEFAULT_GROUP,
@@ -147,6 +171,9 @@ class ProductsLoadReport:
     missing_in_file: int
     new_categories: list[str]
     new_attrs: list[str]
+    hidden_attrs: list[str]              # faylda endi yo'q → Mini App'dan yashirildi
+    restored_attrs: list[str]            # yana ko'rinadigan bo'ldi
+    changed_attrs: list[str]             # turi / birligi o'zgardi
     non_numeric: list[str]               # son kutilgan joyda matn (masalan 'Витрина')
     errors: list[str]
     duplicates: list[dict]
@@ -202,31 +229,75 @@ async def _write(con: asyncpg.Connection, parsed: ProductsParseResult, upload_id
                 )
                 new_cats.append(p.category)
 
-        # --- xususiyat darajalari ---
-        attr_defs: dict[tuple[int, int], str] = {
-            (r["category_id"], r["slot"]): r["data_type"]
-            for r in await con.fetch("SELECT category_id, slot, data_type FROM category_attributes")
-        }
-        values_by_key: dict[tuple[int, int], list[Any]] = {}
-        for p in prods:
-            cid = existing[p.category]
-            for slot, v in p.raw_attrs.items():
-                values_by_key.setdefault((cid, slot), []).append(v)
-
+        # --- xususiyatlar: har kategoriya uchun ustun → slot ---
+        defs: dict[int, list[dict]] = {}
+        for r in await con.fetch("SELECT category_id, slot, source_col, name, data_type, unit, is_filter "
+                                 "FROM category_attributes"):
+            defs.setdefault(r["category_id"], []).append(dict(r))
         cat_name = {v: k for k, v in existing.items()}
-        new_attrs: list[str] = []
-        for (cid, slot), vals in sorted(values_by_key.items()):
-            if (cid, slot) in attr_defs:
-                continue
-            dtype = _auto_type(vals)
-            col = parsed.attr_cols[slot]
-            await con.execute(
-                """INSERT INTO category_attributes(category_id, slot, source_col, name, data_type, sort_order)
-                   VALUES ($1,$2,$3,$3,$4,$2)""",
-                cid, slot, col, dtype,
-            )
-            attr_defs[(cid, slot)] = dtype
-            new_attrs.append(f"{cat_name[cid]} → {col} ({dtype})")
+
+        values: dict[int, dict[str, list[Any]]] = {}          # cid → ustun → qiymatlar
+        for p in prods:
+            vc = values.setdefault(existing[p.category], {})
+            for col, v in p.raw_attrs.items():
+                vc.setdefault(col, []).append(v)
+
+        slot_of: dict[tuple[int, str], int] = {}               # (cid, ustun) → slot
+        dtype_of: dict[tuple[int, int], str] = {}
+        new_attrs, hidden, restored, changed = [], [], [], []
+        for cid, vc in values.items():
+            cdefs = defs.setdefault(cid, [])
+            used: set[int] = set()
+            cols = [c for c in parsed.attr_cols if c in vc]      # shu kategoriyada qiymati bor ustunlar
+            for pos, col in enumerate(cols):
+                vals = vc[col]
+                legacy = attr_slot(col)
+                if legacy is not None:                         # eski format: tartib raqami bo'yicha
+                    name, unit = col, None
+                    d = next((x for x in cdefs if x["slot"] == legacy), None)
+                else:                                          # yangi format: nomi bo'yicha
+                    name, unit = split_name_unit(col)
+                    d = next((x for x in cdefs if x["slot"] not in used and
+                              (_norm(x["name"]) == _norm(name) or _norm(x["source_col"]) == _norm(col))), None)
+                auto = _auto_type(vals)
+                label = f"{cat_name[cid]} → {name if legacy is None else (d['name'] if d else col)}"
+                if d is None:
+                    slot = legacy if legacy is not None else max([x["slot"] for x in cdefs] + [-1]) + 1
+                    d = {"category_id": cid, "slot": slot, "source_col": col, "name": name, "data_type": auto,
+                         "unit": unit, "is_filter": True}
+                    await con.execute(
+                        """INSERT INTO category_attributes(category_id, slot, source_col, name, data_type, unit, sort_order)
+                           VALUES ($1,$2,$3,$4,$5,$6,$7)""", cid, slot, col, name, auto, unit, pos)
+                    cdefs.append(d)
+                    new_attrs.append(f"{label}{f' ({unit})' if unit else ''} — {'son' if auto == 'number' else 'matn'}")
+                else:
+                    upd_type, upd_unit = d["data_type"], d["unit"]
+                    if legacy is None:
+                        if auto != d["data_type"]:
+                            upd_type = auto
+                            changed.append(f"{label}: turi {d['data_type']} → {auto}")
+                        if unit and unit != d["unit"]:
+                            upd_unit = unit
+                            changed.append(f"{label}: birlik {d['unit'] or '—'} → {unit}")
+                        elif not unit and d["unit"] and auto == "text":
+                            upd_unit = None
+                    elif d["data_type"] == "number" and auto == "text":
+                        changed.append(f"{label}: son kutilgan, matn keldi — ustunlar surilgan bo'lishi mumkin!")
+                    if not d["is_filter"]:
+                        restored.append(label)
+                    await con.execute(
+                        """UPDATE category_attributes SET source_col=$3, name=$4, data_type=$5, unit=$6,
+                                  sort_order=$7, is_filter=TRUE WHERE category_id=$1 AND slot=$2""",
+                        cid, d["slot"], col, name if legacy is None else d["name"], upd_type, upd_unit, pos)
+                    d.update(data_type=upd_type, unit=upd_unit, is_filter=True)
+                used.add(d["slot"])
+                slot_of[(cid, col)] = d["slot"]
+                dtype_of[(cid, d["slot"])] = d["data_type"]
+            for x in cdefs:                                    # faylda endi yo'q xususiyatlar
+                if x["slot"] not in used and x["is_filter"]:
+                    await con.execute("UPDATE category_attributes SET is_filter=FALSE WHERE category_id=$1 AND slot=$2",
+                                      cid, x["slot"])
+                    hidden.append(f"{cat_name[cid]} → {x['name']}")
 
         # --- attrs JSON (tur bo'yicha) ---
         non_numeric: dict[tuple[str, str], set[str]] = {}
@@ -235,16 +306,17 @@ async def _write(con: asyncpg.Connection, parsed: ProductsParseResult, upload_id
         for p in prods:
             cid = existing[p.category]
             attrs: dict[str, Any] = {}
-            for slot, v in p.raw_attrs.items():
-                if attr_defs.get((cid, slot)) == "number":
+            for col, v in p.raw_attrs.items():
+                slot = slot_of[(cid, col)]
+                if dtype_of.get((cid, slot)) == "number":
                     n = to_number(v)
                     if n is None:
-                        non_numeric.setdefault((p.category, parsed.attr_cols[slot]), set()).add(str(v))
+                        non_numeric.setdefault((p.category, col), set()).add(str(v))
                         attrs[f"a{slot}"] = str(v)
                     else:
                         attrs[f"a{slot}"] = n
                 else:
-                    attrs[f"a{slot}"] = str(v)   # to_number allaqachon 185.0 → 185 qilgan
+                    attrs[f"a{slot}"] = str(v)
             rows.append((p.product_id, p.name, cid, p.brand, p.status, json.dumps(attrs, ensure_ascii=False)))
             by_cat[p.category] = by_cat.get(p.category, 0) + 1
 
@@ -290,6 +362,9 @@ async def _write(con: asyncpg.Connection, parsed: ProductsParseResult, upload_id
         missing_in_file=stats["missing"],
         new_categories=new_cats,
         new_attrs=new_attrs,
+        hidden_attrs=hidden,
+        restored_attrs=restored,
+        changed_attrs=changed,
         non_numeric=[f"{c} → {col}: {', '.join(sorted(v))}" for (c, col), v in sorted(non_numeric.items())],
         errors=parsed.errors,
         duplicates=parsed.duplicates,
@@ -318,7 +393,13 @@ def format_report(r: ProductsLoadReport, max_items: int = 15) -> str:
     if r.new_categories:
         out += ["\n🆕 <b>Yangi kategoriyalar:</b>", lst(r.new_categories)]
     if r.new_attrs:
-        out += ["\n🆕 <b>Yangi xususiyatlar</b> (nomini keyin o'zgartiring):", lst(r.new_attrs)]
+        out += ["\n🆕 <b>Yangi xususiyatlar:</b>", lst(r.new_attrs)]
+    if r.hidden_attrs:
+        out += ["\n🙈 <b>Faylda yo'q — Mini App'dan yashirildi:</b>", lst(r.hidden_attrs)]
+    if r.restored_attrs:
+        out += ["\n👁 <b>Yana ko'rinadi:</b>", lst(r.restored_attrs)]
+    if r.changed_attrs:
+        out += ["\n✏️ <b>Xususiyat o'zgarishlari:</b>", lst(r.changed_attrs)]
     if r.duplicates:
         d = [
             f"Ид {x['product_id']}: qatorlar {x['rows']} → olindi {x['chosen_row']}"

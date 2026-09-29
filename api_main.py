@@ -389,7 +389,7 @@ async def product_card(product_id: int, request: Request, user: User = Depends(c
             raise HTTPException(404, "Tovar topilmadi")
         await _check_category(user, p["category_id"])
         defs = await con.fetch(
-            "SELECT slot, name, unit FROM category_attributes WHERE category_id = $1 ORDER BY sort_order, slot",
+            "SELECT slot, name, unit FROM category_attributes WHERE category_id = $1 AND is_filter ORDER BY sort_order, slot",
             p["category_id"])
     raw = json.loads(p["attrs"]) if p["attrs"] else {}
     attrs = []

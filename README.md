@@ -34,4 +34,14 @@ Botsiz yuklash: `python load_file.py хусусиятлар.xlsx "Filial spravoc
 - Faqat spravochnikdagi kategoriyalar; "К"/"M"/"Z" va qaytarishlar hisobga olinmaydi
 - Bir sana qayta yuklansa, o'sha kun to'liq almashtiriladi
 
+## Tovar spravochnigi formati
+- Majburiy: Категория, Товар Ид, Товар номи, Бренд; ixtiyoriy: Группа, Статус.
+- Qolgan har bir ustun — xususiyat, ustun nomi = xususiyat nomi, birlik qavsda: `Turi`, `Balandlik (sm)`, `Rang`.
+- Kategoriya xususiyatlari = shu kategoriya tovarlarida qiymati bor ustunlar, fayldagi tartibda.
+  Har xil kategoriyalar bitta faylda bo'lsa, har biri o'z ustunlarini to'ldiradi (boshqalari bo'sh).
+- Xususiyat NOMI bo'yicha topiladi: ustunni o'chirish/surish boshqa xususiyatlarni buzmaydi.
+  Faylda kelgan kategoriyaning yo'q xususiyati Mini App'dan yashiriladi; yangi nom — yangi xususiyat.
+- Son xususiyatlarning diapazonlari (≤150 sm …) nom bo'yicha saqlanadi — nomni o'zgartirmang.
+- Eski format (Подкатегория, 1-Субкатегория …) ham ishlaydi, lekin u tartib raqamiga bog'liq.
+
 Deploy: `DEPLOY.md`.
