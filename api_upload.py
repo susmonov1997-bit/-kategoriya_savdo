@@ -39,7 +39,7 @@ _DB_LOCK = asyncio.Lock()            # bir vaqtda faqat bitta tekshiruv/yuklash
 
 
 def can_upload(user: User) -> bool:
-    return user.id in config.ADMIN_IDS
+    return user.can_upload
 
 
 async def uploader(user: User = Depends(current_user)) -> User:

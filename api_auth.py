@@ -13,9 +13,10 @@ import time
 from dataclasses import dataclass
 from urllib.parse import parse_qsl
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 import config
+from access import get_access
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +26,9 @@ class User:
     id: int
     first_name: str = ""
     username: str | None = None
+    level: str | None = None           # admin | uploader | viewer
+    can_upload: bool = False
+    is_admin: bool = False
 
 
 def validate_init_data(init_data: str, bot_token: str, max_age: int) -> User:
@@ -46,7 +50,7 @@ def validate_init_data(init_data: str, bot_token: str, max_age: int) -> User:
     return User(id=int(u["id"]), first_name=u.get("first_name", ""), username=u.get("username"))
 
 
-async def current_user(authorization: str | None = Header(default=None)) -> User:
+async def current_user(request: Request, authorization: str | None = Header(default=None)) -> User:
     if authorization and authorization.startswith("tma "):
         try:
             user = validate_init_data(authorization[4:], config.BOT_TOKEN, config.INITDATA_MAX_AGE)
@@ -57,8 +61,14 @@ async def current_user(authorization: str | None = Header(default=None)) -> User
         user = User(id=config.API_DEV_USER_ID, first_name="dev")
     else:
         raise HTTPException(401, "Authorization: tma <initData> kerak")
-    if user.id not in config.ADMIN_IDS:
-        raise HTTPException(403, "Ruxsat yo'q")
+    acc = await get_access(request.app.state.pool, user.id)
+    if not acc.can_view:
+        msg = {"pending": "So'rovingiz admin tomonidan ko'rib chiqilmoqda",
+               "rejected": "Kirish so'rovingiz rad etilgan",
+               "revoked": "Kirish huquqingiz bekor qilingan"}.get(acc.status or "",
+                                                              "Ruxsat yo'q — botda /start bosib, kirish so'rang")
+        raise HTTPException(403, msg)
+    user.level, user.can_upload, user.is_admin = acc.level, acc.can_upload, acc.is_admin
     return user
 
 

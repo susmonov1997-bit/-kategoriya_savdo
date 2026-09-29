@@ -507,7 +507,7 @@ function showError(e) {
     const id = tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : null;
     $('gate').hidden = false;
     $('gate').innerHTML = `<div class="gate"><h2>${e.status === 403 ? 'Ruxsat yo\'q' : 'Kirish tasdiqlanmadi'}</h2>
-      <p>${esc(e.message)}</p>${id ? `<p>Telegram ID: <code>${id}</code> — administratorga yuboring.</p>` : '<p>Ilovani Telegram bot orqali oching.</p>'}</div>`;
+      <p>${esc(e.message)}</p>${id ? `<p>Botga qaytib <b>/start</b> bosing va «🔑 Kirish so'rash» tugmasini bosing — admin tasdiqlagach shu yerda ma'lumot ochiladi.</p><p class="hint">Telegram ID: <code>${id}</code></p>` : '<p>Ilovani Telegram bot orqali oching.</p>'}</div>`;
     return;
   }
   const box = document.createElement('div');

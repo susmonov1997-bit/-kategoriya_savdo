@@ -10,6 +10,7 @@ Barcha fayllar bitta papkada (papka ichida papka yo'q).
 | `bot.py` | Telegram bot: Excel qabul qilish, /start, /status, /attrs |
 | `api_main.py`, `api_auth.py`, `api_queries.py`, `api_schemas.py` | FastAPI: hisob-kitoblar, Telegram kirish tekshiruvi |
 | `loaders_*.py` | Excel yuklovchilar: tovar, filial, savdo, qo'shimcha daromad % |
+| `access.py`, `004_users.sql` | Kirish: so'rov → admin tasdiqlaydi (👁 Ko'ruvchi / 📥 Yuklovchi) yoki rad etadi; /users |
 | `db.py`, `config.py` | Baza ulanishi, migratsiyalar, sozlamalar |
 | `001_…sql`, `002_…sql`, `003_…sql` | Baza jadvallari (startda avtomatik qo'llanadi) |
 | `index.html`, `app.css`, `app.js` | Mini App (`/app/` manzilida): Tahlil va 📥 Yuklash bo'limlari |
