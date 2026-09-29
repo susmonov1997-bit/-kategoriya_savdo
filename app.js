@@ -387,7 +387,9 @@ async function fetchChildren(node) {
   return res;
 }
 async function buildTree() {
-  const root = newRoot('m', 'drill', [], {label: 'Jami', depth: 0, open: true});
+  // ilova ochilganda hammasi yig'ilgan; foydalanuvchi ochgan bo'lsa (shu seansda) ochiq qoladi
+  const root = newRoot('m', 'drill', [], {label: 'Jami', depth: 0, open: false});
+  root.open = OPEN.has(nsig(root));
   if (root.childDim) await fetchChildren(root);
   TREE = root; FOCUS = root;
   const reopen = async node => {            // oldin ochilgan shoxlarni qayta ochish
@@ -649,7 +651,7 @@ function attrBlock(b) {
 }
 function renderAttrBlocks() {
   if (!ATTR) return;
-  if (!st.aOpen) st.aOpen = new Set(ATTR.blocks.length ? [ATTR.blocks[0].dim] : []);
+  if (!st.aOpen) st.aOpen = new Set();          // sukut: barcha bloklar yig'ilgan
   const host = $('ablocks');
   host.innerHTML = ATTR.blocks.map(attrBlock).join('');
   host.querySelectorAll('.ah').forEach(b => b.onclick = () => { const d = b.dataset.d; st.aOpen.has(d) ? st.aOpen.delete(d) : st.aOpen.add(d); renderAttrBlocks(); });
