@@ -61,7 +61,7 @@ const st = {
   mode: 'tree',          // tree (daraxt) | pivot (kesma)
   rows: 'region', cols: 'attr:0', sort: 'amount',
   chartMetric: 'amount', shareView: 'struct', pvMode: 'amount',
-  aExpand: {}, showAll: false,
+  aExpand: {}, aOpen: null, showAll: false,
 };
 const labels = {};       // "dim|key" -> nom (chip va breadcrumb uchun)
 const remember = (d, k, l) => { labels[d + '|' + k] = l; };
@@ -144,7 +144,7 @@ function renderHeader() {
   $('fchips').querySelectorAll('.fchip[data-d]').forEach(b => b.onclick = () => { delete st.f[b.dataset.d]; resetView(); load(); });
   const ca = $('clrAll'); if (ca) ca.onclick = () => { st.f = {}; resetView(); load(); };
 }
-function resetView() { st.showAll = false; TREE = null; }
+function resetView() { st.showAll = false; TREE = null; for (const k of [...ROOTS.keys()]) if (k !== 'm') ROOTS.delete(k); }
 
 // --- pastki oyna (umumiy)
 function openSheetBox(title, bodyHtml, footHtml) {
@@ -166,7 +166,7 @@ function openCatSheet() {
   host.querySelectorAll('.optrow').forEach(b => b.onclick = () => {
     const id = +b.dataset.id; closeSheet();
     if (id === st.cat) return;
-    st.cat = id; st.f = {}; st.aExpand = {}; st.rows = 'region'; st.cols = ''; resetView(); load();
+    st.cat = id; st.f = {}; st.aExpand = {}; st.aOpen = null; st.rows = 'region'; st.cols = ''; resetView(); load();
   });
 }
 
@@ -256,10 +256,10 @@ function renderKpis(s) {
   $('kpis').innerHTML = `
     <div class="kpi wide">
       <div><div class="label">Savdo</div><div class="v num">${money(C.amount)}</div><div class="sub">${Pv ? pill(d.amount) : ''}</div></div>
-      <div><div class="label">Marja</div><div class="v num${neg(C.margin)}">${money(C.margin)}</div>
+      <div><div class="label">Gross marja</div><div class="v num${neg(C.margin)}">${money(C.margin)}</div>
         <div class="sub num"><span>${pct(C.margin_pct)}</span>${Pv ? pill(d.margin_pct_pp, true) : ''}</div></div>
     </div>
-    <div class="kpi"><div class="label">Valovka</div><div class="v num${neg(C.gross)}">${money(C.gross)}</div>
+    <div class="kpi"><div class="label">Front marja</div><div class="v num${neg(C.gross)}">${money(C.gross)}</div>
       <div class="sub num"><span>${pct(C.gross_pct)}</span>${Pv ? pill(d.gross_pct_pp, true) : ''}</div></div>
     <div class="kpi"><div class="label">Qo'shimcha daromad</div><div class="v num">${money(C.income)}</div>
       <div class="sub num"><span>${pct(incPct)}</span>${Pv ? pill(d.income) : ''}</div></div>
@@ -332,17 +332,21 @@ function renderChart() {
 let BD = null;          // kesma rejimi uchun
 let TREE = null;        // daraxt ildizi (Jami)
 let FOCUS = null;       // ulush kartasi ko'rsatadigan tugun
-const OPEN = new Set(); // ochiq tugunlar (qayta yuklanganda saqlanadi): "dim=key/dim=key"
+const OPEN = new Set(); // qirqim daraxtining ochiq tugunlari (qayta yuklanganda saqlanadi)
 const SLOTS = 8, CHILD_LIMIT = 15;
 function dimOptions(sel, includeNone) {
   const dims = [...LOC_PATH, ...attrDims(), 'brand', 'status', 'sku'];
   return (includeNone ? `<option value="">—</option>` : '') + dims.map(d => `<option value="${d}" ${d === sel ? 'selected' : ''}>${esc(dimName(d))}</option>`).join('');
 }
-const sig = path => path.map(p => `${p.dim}=${p.key}`).join('/');
-function childDimFor(path) {
-  // drill yo'li: Hudud → Klaster → Filial → xususiyatlar → Brend → SKU; yo'lda bor yoki bitta qiymatga filtrlangan daraja o'tkaziladi
+// Umumiy daraxt yadrosi: qirqim (m), xususiyat qiymatlari (a:…) va TOP-10 SKU (s:…) uchun bir xil
+const psig = path => path.map(p => `${p.dim}=${p.key}`).join('/');
+const nsig = n => n.root + '|' + psig(n.path);
+const ROOTS = new Map();           // root id -> ildiz tugun
+const ORDERS = {drill: () => drillPath(), prod: () => prodPath(), loc: () => LOC_PATH};
+function childDimFor(path, order = 'drill') {
+  // yo'lda bor yoki filtrda bitta qiymat tanlangan daraja o'tkaziladi
   const used = new Set(path.map(p => p.dim));
-  for (const d of drillPath()) {
+  for (const d of ORDERS[order]()) {
     if (used.has(d)) continue;
     if (st.f[d] && st.f[d].size === 1) continue;
     return d;
@@ -364,52 +368,65 @@ function sortRows(rows) {
   if (st.sort === 'delta') rows.sort((a, b) => (b.delta.amount ?? -1e9) - (a.delta.amount ?? -1e9));
   return rows;
 }
+function newRoot(rid, order, path, extra = {}) {
+  const last = path[path.length - 1];
+  const node = {root: rid, order, path, dim: last ? last.dim : null, key: last ? last.key : null, depth: path.length,
+                childDim: childDimFor(path, order), children: null, open: false, showAll: false, ...extra};
+  ROOTS.set(rid, node);
+  return node;
+}
 async function fetchChildren(node) {
   const res = await api('breakdown', {...pathFilters(node.path), rows: node.childDim, sort: apiSort(), desc: st.sort !== 'name', limit: 500});
   node.total = res.total; node.total_rows = res.total_rows; node.raw = sortRows(res.rows);
   node.children = node.raw.map(r => {
     remember(node.childDim, r.key, r.label);
     const path = [...node.path, {dim: node.childDim, key: r.key}];
-    return {path, dim: node.childDim, key: r.key, label: r.label, sub: r.sub, row: r, depth: node.depth + 1,
-            childDim: childDimFor(path), children: null, open: false, showAll: false};
+    return {root: node.root, order: node.order, path, dim: node.childDim, key: r.key, label: r.label, sub: r.sub, row: r,
+            depth: node.depth + 1, childDim: childDimFor(path, node.order), children: null, open: false, showAll: false};
   });
   return res;
 }
 async function buildTree() {
-  const root = {path: [], dim: null, key: null, label: 'Jami', depth: 0, childDim: childDimFor([]), children: null, open: true, showAll: false};
+  const root = newRoot('m', 'drill', [], {label: 'Jami', depth: 0, open: true});
   if (root.childDim) await fetchChildren(root);
   TREE = root; FOCUS = root;
-  // oldin ochilgan shoxlarni qayta ochish
-  const reopen = async node => {
+  const reopen = async node => {            // oldin ochilgan shoxlarni qayta ochish
     for (const ch of node.children || []) {
-      if (OPEN.has(sig(ch.path)) && ch.childDim) {
-        try { await fetchChildren(ch); ch.open = true; FOCUS = ch; await reopen(ch); } catch (e) { OPEN.delete(sig(ch.path)); }
+      if (OPEN.has(nsig(ch)) && ch.childDim) {
+        try { await fetchChildren(ch); ch.open = true; FOCUS = ch; await reopen(ch); } catch (e) { OPEN.delete(nsig(ch)); }
       }
     }
   };
   await reopen(root);
 }
+function findBySig(s) {
+  const r = ROOTS.get(s.split('|')[0]); if (!r) return null;
+  let hit = null; const walk = n => { if (nsig(n) === s) hit = n; (n.children || []).forEach(walk); }; walk(r); return hit;
+}
+function findParent(node) {
+  const want = node.root + '|' + psig(node.path.slice(0, -1));
+  return findBySig(want);
+}
+function rerender(rid) {
+  if (rid === 'm') { renderTree(); renderShare(); }
+  else if (rid.startsWith('a:')) renderAttrBlocks();
+  else if (rid.startsWith('s:')) renderTopBody();
+}
 async function toggleNode(node) {
   if (!node.childDim) return;
+  const main = node.root === 'm';
   if (node.open) {
-    node.open = false; OPEN.delete(sig(node.path));
-    if (FOCUS && sig(FOCUS.path).startsWith(sig(node.path))) FOCUS = findParent(node) || TREE;
-    renderTree(); renderShare(); return;
+    node.open = false;
+    if (main) { OPEN.delete(nsig(node)); if (FOCUS && nsig(FOCUS).startsWith(nsig(node))) FOCUS = findParent(node) || TREE; }
+    rerender(node.root); return;
   }
-  node.loading = true; renderTree();
-  try { if (!node.children) await fetchChildren(node); node.open = true; OPEN.add(sig(node.path)); FOCUS = node; }
+  node.loading = true; rerender(node.root);
+  try { if (!node.children) await fetchChildren(node); node.open = true; if (main) { OPEN.add(nsig(node)); FOCUS = node; } }
   catch (e) { showError(e); }
   node.loading = false;
   try { tg && tg.HapticFeedback && tg.HapticFeedback.selectionChanged(); } catch (e) {}
-  renderTree(); renderShare();
+  rerender(node.root);
 }
-function findParent(node) {
-  const want = sig(node.path.slice(0, -1));
-  let hit = null;
-  const walk = n => { if (sig(n.path) === want) hit = n; (n.children || []).forEach(walk); };
-  walk(TREE); return hit;
-}
-function findBySig(s) { let hit = null; const walk = n => { if (sig(n.path) === s) hit = n; (n.children || []).forEach(walk); }; walk(TREE); return hit; }
 
 function renderBreakdown() {
   $('sortBy').value = st.sort;
@@ -426,38 +443,42 @@ function renderBreakdown() {
   $('brHint').textContent = 'qatorni bosing — ichi ochiladi';
   renderShare(); renderTree();
 }
-function rowHtml(node, parentAmount, rootAmount) {
+function rowHtml(node, rootAmount, indBase = 1) {
   const r = node.row, hasCmp = !!cmpRange(), can = !!node.childDim;
   const shareTot = rootAmount ? r.current.amount / rootAmount * 100 : null;
-  return `<button class="tr lv${Math.min(node.depth, 6)} ${can ? 'can' : ''} ${node.open ? 'op' : ''}" data-s="${esc(sig(node.path))}" ${can ? '' : 'tabindex="-1"'}
-      style="--ind:${(node.depth - 1) * 14}px" title="Jami savdodan ${pct(shareTot)}">
+  return `<button class="tr lv${Math.min(node.depth, 6)} ${can ? 'can' : ''} ${node.open ? 'op' : ''}" data-s="${esc(nsig(node))}" ${can ? '' : 'tabindex="-1"'}
+      style="--ind:${(node.depth - indBase) * 14}px" title="Umumiy savdodan ${pct(shareTot)}">
     <span class="n"><span class="c">${node.loading ? '…' : can ? (node.open ? '▾' : '▸') : '·'}</span><span class="nl">${esc(node.label)}${node.sub && node.dim === 'sku' ? ` <span class="sub2">· ${esc(node.sub)}</span>` : ''}</span>
       <span class="lvtag">${esc(dimName(node.dim))}</span></span>
     <span class="v num">${money(r.current.amount)}</span>
-    <span class="m num"><span class="bar"><span style="width:${Math.min(100, r.share || 0)}%"></span></span><span>${pct(r.share)}</span>${hasCmp ? pill(r.delta.amount) : ''}<span class="${r.current.margin_pct < 0 ? 'neg' : ''}">M ${pct(r.current.margin_pct)}</span></span>
+    <span class="m num"><span class="bar"><span style="width:${Math.min(100, r.share || 0)}%"></span></span><span>${pct(r.share)}</span>${hasCmp ? pill(r.delta.amount) : ''}<span class="${r.current.margin_pct < 0 ? 'neg' : ''}">GM ${pct(r.current.margin_pct)}</span></span>
   </button>`;
+}
+function subtreeRows(node, out, rootAmt, indBase = 1) {
+  if (!node.open || !node.children) return;
+  const ind = (node.depth + 1 - indBase) * 14 + 18;
+  if (!node.children.length) { out.push(`<div class="tr-empty" style="--ind:${ind}px">Savdo yo'q</div>`); return; }
+  const shown = node.showAll ? node.children : node.children.slice(0, CHILD_LIMIT);
+  for (const ch of shown) { out.push(rowHtml(ch, rootAmt, indBase)); subtreeRows(ch, out, rootAmt, indBase); }
+  const rest = node.children.length - shown.length;
+  if (rest > 0) out.push(`<button class="tr-more" data-more="${esc(nsig(node))}" style="--ind:${ind}px">Yana ${rest} ta ${esc(dimName(node.childDim)).toLowerCase()} ko'rsatish</button>`);
+  if (node.total_rows > node.children.length) out.push(`<div class="tr-empty" style="--ind:${ind}px">Birinchi ${node.children.length} ta ko'rsatilgan (jami ${node.total_rows})</div>`);
+}
+function wireTree(host) {
+  host.querySelectorAll('.tr.can[data-s]').forEach(b => b.onclick = e => { e.stopPropagation(); const n = findBySig(b.dataset.s); if (n) toggleNode(n); });
+  host.querySelectorAll('.tr-more[data-more]').forEach(b => b.onclick = e => { e.stopPropagation(); const n = findBySig(b.dataset.more); if (n) { n.showAll = true; rerender(n.root); } });
 }
 function renderTree() {
   const host = $('breakdown');
   if (!TREE) { host.innerHTML = ''; return; }
   const T = TREE.total, rootAmt = T ? T.amount : 0;
   if (!TREE.childDim || !T) { host.innerHTML = `<div class="list"><div class="empty">Tanlangan filtrlar bo'yicha savdo yo'q.</div></div>`; return; }
-  const out = [`<button class="tr lv0 can ${TREE.open ? 'op' : ''}" data-s="">
+  const out = [`<button class="tr lv0 can ${TREE.open ? 'op' : ''}" data-s="${esc(nsig(TREE))}">
       <span class="n"><span class="c">${TREE.open ? '▾' : '▸'}</span><b>Jami</b></span><span class="v num">${money(T.amount)}</span>
-      <span class="m num">${nf0.format(T.qty)} dona · valovka ${pct(T.gross_pct)} · marja ${pct(T.margin_pct)}</span></button>`];
-  const walk = node => {
-    if (!node.open || !node.children) return;
-    if (!node.children.length) { out.push(`<div class="tr-empty" style="--ind:${node.depth * 14}px">Savdo yo'q</div>`); return; }
-    const shown = node.showAll ? node.children : node.children.slice(0, CHILD_LIMIT);
-    for (const ch of shown) { out.push(rowHtml(ch, node.total ? node.total.amount : 0, rootAmt)); walk(ch); }
-    const rest = node.children.length - shown.length;
-    if (rest > 0) out.push(`<button class="tr-more" data-more="${esc(sig(node.path))}" style="--ind:${node.depth * 14}px">Yana ${rest} ta ${esc(dimName(node.childDim)).toLowerCase()} ko'rsatish</button>`);
-    if (node.total_rows > node.children.length) out.push(`<div class="tr-empty" style="--ind:${node.depth * 14}px">Birinchi ${node.children.length} ta ko'rsatilgan (jami ${node.total_rows})</div>`);
-  };
-  walk(TREE);
+      <span class="m num">${nf0.format(T.qty)} dona · front marja ${pct(T.gross_pct)} · gross marja ${pct(T.margin_pct)}</span></button>`];
+  subtreeRows(TREE, out, rootAmt, 1);
   host.innerHTML = `<div class="tw">${out.join('')}</div>`;
-  host.querySelectorAll('.tr.can').forEach(b => b.onclick = () => { const n = b.dataset.s === '' ? TREE : findBySig(b.dataset.s); if (n) toggleNode(n); });
-  host.querySelectorAll('.tr-more').forEach(b => b.onclick = () => { const n = b.dataset.more === '' ? TREE : findBySig(b.dataset.more); if (n) { n.showAll = true; renderTree(); } });
+  wireTree(host);
 }
 
 // --- ulush kartasi: FOCUS tugunining ichki tarkibi
@@ -570,7 +591,7 @@ function renderPivot(host) {
     <thead><tr><th>${esc(dimName(st.rows))} \\ ${esc(dimName(st.cols))}</th>${cols.map(c => `<th>${esc(c.label)}</th>`).join('')}<th>Jami</th></tr></thead>
     <tbody>${rowsShown.map(i => `<tr><td title="${esc(i.label)}">${esc(i.label)}</td>${cols.map(c => { const v = val(i, c);
         const cell = (cells[i.key] || {})[c.key];
-        return `<td class="c" style="${heat(v)}" title="${cell ? `marja ${pct(cell.margin_pct)}` : ''}">${fmtCell(v)}</td>`; }).join('')}<td>${lastCol(i)}</td></tr>`).join('')}
+        return `<td class="c" style="${heat(v)}" title="${cell ? `gross marja ${pct(cell.margin_pct)}` : ''}">${fmtCell(v)}</td>`; }).join('')}<td>${lastCol(i)}</td></tr>`).join('')}
       <tr class="tot"><td>Jami</td>${cols.map(c => `<td>${st.pvMode === 'amount' ? mln(c.amount) : st.pvMode === 'row' ? (T.amount ? nf1.format(c.amount / T.amount * 100) + '%' : '·') : '100%'}</td>`).join('')}<td>${st.pvMode === 'amount' ? mln(T.amount) : '100%'}</td></tr>
     </tbody></table></div>
     <div class="foot">${st.pvMode === 'amount' ? "Kataklarda savdo, mln so'm." : st.pvMode === 'row' ? "Har bir qatorda: shu qator savdosining ustunlar bo'yicha taqsimoti." : "Har bir ustunda: shu ustun savdosining qatorlar bo'yicha taqsimoti."}
@@ -582,12 +603,17 @@ function renderPivot(host) {
 // ---------------------------------------------------------------- xususiyatlar bloklari
 let ATTR = null;
 const A_TOP = 8;
+function attrNode(d, item) {
+  const rid = `a:${d}:${item.key}`;
+  return ROOTS.get(rid) || newRoot(rid, 'prod', [{dim: d, key: item.key}], {label: item.label, row: item});
+}
 function attrBlock(b) {
   const d = b.dim, sel = st.f[d] || new Set(), hasCmp = !!cmpRange();
   const items = b.items;
   items.forEach(i => remember(d, i.key, i.label));
   const rank = new Map(items.slice().sort((x, y) => y.current.amount - x.current.amount).map((i, n) => [i.key, n]));
   const color = i => rank.get(i.key) < SLOTS ? `var(--s${rank.get(i.key) + 1})` : 'var(--so)';
+  const isOpen = st.aOpen.has(d);
   const expanded = !!st.aExpand[d];
   let shown = items, rest = [];
   if (!expanded && items.length > A_TOP + 1) {
@@ -596,42 +622,114 @@ function attrBlock(b) {
   }
   const max = Math.max(...items.map(i => Math.max(i.share || 0, i.prev_share || 0)), 1);
   const restShare = rest.reduce((s, i) => s + (i.share || 0), 0);
-  return `<div class="ablock">
-    <div class="ah"><h3>${esc(b.title)}${b.unit ? ` <span class="u">${esc(b.unit)}</span>` : ''}</h3>
-      <span class="hint num">${items.length} ta${sel.size ? ` · tanlangan ${sel.size}` : ''}</span></div>
-    ${items.length ? `<div class="strip">${items.map(i => `<span style="width:${i.share || 0}%;background:${color(i)}" title="${esc(i.label)}: ${pct(i.share)}"></span>`).join('')}</div>` : `<div class="empty">Savdo yo'q</div>`}
-    <div class="arows">${shown.map(i => `<button class="arow ${sel.has(i.key) ? 'on' : ''}" data-d="${d}" data-k="${esc(i.key)}" aria-pressed="${sel.has(i.key)}">
-      <span class="sw" style="background:${color(i)}"></span>
-      <span class="al">${esc(i.label)}</span>
+  const total = items.reduce((s, i) => s + i.current.amount, 0);
+  const rows = isOpen ? shown.map(i => {
+    const node = attrNode(d, i); node.row = i;
+    const can = !!node.childDim;
+    const sub = []; subtreeRows(node, sub, total, 1);
+    return `<div class="arow ${sel.has(i.key) ? 'on' : ''} ${can ? 'can' : ''} ${node.open ? 'op' : ''}" role="button" tabindex="0" data-s="${esc(nsig(node))}">
+      <span class="c">${node.loading ? '…' : can ? (node.open ? '▾' : '▸') : '·'}</span>
+      <span class="al"><span class="sw" style="background:${color(i)}"></span>${esc(i.label)}</span>
       <span class="aa num">${money(i.current.amount)}</span>
       <span class="strk"><span class="sf" style="width:${(i.share || 0) / max * 100}%;background:${color(i)}"></span>
         ${hasCmp && i.prev_share != null ? `<span class="sp" style="left:${i.prev_share / max * 100}%"></span>` : ''}</span>
       <span class="as num"><b>${pct(i.share)}</b>${hasCmp ? pill(i.share_pp, true) : ''}</span>
-      <span class="am num">${nf0.format(i.current.qty)} dona${hasCmp ? ` · savdo ${i.delta.amount == null ? '—' : (i.delta.amount > 0 ? '+' : '') + nf1.format(i.delta.amount) + '%'}` : ''} · <span class="${i.current.margin_pct < 0 ? 'neg' : ''}">marja ${pct(i.current.margin_pct)}</span></span>
-    </button>`).join('')}
+      <span class="am num"><span>${nf0.format(i.current.qty)} dona${hasCmp ? ` · savdo ${i.delta.amount == null ? '—' : (i.delta.amount > 0 ? '+' : '') + nf1.format(i.delta.amount) + '%'}` : ''} · <span class="${i.current.margin_pct < 0 ? 'neg' : ''}">GM ${pct(i.current.margin_pct)}</span></span>
+        <button class="fbtn ${sel.has(i.key) ? 'on' : ''}" data-d="${d}" data-k="${esc(i.key)}" title="Filtrga qo'shish / olib tashlash">${sel.has(i.key) ? '✓ filtrda' : '+ filtr'}</button></span>
+    </div>${sub.length ? `<div class="tw sub">${sub.join('')}</div>` : ''}`;
+  }).join('') : '';
+  return `<div class="ablock ${isOpen ? 'open' : ''}">
+    <button class="ah" data-d="${d}" aria-expanded="${isOpen}"><h3><span class="c">${isOpen ? '▾' : '▸'}</span>${esc(b.title)}${b.unit ? ` <span class="u">${esc(b.unit)}</span>` : ''}</h3>
+      <span class="hint num">${items.length} ta${sel.size ? ` · tanlangan ${sel.size}` : ''}</span></button>
+    ${items.length ? `<div class="strip">${items.map(i => `<span style="width:${i.share || 0}%;background:${color(i)}" title="${esc(i.label)}: ${pct(i.share)}"></span>`).join('')}</div>` : `<div class="empty">Savdo yo'q</div>`}
+    ${isOpen ? `<div class="arows">${rows}
     ${rest.length ? `<button class="more amore" data-d="${d}">Yana ${rest.length} ta (${pct(restShare)}) — ko'rsatish</button>` : ''}
-    ${expanded && items.length > A_TOP + 1 ? `<button class="more amore" data-d="${d}">Qisqartirish</button>` : ''}
-    </div></div>`;
+    ${expanded && items.length > A_TOP + 1 ? `<button class="more amore" data-d="${d}">Qisqartirish</button>` : ''}</div>` : ''}
+    </div>`;
 }
 function renderAttrBlocks() {
   if (!ATTR) return;
+  if (!st.aOpen) st.aOpen = new Set(ATTR.blocks.length ? [ATTR.blocks[0].dim] : []);
   const host = $('ablocks');
   host.innerHTML = ATTR.blocks.map(attrBlock).join('');
-  host.querySelectorAll('.arow').forEach(b => b.onclick = () => {
+  host.querySelectorAll('.ah').forEach(b => b.onclick = () => { const d = b.dataset.d; st.aOpen.has(d) ? st.aOpen.delete(d) : st.aOpen.add(d); renderAttrBlocks(); });
+  host.querySelectorAll('.arow.can').forEach(r => {
+    const go = () => { const n = findBySig(r.dataset.s); if (n) toggleNode(n); };
+    r.onclick = go; r.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
+  });
+  host.querySelectorAll('.fbtn').forEach(b => b.onclick = e => {
+    e.stopPropagation();
     const d = b.dataset.d, k = b.dataset.k;
     const set = new Set(st.f[d] || []); set.has(k) ? set.delete(k) : set.add(k);
     if (set.size) st.f[d] = set; else delete st.f[d];
     resetView(); load();
   });
   host.querySelectorAll('.amore').forEach(b => b.onclick = () => { st.aExpand[b.dataset.d] = !st.aExpand[b.dataset.d]; renderAttrBlocks(); });
+  wireTree(host);
 }
 
-// ---------------------------------------------------------------- TOP-10
-function renderTop(t) {
-  $('top').innerHTML = t.rows.length ? t.rows.map((i, n) => `<div class="sku">
-    <span class="rk num">${n + 1}</span><span class="nm">${esc(i.label)}</span><span class="amt num">${money(i.current.amount)}</span>
-    <span class="br">${esc(i.sub || '')} · ${nf0.format(i.current.qty)} dona</span><span class="mt num ${i.current.margin_pct < 0 ? 'neg' : ''}">marja ${pct(i.current.margin_pct)}</span>
-  </div>`).join('') : `<div class="empty">Savdo yo'q.</div>`;
+// ---------------------------------------------------------------- TOP-10 SKU (bosilsa: karta + joylar bo'yicha daraxt)
+let TOP = null;
+function renderTop(t) { TOP = t; renderTopBody(); }
+function sparkline(series) {
+  const vals = series.map(p => p.amount), n = vals.length;
+  if (n < 2) return '';
+  const W = 300, H = 48, max = Math.max(...vals, 1);
+  const x = i => 2 + (W - 4) * i / (n - 1), y = v => H - 4 - (H - 10) * v / max;
+  const d = vals.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" class="spark" preserveAspectRatio="none" role="img" aria-label="Kunlik savdo">
+    <path d="${d}L${x(n - 1)},${H}L${x(0)},${H}Z" fill="var(--accent)" fill-opacity=".1"/>
+    <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>
+    <div class="spark-ax hint num"><span>${dm(series[0].date)}</span><span>kunlik savdo</span><span>${dm(series[n - 1].date)}</span></div>`;
+}
+function skuCard(node) {
+  const c = node.card;
+  if (!c) return `<div class="skucard"><div class="empty">Yuklanmoqda…</div></div>`;
+  if (c.error) return `<div class="skucard"><div class="errbox">${esc(c.error)}</div></div>`;
+  const C = c.sum.current, d = c.sum.delta || {}, hasCmp = !!c.sum.previous;
+  const kv = (l, v, p) => `<div class="kv"><span class="l">${l}</span><span class="v num">${v}</span>${p || ''}</div>`;
+  return `<div class="skucard">
+    <div class="tags">${[`<span class="tag">${esc(c.prod.brand)}</span>`, c.prod.status ? `<span class="tag st">${esc(c.prod.status)}</span>` : '',
+      ...c.prod.attrs.map(a => `<span class="tag"><b>${esc(a.name)}:</b> ${esc(a.value)}</span>`)].join('')}</div>
+    <div class="kvs">
+      ${kv('Savdo', money(C.amount), hasCmp ? pill(d.amount) : '')}
+      ${kv('Dona', nf0.format(C.qty) + (C.bonus_qty ? ` <span class="hint">(bonus ${nf0.format(C.bonus_qty)})</span>` : ''), hasCmp ? pill(d.qty) : '')}
+      ${kv("O'rtacha narx", C.avg_price ? money(C.avg_price) : '—', hasCmp ? pill(d.avg_price) : '')}
+      ${kv('Front marja', pct(C.gross_pct), hasCmp ? pill(d.gross_pct_pp, true) : '')}
+      ${kv('Gross marja', pct(C.margin_pct), hasCmp ? pill(d.margin_pct_pp, true) : '')}
+      ${kv('Filiallar', nf0.format(C.branches))}
+    </div>
+    ${sparkline(c.daily.series)}
+    <div class="lbl" style="margin-top:4px">📍 Qayerda sotilgan</div>
+  </div>`;
+}
+async function openSku(node) {
+  node.open = true; node.loading = true; renderTopBody();
+  const F = pathFilters(node.path);
+  try {
+    const [prod, sum, daily] = await Promise.all([api('product/' + node.key), api('summary', F), api('daily', F),
+      node.childDim && !node.children ? fetchChildren(node) : Promise.resolve()]);
+    node.card = {prod, sum, daily};
+  } catch (e) { node.card = {error: e.message}; }
+  node.loading = false; renderTopBody();
+}
+function renderTopBody() {
+  const t = TOP; if (!t) return;
+  const host = $('top');
+  host.innerHTML = t.rows.length ? t.rows.map((i, n) => {
+    const rid = `s:${i.key}`;
+    const node = ROOTS.get(rid) || newRoot(rid, 'loc', [{dim: 'sku', key: i.key}], {label: i.label, row: i});
+    const sub = []; if (node.open && node.card && !node.card.error) subtreeRows(node, sub, i.current.amount, 1);
+    return `<div class="sku can ${node.open ? 'op' : ''}" role="button" tabindex="0" data-rid="${esc(rid)}">
+      <span class="rk num">${n + 1}</span><span class="nm"><span class="c">${node.loading ? '…' : node.open ? '▾' : '▸'}</span>${esc(i.label)}</span><span class="amt num">${money(i.current.amount)}</span>
+      <span class="br">${esc(i.sub || '')} · ${nf0.format(i.current.qty)} dona</span><span class="mt num ${i.current.margin_pct < 0 ? 'neg' : ''}">GM ${pct(i.current.margin_pct)}</span>
+    </div>${node.open ? skuCard(node) + (sub.length ? `<div class="tw sub">${sub.join('')}</div>` : '') : ''}`;
+  }).join('') : `<div class="empty">Savdo yo'q.</div>`;
+  host.querySelectorAll('.sku.can').forEach(r => {
+    const go = () => { const node = ROOTS.get(r.dataset.rid); if (!node) return; if (node.open) { node.open = false; renderTopBody(); } else openSku(node); };
+    r.onclick = go; r.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
+  });
+  wireTree(host);
 }
 
 // ---------------------------------------------------------------- yuklash

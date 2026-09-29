@@ -54,7 +54,7 @@
     <div class="sh"><h2 id="dynH">Kunlik dinamika</h2>
       <div class="seg" id="chartMetric" style="flex:0 0 auto">
         <button data-m="amount" aria-pressed="true">Savdo</button>
-        <button data-m="margin">Marja</button>
+        <button data-m="margin">Gross marja</button>
         <button data-m="qty">Dona</button>
       </div>
     </div>
@@ -75,8 +75,8 @@
       <span id="pvCtl" hidden><label>Qatorlar <select id="rowsDim"></select></label> <label>Ustun <select id="colsDim"></select></label></span>
       <label style="margin-left:auto">Saralash <select id="sortBy">
         <option value="amount">savdo</option>
-        <option value="margin">marja</option>
-        <option value="margin_pct">marja %</option>
+        <option value="margin">gross marja</option>
+        <option value="margin_pct">gross marja %</option>
         <option value="qty">dona</option>
         <option value="delta">o'zgarish</option>
         <option value="name">nomi</option>
@@ -96,7 +96,7 @@
     <div class="list" id="top"></div>
   </section>
 
-  <p class="foot">Marja = valovka + qo'shimcha daromad (brend %). O'rtacha narx bonus donalarsiz hisoblanadi. Ulush — joriy filtrlar jamisiga nisbatan.</p>
+  <p class="foot">Front marja = savdo − kirim narxi. Gross marja = front marja + qo'shimcha daromad (brend %). O'rtacha narx bonus donalarsiz hisoblanadi. Ulush — joriy filtrlar jamisiga nisbatan.</p>
 </div>
 
 

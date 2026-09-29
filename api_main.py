@@ -9,10 +9,12 @@ Endpointlar (hammasi Authorization: tma <initData> talab qiladi):
   POST /api/daily       kunlik dinamika (joriy va solishtirma davr kunma-kun)
   POST /api/breakdown   qirqim jadvali: qatorlar o'lchovi (+ ixtiyoriy ustunlar o'lchovi), ulush, ulush o'zgarishi (pp)
   POST /api/share-daily kunlar bo'yicha ulush: tanlangan o'lchovning TOP-N qiymati + "Boshqalar"
+  GET  /api/product/{id} SKU kartasi (xususiyatlar)
   POST /api/attributes  xususiyatlar bloklari: har bir xususiyat va brend bo'yicha barcha qiymatlar, ulush va pp
 """
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -376,6 +378,36 @@ async def attributes(f: Filters, request: Request, user: User = Depends(current_
 # Faqat 3 ta fayl beriladi — papkadagi boshqa fayllar (.py, .env) tashqariga ochilmaydi.
 from fastapi.responses import FileResponse
 
+@app.get("/api/product/{product_id}")
+async def product_card(product_id: int, request: Request, user: User = Depends(current_user)):
+    """SKU kartasi: nomi, brend, status va kategoriya xususiyatlari (nomi + qiymati)."""
+    async with request.app.state.pool.acquire() as con:
+        p = await con.fetchrow(
+            """SELECT p.product_id, p.name, p.brand, p.status, p.category_id, p.attrs::text AS attrs, c.name AS category
+               FROM products p JOIN categories c ON c.id = p.category_id WHERE p.product_id = $1""", product_id)
+        if not p:
+            raise HTTPException(404, "Tovar topilmadi")
+        await _check_category(user, p["category_id"])
+        defs = await con.fetch(
+            "SELECT slot, name, unit FROM category_attributes WHERE category_id = $1 ORDER BY sort_order, slot",
+            p["category_id"])
+    raw = json.loads(p["attrs"]) if p["attrs"] else {}
+    attrs = []
+    for d in defs:
+        v = raw.get(f"a{d['slot']}")
+        if v is None or v == "":
+            continue
+        if isinstance(v, float) and v.is_integer():
+            v = int(v)
+        val = str(v)
+        if d["unit"] and isinstance(v, (int, float)):
+            val = f"{val} {d['unit']}"
+        attrs.append({"name": d["name"], "value": val})
+    return {"product_id": p["product_id"], "name": p["name"], "brand": p["brand"], "status": p["status"],
+            "category": p["category"], "attrs": attrs}
+
+
+# ---------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
 WEBAPP_FILES = {"": ("index.html", "text/html"), "index.html": ("index.html", "text/html"),
                 "app.css": ("app.css", "text/css"), "app.js": ("app.js", "application/javascript")}

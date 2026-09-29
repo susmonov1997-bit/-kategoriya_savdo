@@ -173,23 +173,24 @@ table.pv tr.tot td:first-child{background:var(--card-2)}
 /* xususiyat bloklari */
 .ablocks{display:flex;flex-direction:column;gap:10px}
 .ablock{background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);padding:12px;display:flex;flex-direction:column;gap:8px}
-.ah{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.ah{display:flex;justify-content:space-between;align-items:baseline;gap:8px;width:100%;border:0;background:none;padding:0;text-align:left;color:var(--ink);cursor:pointer;font:inherit}
+.ah h3 .c{display:inline-block;width:14px;color:var(--muted);font-size:12px}
 .ah h3{margin:0;font:700 14px/1.2 var(--display)}
 .ah .u{font:500 12px var(--font);color:var(--muted)}
 .ah .hint{font-size:12px;color:var(--muted)}
 .arows{display:flex;flex-direction:column;margin-inline:-12px}
-.arow{display:grid;grid-template-columns:10px minmax(0,1fr) auto;column-gap:10px;row-gap:3px;align-items:center;padding:8px 12px;border:0;border-top:1px solid var(--line);background:none;text-align:left;width:100%}
+.arow{display:grid;grid-template-columns:12px minmax(0,1fr) auto;column-gap:10px;row-gap:3px;align-items:center;padding:8px 12px;border:0;border-top:1px solid var(--line);background:none;text-align:left;width:100%}
 .arow:hover{background:var(--card-2)}
 .arow.on{background:var(--accent-soft)}
 .arow.on .al::after{content:" ✓";color:var(--accent);font-weight:700}
-.arow .sw{width:10px;height:10px;border-radius:3px}
+.arow .sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
 .arow .al{font-weight:500;min-width:0;overflow-wrap:anywhere}
 .arow .aa{font-weight:600;white-space:nowrap;text-align:right}
 .arow .strk{grid-column:2;position:relative;height:6px;background:var(--card-2);border-radius:3px}
 .arow .sf{position:absolute;left:0;top:0;bottom:0;border-radius:3px}
 .arow .sp{position:absolute;top:-3px;bottom:-3px;width:3px;margin-left:-1.5px;background:var(--ink-2);border-radius:2px}
 .arow .as{grid-column:3;display:flex;gap:5px;align-items:center;justify-content:flex-end;font-size:12px;white-space:nowrap}
-.arow .am{grid-column:2/4;font-size:12px;color:var(--ink-2)}
+.arow .am{grid-column:2/4;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;color:var(--ink-2)}
 .amore{border-top:1px solid var(--line)}
 
 /* ishchi ilova */
@@ -297,3 +298,31 @@ table.pv tr.tot td:first-child{background:var(--card-2)}
 #shareHost:empty{display:none}
 #breakdown{gap:10px}
 .sheet .sbody>*{flex-shrink:0}
+
+/* xususiyat qatorlari: ochiladigan + filtr tugmasi */
+.arow .c{color:var(--muted);font-size:12px}
+.arow.can{cursor:pointer}
+.arow.op{background:var(--card-2)}
+.arow.op .al{font-weight:700}
+.fbtn{flex:0 0 auto;border:1px solid var(--line);background:var(--card);color:var(--accent);border-radius:999px;padding:3px 9px;font-size:12px;font-weight:600;cursor:pointer}
+.fbtn.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.tw.sub{border-radius:0;box-shadow:none;border-top:1px solid var(--line);margin-inline:0}
+.arows>.tw.sub .tr{font-size:13px}
+/* TOP-10 SKU: ochiladigan karta */
+.sku.can{cursor:pointer}
+.sku.can:hover,.sku.op{background:var(--card-2)}
+.sku .c{display:inline-block;width:14px;color:var(--muted);font-size:12px}
+.sku.op .nm{font-weight:700}
+.skucard{display:flex;flex-direction:column;gap:10px;padding:10px 12px 12px;background:var(--card-2);border-top:1px solid var(--line)}
+.tags{display:flex;flex-wrap:wrap;gap:5px}
+.tag{font-size:12px;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:2px 7px;color:var(--ink-2)}
+.tag b{font-weight:600;color:var(--muted)}
+.tag.st{color:var(--accent);border-color:var(--accent-soft);background:var(--accent-soft)}
+.kvs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.kv{background:var(--card);border-radius:8px;padding:7px 9px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.kv .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.kv .v{font-weight:700;font-size:14px}
+.kv .pill{align-self:flex-start}
+.spark{width:100%;height:48px;display:block;background:var(--card);border-radius:8px}
+.spark-ax{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:-6px}
+#top>.tw.sub{border-radius:0;box-shadow:none}

@@ -47,7 +47,7 @@ class BonusLoadReport:
     duplicates: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     no_pct_brands: list[dict] = field(default_factory=list)    # savdosi bor, faylda umuman yo'q (0% yozilgani emas)
-    totals: dict = field(default_factory=dict)                 # valovka / qo'shimcha / marja
+    totals: dict = field(default_factory=dict)                 # front / qo'shimcha / gross marja
 
 
 def _parse(data: bytes) -> tuple[list[dict], int, int, bool, list[str]]:
@@ -179,9 +179,9 @@ def format_report(r: BonusLoadReport, max_items: int = 15) -> str:
         out += [
             f"\n<b>Butun baza bo'yicha</b> ({t['period']}):",
             f"  Savdo: {_mln(t['amount'])} mln",
-            f"  Valovka: {_mln(t['gross'])} mln ({p(t['gross'])})",
+            f"  Front marja: {_mln(t['gross'])} mln ({p(t['gross'])})",
             f"  + Qo'shimcha daromad: {_mln(t['income'])} mln ({p(t['income'])})",
-            f"  = <b>Marja: {_mln(t['margin'])} mln ({p(t['margin'])})</b>",
+            f"  = <b>Gross marja: {_mln(t['margin'])} mln ({p(t['margin'])})</b>",
         ]
     if r.no_pct_brands:
         out.append(f"\n⚠️ <b>Savdosi bor, faylda yo'q brendlar: {len(r.no_pct_brands)}</b> (0% hisoblanadi)")

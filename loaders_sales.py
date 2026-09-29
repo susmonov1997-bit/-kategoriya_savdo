@@ -1,7 +1,7 @@
 """Kunlik savdo fayli loaderi ("Chiqim tovarlar ….xlsx").
 
 Kelishilgan qoidalar:
-  * Savdo summasi = Жами(Чиқим нархи);  tannarx = Жами(Кирим нархи);  marja = summa − tannarx.
+  * Savdo summasi = Жами(Чиқим нархи);  tannarx = Жами(Кирим нархи);  front marja = summa − tannarx.
   * Бонус qatorlari (narx 0) donaga qo'shiladi, tannarxi marjadan ayriladi (is_bonus belgisi bilan saqlanadi).
   * Faqat bazadagi (spravochnikdagi) kategoriyalar yuklanadi; "К"/"M"/"Z" va boshqalar tashlanadi.
   * Qaytarishlar hisobga olinmaydi (faylda yo'q).
@@ -237,12 +237,12 @@ def format_report(r: SalesLoadReport, max_items: int = 15) -> str:
     for c in r.by_category:
         bonus = f", bonus {c['bonus_qty']:.0f}" if c["bonus_qty"] else ""
         out.append(f"• <b>{esc(c['category'])}</b>: {_fmt_mln(c['amount'])} mln · {c['qty']:.0f} dona{bonus} · "
-                   f"valovka {c['gross_pct']}% · marja {c['margin_pct']}%")
+                   f"front marja {c['gross_pct']}% · gross marja {c['margin_pct']}%")
     if tot_a:
         tot_g = sum(c["gross"] for c in r.by_category)
-        out.append(f"<b>Jami: {_fmt_mln(tot_a)} mln · valovka {tot_g / tot_a * 100:.1f}% · "
-                   f"marja {tot_m / tot_a * 100:.1f}%</b>")
-        out.append("<i>marja = valovka + qo'shimcha daromad (brend %)</i>")
+        out.append(f"<b>Jami: {_fmt_mln(tot_a)} mln · front marja {tot_g / tot_a * 100:.1f}% · "
+                   f"gross marja {tot_m / tot_a * 100:.1f}%</b>")
+        out.append("<i>gross marja = front marja + qo'shimcha daromad (brend %)</i>")
     if r.replaced.get("rows"):
         out.append(f"\n♻️ Shu sanalardagi eski ma'lumot almashtirildi: {r.replaced['rows']} qator, "
                    f"{_fmt_mln(r.replaced['amount'])} mln")
