@@ -61,7 +61,7 @@ const st = {
   mode: 'tree',          // tree (daraxt) | pivot (kesma)
   rows: 'region', cols: 'attr:0', sort: 'amount',
   chartMetric: 'amount', shareView: 'struct', pvMode: 'amount',
-  aExpand: {}, aOpen: null, showAll: false,
+  aExpand: {}, aOpen: null, topOpen: false, showAll: false,
 };
 const labels = {};       // "dim|key" -> nom (chip va breadcrumb uchun)
 const remember = (d, k, l) => { labels[d + '|' + k] = l; };
@@ -689,8 +689,8 @@ function skuCard(node) {
   const C = c.sum.current, d = c.sum.delta || {}, hasCmp = !!c.sum.previous;
   const kv = (l, v, p) => `<div class="kv"><span class="l">${l}</span><span class="v num">${v}</span>${p || ''}</div>`;
   return `<div class="skucard">
-    <div class="tags">${[`<span class="tag">${esc(c.prod.brand)}</span>`, c.prod.status ? `<span class="tag st">${esc(c.prod.status)}</span>` : '',
-      ...c.prod.attrs.map(a => `<span class="tag"><b>${esc(a.name)}:</b> ${esc(a.value)}</span>`)].join('')}</div>
+    ${c.prod ? `<div class="tags">${[`<span class="tag">${esc(c.prod.brand)}</span>`, c.prod.status ? `<span class="tag st">${esc(c.prod.status)}</span>` : '',
+      ...(c.prod.attrs || []).map(a => `<span class="tag"><b>${esc(a.name)}:</b> ${esc(a.value)}</span>`)].join('')}</div>` : ''}
     <div class="kvs">
       ${kv('Savdo', money(C.amount), hasCmp ? pill(d.amount) : '')}
       ${kv('Dona', nf0.format(C.qty) + (C.bonus_qty ? ` <span class="hint">(bonus ${nf0.format(C.bonus_qty)})</span>` : ''), hasCmp ? pill(d.qty) : '')}
@@ -701,34 +701,49 @@ function skuCard(node) {
     </div>
     ${sparkline(c.daily.series)}
     <div class="lbl" style="margin-top:4px">📍 Qayerda sotilgan</div>
+    ${c.childErr ? `<div class="errbox">${esc(c.childErr)}</div>` : ''}
   </div>`;
 }
 async function openSku(node) {
   node.open = true; node.loading = true; renderTopBody();
   const F = pathFilters(node.path);
   try {
-    const [prod, sum, daily] = await Promise.all([api('product/' + node.key), api('summary', F), api('daily', F),
+    // har bir qism alohida: bittasi xato bersa ham qolgani ko'rinadi
+    const [prod, sum, daily, ch] = await Promise.allSettled([api('product/' + node.key), api('summary', F), api('daily', F),
       node.childDim && !node.children ? fetchChildren(node) : Promise.resolve()]);
-    node.card = {prod, sum, daily};
-  } catch (e) { node.card = {error: e.message}; }
+    if (sum.status !== 'fulfilled') throw sum.reason;
+    node.card = {prod: prod.status === 'fulfilled' ? prod.value : null, sum: sum.value,
+                 daily: daily.status === 'fulfilled' ? daily.value : {series: []},
+                 childErr: ch.status === 'rejected' ? ch.reason.message : null};
+  } catch (e) { node.card = {error: (e && e.message) || String(e)}; }
   node.loading = false; renderTopBody();
 }
 function renderTopBody() {
   const t = TOP; if (!t) return;
-  const host = $('top');
+  const host = $('top'), head = $('topHead');
+  const sumTop = t.rows.reduce((s, i) => s + i.current.amount, 0), tot = t.total ? t.total.amount : 0;
+  $('topHint').textContent = t.rows.length ? `${t.rows.length} ta · ${money(sumTop)}${tot ? ' · ' + pct(sumTop / tot * 100) : ''}` : "savdo yo'q";
+  head.querySelector('.c').textContent = st.topOpen ? '▾' : '▸';
+  head.setAttribute('aria-expanded', st.topOpen);
+  $('topBlock').classList.toggle('open', st.topOpen);
+  head.onclick = () => { st.topOpen = !st.topOpen; renderTopBody(); };
+  host.hidden = !st.topOpen;
+  if (!st.topOpen) { host.innerHTML = ''; return; }
   host.innerHTML = t.rows.length ? t.rows.map((i, n) => {
     const rid = `s:${i.key}`;
     const node = ROOTS.get(rid) || newRoot(rid, 'loc', [{dim: 'sku', key: i.key}], {label: i.label, row: i});
     const sub = []; if (node.open && node.card && !node.card.error) subtreeRows(node, sub, i.current.amount, 1);
-    return `<div class="sku can ${node.open ? 'op' : ''}" role="button" tabindex="0" data-rid="${esc(rid)}">
+    return `<button type="button" class="sku can ${node.open ? 'op' : ''}" aria-expanded="${!!node.open}" data-rid="${esc(rid)}">
       <span class="rk num">${n + 1}</span><span class="nm"><span class="c">${node.loading ? '…' : node.open ? '▾' : '▸'}</span>${esc(i.label)}</span><span class="amt num">${money(i.current.amount)}</span>
       <span class="br">${esc(i.sub || '')} · ${nf0.format(i.current.qty)} dona</span><span class="mt num ${i.current.margin_pct < 0 ? 'neg' : ''}">GM ${pct(i.current.margin_pct)}</span>
-    </div>${node.open ? skuCard(node) + (sub.length ? `<div class="tw sub">${sub.join('')}</div>` : '') : ''}`;
+    </button>${node.open ? skuCard(node) + (sub.length ? `<div class="tw sub">${sub.join('')}</div>` : '') : ''}`;
   }).join('') : `<div class="empty">Savdo yo'q.</div>`;
-  host.querySelectorAll('.sku.can').forEach(r => {
-    const go = () => { const node = ROOTS.get(r.dataset.rid); if (!node) return; if (node.open) { node.open = false; renderTopBody(); } else openSku(node); };
-    r.onclick = go; r.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
-  });
+  // bosishni konteyner ushlaydi (delegatsiya) — qayta chizilganda ham ishonchli ishlaydi
+  host.onclick = e => {
+    const r = e.target.closest('.sku.can'); if (!r || !host.contains(r)) return;
+    const node = ROOTS.get(r.dataset.rid); if (!node) return;
+    if (node.open) { node.open = false; renderTopBody(); } else openSku(node);
+  };
   wireTree(host);
 }
 

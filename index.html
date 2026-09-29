@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Manrope:wght@600;700;800&display=swap">
-<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="app.css?v=20260929d">
 </head>
 <body>
 <div id="gate" hidden></div>
@@ -87,13 +87,16 @@
   </section>
 
   <section aria-labelledby="attrH">
-    <div class="sh"><h2 id="attrH">Xususiyatlar bo'yicha</h2><span class="hint">qatorni bosing — filtrga qo'shiladi</span></div>
+    <div class="sh"><h2 id="attrH">Xususiyatlar bo'yicha</h2><span class="hint">qiymatni bosing — ichiga ochiladi</span></div>
     <div class="ablocks" id="ablocks"></div>
   </section>
 
   <section aria-labelledby="topH">
-    <div class="sh"><h2 id="topH">TOP-10 SKU</h2><span class="hint">joriy filtrlar bo'yicha</span></div>
-    <div class="list" id="top"></div>
+    <div class="ablock topblock" id="topBlock">
+      <button class="ah" id="topHead" aria-expanded="false"><h3 id="topH"><span class="c">▸</span>TOP-10 SKU</h3>
+        <span class="hint num" id="topHint">joriy filtrlar bo'yicha</span></button>
+      <div class="tlist" id="top" hidden></div>
+    </div>
   </section>
 
   <p class="foot">Front marja = savdo − kirim narxi. Gross marja = front marja + qo'shimcha daromad (brend %). O'rtacha narx bonus donalarsiz hisoblanadi. Ulush — joriy filtrlar jamisiga nisbatan.</p>
@@ -102,6 +105,6 @@
 
 </div>
 <div id="sheetHost"></div>
-<script src="app.js"></script>
+<script src="app.js?v=20260929d"></script>
 </body>
 </html>

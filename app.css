@@ -125,6 +125,8 @@ table.pv tr.tot td:first-child{background:var(--card-2)}
 
 /* top sku */
 .sku{display:grid;grid-template-columns:22px 1fr auto;gap:2px 10px;padding:9px 12px;border-top:1px solid var(--line);align-items:baseline}
+button.sku{width:100%;border-left:0;border-right:0;border-bottom:0;background:var(--card);text-align:left;font:inherit;color:var(--ink);-webkit-tap-highlight-color:transparent}
+#top>button.sku:first-child{border-top:0}
 .sku:first-child{border-top:0}
 .sku .rk{color:var(--muted);font-weight:600;font-size:12px}
 .sku .nm{min-width:0;overflow-wrap:anywhere}
@@ -326,3 +328,8 @@ table.pv tr.tot td:first-child{background:var(--card-2)}
 .spark{width:100%;height:48px;display:block;background:var(--card);border-radius:8px}
 .spark-ax{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:-6px}
 #top>.tw.sub{border-radius:0;box-shadow:none}
+
+/* TOP-10 SKU — yig'iladigan blok */
+.tlist{margin:0 -12px -12px;border-top:1px solid var(--line);border-radius:0 0 var(--r) var(--r);overflow:hidden}
+.tlist>button.sku:first-child{border-top:0}
+.tlist>.tw.sub{border-radius:0;box-shadow:none}
