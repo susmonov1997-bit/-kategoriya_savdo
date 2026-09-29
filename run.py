@@ -20,6 +20,28 @@ from db import create_pool, migrate
 log = logging.getLogger("app.run")
 
 
+async def supervise_bot(pool) -> None:
+    """Botni ishga tushiradi; xato bo'lsa API'ni to'xtatmaydi — logga yozib, qayta urinadi."""
+    from aiogram.exceptions import TelegramUnauthorizedError
+    from aiogram.utils.token import TokenValidationError
+
+    delay = 5
+    while True:
+        try:
+            await run_bot(pool)
+            log.warning("Bot polling to'xtadi — %s s dan keyin qayta ishga tushadi", delay)
+        except asyncio.CancelledError:
+            raise
+        except (TelegramUnauthorizedError, TokenValidationError) as e:
+            log.error("BOT_TOKEN noto'g'ri (%s). Railway Variables'da tokenni tekshiring — "
+                      "bo'sh joy/qo'shtirnoqsiz, BotFather bergandek. API ishlashda davom etadi.", e)
+            return
+        except Exception:  # noqa: BLE001
+            log.exception("Bot xatosi — %s s dan keyin qayta urinish", delay)
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, 300)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if not config.DATABASE_URL:
@@ -33,22 +55,16 @@ async def main() -> None:
 
     server = uvicorn.Server(uvicorn.Config(api_app, host="0.0.0.0", port=config.PORT, log_level="info",
                                            proxy_headers=True, forwarded_allow_ips="*"))
-    tasks = [asyncio.create_task(server.serve(), name="api")]
+    bot_task = None
     if config.BOT_TOKEN:
-        tasks.append(asyncio.create_task(run_bot(pool), name="bot"))
+        bot_task = asyncio.create_task(supervise_bot(pool), name="bot")
     else:
         log.warning("BOT_TOKEN yo'q — faqat API ishga tushdi")
-
     try:
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
-        for t in done:
-            if t.exception():
-                log.error("%s to'xtadi: %r", t.get_name(), t.exception())
-                raise t.exception()
+        await server.serve()          # jarayon API ishlaguncha yashaydi
     finally:
-        server.should_exit = True
-        for t in tasks:
-            t.cancel()
+        if bot_task:
+            bot_task.cancel()
         await pool.close()
 
 

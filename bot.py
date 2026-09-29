@@ -132,17 +132,32 @@ async def on_document(m: Message, bot: Bot, pool: asyncpg.Pool) -> None:
     await send_long(m, text)
 
 
+_DP: Dispatcher | None = None
+
+
 async def run_bot(pool: asyncpg.Pool) -> None:
     """Botni long-polling rejimida ishga tushiradi (bitta nusxa bo'lishi shart)."""
-    bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp = Dispatcher()
-    dp.include_router(router)
+    global _DP
+    if _DP is None:                  # router faqat bir marta ulanadi (qayta urinishlarda ham)
+        _DP = Dispatcher()
+        _DP.include_router(router)
+    dp = _DP
     dp["pool"] = pool
-    if config.WEBAPP_URL:
-        # chat pastidagi "Menu" tugmasi Mini App'ni ochadi
-        await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Savdo", web_app=WebAppInfo(url=config.WEBAPP_URL)))
-    await bot.delete_webhook(drop_pending_updates=False)
-    await dp.start_polling(bot, handle_signals=False)
+    bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    try:
+        me = await bot.get_me()          # token noto'g'ri bo'lsa shu yerda aniq xato chiqadi
+        log.info("Bot ulandi: @%s", me.username)
+        if config.WEBAPP_URL:
+            # chat pastidagi "Menu" tugmasi Mini App'ni ochadi (xato bo'lsa bot baribir ishlayveradi)
+            try:
+                await bot.set_chat_menu_button(
+                    menu_button=MenuButtonWebApp(text="Savdo", web_app=WebAppInfo(url=config.WEBAPP_URL)))
+            except Exception as e:  # noqa: BLE001
+                log.warning("Menu tugmasini o'rnatib bo'lmadi (WEBAPP_URL=%r): %s", config.WEBAPP_URL, e)
+        await bot.delete_webhook(drop_pending_updates=False)
+        await dp.start_polling(bot, handle_signals=False)
+    finally:
+        await bot.session.close()
 
 
 async def main() -> None:
