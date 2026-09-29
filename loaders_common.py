@@ -67,7 +67,7 @@ def read_headers(data: bytes, scan_rows: int = 15) -> list[set[str]]:
 
 
 def read_sheet_with_header(
-    data: bytes | BinaryIO, must_have: Iterable[str], scan_rows: int = 15
+    data: bytes | BinaryIO, must_have: Iterable[str], scan_rows: int = 15, usecols: Iterable[str] | None = None
 ) -> tuple[pd.DataFrame, int]:
     """Birinchi varaqni o'qiydi va `must_have` ustunlari bor sarlavha qatorini topadi.
 
@@ -75,6 +75,8 @@ def read_sheet_with_header(
     DataFrame'ga `_excel_row` ustuni qo'shiladi — xatolarni Excel qator raqami bilan ko'rsatish uchun.
     """
     buf = io.BytesIO(data) if isinstance(data, (bytes, bytearray)) else data
+    if usecols is not None:
+        return _read_selected(buf, must_have, scan_rows, usecols)
     try:
         raw = pd.read_excel(buf, header=None, dtype=object, engine=EXCEL_ENGINE)
     except Exception as e:  # noqa: BLE001
@@ -102,4 +104,32 @@ def read_sheet_with_header(
     df["_excel_row"] = [header_idx + 2 + k for k in range(len(df))]
     data_cols = [c for c in df.columns if c != "_excel_row"]
     df = df.dropna(how="all", subset=data_cols)        # butunlay bo'sh qatorlar
+    return df.reset_index(drop=True), header_idx + 1
+
+
+def _read_selected(buf, must_have: Iterable[str], scan_rows: int, usecols: Iterable[str]) -> tuple[pd.DataFrame, int]:
+    """Katta fayllar uchun: faqat kerakli ustunlarni o'qiydi (xotira va vaqt bir necha barobar kam)."""
+    must = {clean_header(m) for m in must_have}
+    wanted = {clean_header(c) for c in usecols}
+    try:
+        head = pd.read_excel(buf, header=None, dtype=object, nrows=scan_rows, engine=EXCEL_ENGINE)
+    except Exception as e:  # noqa: BLE001
+        raise LoaderError(f"Excel faylni o'qib bo'lmadi: {e}") from e
+    header_idx = next((i for i in range(len(head))
+                       if must <= {clean_header(c) for c in head.iloc[i].tolist()}), None)
+    if header_idx is None:
+        raise LoaderError(
+            "Sarlavha qatori topilmadi. Birinchi {} qatorda quyidagi ustunlar bo'lishi kerak: {}".format(
+                scan_rows, ", ".join(sorted(must))))
+    buf.seek(0)
+    try:
+        df = pd.read_excel(buf, header=header_idx, dtype=object, engine=EXCEL_ENGINE,
+                           usecols=lambda c: clean_header(c) in wanted)
+    except Exception as e:  # noqa: BLE001
+        raise LoaderError(f"Excel faylni o'qib bo'lmadi: {e}") from e
+    df.columns = [clean_header(c) for c in df.columns]
+    df = df.loc[:, ~df.columns.duplicated()]
+    df["_excel_row"] = [header_idx + 2 + k for k in range(len(df))]
+    data_cols = [c for c in df.columns if c != "_excel_row"]
+    df = df.dropna(how="all", subset=data_cols)
     return df.reset_index(drop=True), header_idx + 1

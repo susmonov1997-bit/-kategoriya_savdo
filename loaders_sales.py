@@ -104,7 +104,8 @@ async def load_sales(
 
 
 async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLoadReport:
-    df, _ = await asyncio.to_thread(read_sheet_with_header, data, [COL_ID, COL_DATE, COL_BRANCH])
+    df, _ = await asyncio.to_thread(read_sheet_with_header, data, [COL_ID, COL_DATE, COL_BRANCH], 15,
+                                    REQUIRED + [COL_BONUS])
     missing = [c for c in REQUIRED if c not in df.columns]
     if missing:
         raise LoaderError("Majburiy ustun(lar) yo'q: " + ", ".join(missing))

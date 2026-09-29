@@ -553,11 +553,137 @@ document.querySelectorAll('#chartMetric button').forEach(b => b.onclick = () => 
 });
 let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { renderChart(); if (st.shareView === 'dyn' && !st.cols) shareDyn(); }, 150); });
 
+
+// ---------------------------------------------------------------- bo'limlar: Tahlil / Yuklash
+let VIEW = 'analytics';
+let NEED_REFRESH = false;   // yangi fayl yuklangach tahlil qayta o'qiladi
+function setView(v) {
+  VIEW = v;
+  document.querySelectorAll('#views button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === v));
+  $('topAnalytics').hidden = v !== 'analytics';
+  $('viewAnalytics').hidden = v !== 'analytics';
+  $('viewUpload').hidden = v !== 'upload';
+  if (v === 'upload') loadHistory();
+  if (v === 'analytics' && NEED_REFRESH) { NEED_REFRESH = false; refreshMeta(); }
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll('#views button').forEach(b => b.onclick = () => setView(b.dataset.v));
+
+// ---------------------------------------------------------------- yuklash
+let UP = null;          // joriy job
+let upTimer = null;
+const STEP_NAMES = [['upload', 'Yuklash'], ['checking', 'Tekshiruv'], ['checked', 'Tasdiqlash'], ['loading', 'Bazaga yozish'], ['done', 'Tayyor']];
+function stepsHtml(cur, failed) {
+  const order = STEP_NAMES.map(s => s[0]);
+  const ci = order.indexOf(cur);
+  return `<div class="steps">${STEP_NAMES.map(([k, t], i) =>
+    `<span class="step ${failed && i === ci ? 'err' : i < ci || cur === 'done' ? 'ok' : i === ci ? 'on' : ''}">${i + 1}. ${t}</span>`).join('')}</div>`;
+}
+const reportHtml = t => `<div class="report">${String(t || '').replace(/\n/g, '<br>')}</div>`;
+function renderUp(state, extra) {
+  const host = $('upState');
+  if (!state) { host.innerHTML = ''; return; }
+  const j = UP || {};
+  const mbv = j.size_mb ?? extra?.size; const mbs = mbv == null ? '' : mbv < 0.1 ? '<0,1' : nf1.format(mbv);
+  const head = `<div class="uphead"><b>${esc(j.file_name || extra?.name || '')}</b><span class="hint num">${mbs} MB${j.kind_name ? ' · ' + esc(j.kind_name) : ''}</span></div>`;
+  let body = '';
+  if (state === 'upload') body = `<div class="pbar"><span style="width:${extra.pct}%"></span></div><div class="hint num">Serverga yuborilmoqda… ${extra.pct}%</div>`;
+  else if (state === 'checking') body = `<div class="pbar indet"><span></span></div><div class="hint">Fayl tekshirilmoqda — katta fayllarda 20–60 soniya…</div>`;
+  else if (state === 'checked') body = reportHtml(j.report) +
+    `<div class="upbtns"><button class="btn" id="upCancel">Bekor qilish</button><button class="btn primary" id="upConfirm">Tasdiqlash va yuklash</button></div>`;
+  else if (state === 'loading') body = `<div class="pbar indet"><span></span></div><div class="hint">Bazaga yozilmoqda…</div>`;
+  else if (state === 'done') body = reportHtml(j.report) + `<div class="hint num">${j.elapsed ?? ''} s · hisobot botga ham yuborildi</div>
+    <div class="upbtns"><button class="btn" id="upAgain">Yana fayl yuklash</button><button class="btn primary" id="upGo">Tahlilga o'tish</button></div>`;
+  else if (state === 'failed') body = `<div class="errbox">${esc(j.error || extra?.error || 'Xato')}</div>
+    <div class="upbtns"><button class="btn primary" id="upAgain">Boshqa fayl tanlash</button></div>`;
+  host.innerHTML = `<div class="upcard">${head}${stepsHtml(state === 'failed' ? (j.status_before || 'checking') : state, state === 'failed')}${body}</div>`;
+  const c = $('upConfirm'); if (c) c.onclick = confirmUpload;
+  const x = $('upCancel'); if (x) x.onclick = cancelUpload;
+  const a = $('upAgain'); if (a) a.onclick = () => { UP = null; renderUp(null); $('drop').hidden = false; };
+  const g = $('upGo'); if (g) g.onclick = () => setView('analytics');
+  $('drop').hidden = !['failed', 'done'].includes(state) && !!state;
+  if (state === 'done' || state === 'failed') $('drop').hidden = true;
+}
+function uploadFile(file) {
+  if (!file) return;
+  if (!/\.(xlsx|xlsm)$/i.test(file.name)) { UP = null; renderUp('failed', {error: 'Faqat .xlsx fayl qabul qilinadi', name: file.name}); return; }
+  const maxMb = META.max_upload_mb || 100;
+  const sizeMb = +(file.size / 1048576).toFixed(1);
+  if (sizeMb > maxMb) { UP = null; renderUp('failed', {error: `Fayl ${maxMb} MB dan katta (${sizeMb} MB)`, name: file.name, size: sizeMb}); return; }
+  UP = null;
+  renderUp('upload', {pct: 0, name: file.name, size: sizeMb});
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/upload');
+  if (tg && tg.initData) xhr.setRequestHeader('Authorization', 'tma ' + tg.initData);
+  xhr.upload.onprogress = e => { if (e.lengthComputable) renderUp('upload', {pct: Math.round(e.loaded / e.total * 100), name: file.name, size: sizeMb}); };
+  xhr.onload = () => {
+    let res = {}; try { res = JSON.parse(xhr.responseText); } catch (e) {}
+    if (xhr.status >= 200 && xhr.status < 300) { UP = res; renderUp('checking'); poll(); }
+    else { UP = {file_name: file.name, size_mb: sizeMb, status_before: 'upload'}; renderUp('failed', {error: typeof res.detail === 'string' ? res.detail : `Xato ${xhr.status}`}); }
+  };
+  xhr.onerror = () => { UP = {file_name: file.name, size_mb: sizeMb, status_before: 'upload'}; renderUp('failed', {error: 'Tarmoq xatosi — internetni tekshirib, qayta urinib ko\'ring'}); };
+  xhr.send((() => { const fd = new FormData(); fd.append('file', file); return fd; })());
+}
+function poll() {
+  clearTimeout(upTimer);
+  upTimer = setTimeout(async () => {
+    if (!UP) return;
+    try {
+      const prev = UP.status;
+      UP = await api('upload/' + UP.id);
+      if (UP.status === 'failed') UP.status_before = prev;
+      renderUp(UP.status);
+      if (UP.status === 'checking' || UP.status === 'loading') poll();
+      if (UP.status === 'done') { NEED_REFRESH = true; loadHistory(); try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred('success'); } catch (e) {} }
+    } catch (e) { UP.status_before = UP.status; UP.error = e.message; renderUp('failed'); }
+  }, 1500);
+}
+async function confirmUpload() {
+  const b = $('upConfirm'); if (b) b.disabled = true;
+  try { UP = await api('upload/' + UP.id + '/confirm', {}); renderUp('loading'); poll(); }
+  catch (e) { UP.status_before = 'checked'; UP.error = e.message; renderUp('failed'); }
+}
+async function cancelUpload() {
+  try { await fetch('/api/upload/' + UP.id, {method: 'DELETE', headers: tg && tg.initData ? {'Authorization': 'tma ' + tg.initData} : {}}); } catch (e) {}
+  UP = null; renderUp(null); $('drop').hidden = false;
+}
+async function loadHistory() {
+  const host = $('upHist');
+  let data;
+  try { data = await api('uploads?limit=30'); } catch (e) { host.innerHTML = `<div class="errbox">${esc(e.message)}</div>`; return; }
+  const fmt = s => { if (!s) return ''; const d = new Date(s); return d.toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'}); };
+  const stName = {done: 'yuklandi', failed: 'xato', started: 'jarayonda'};
+  host.innerHTML = data.uploads.length ? data.uploads.map(u => `<button class="hrow" data-id="${u.id}">
+      <span class="hk">${esc(u.kind_name)}${u.period ? ` · <span class="num">${esc(u.period)}</span>` : ''}</span>
+      <span class="st ${u.status}">${stName[u.status] || u.status}</span>
+      <span class="hm num">#${u.id} · ${fmt(u.started_at)} · ${esc(u.file_name || '')}${u.rows_loaded != null ? ` · ${nf0.format(u.rows_loaded)} qator` : ''}</span>
+      ${u.text || u.error ? `<span class="report" hidden>${u.text ? String(u.text).replace(/\n/g, '<br>') : esc(u.error)}</span>` : ''}
+    </button>`).join('') : `<div class="empty">Hali yuklash bo'lmagan.</div>`;
+  host.querySelectorAll('.hrow').forEach(b => b.onclick = () => { const r = b.querySelector('.report'); if (r) r.hidden = !r.hidden; });
+}
+async function refreshMeta() {
+  try { META = await api('meta'); $('dataInfo').textContent = `ma'lumot: ${dm(META.data_from)}–${dm(META.data_to)}`; } catch (e) {}
+  if (!st.cat && META.categories.length) st.cat = META.categories[0].id;
+  if (META.data_to) { if (st.preset) [st.from, st.to] = presetRange(st.preset); load(); }
+}
+(() => {
+  const drop = $('drop'), inp = $('fileIn');
+  inp.onchange = () => { uploadFile(inp.files[0]); inp.value = ''; };
+  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', e => { const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) uploadFile(f); });
+  $('upRefresh').onclick = loadHistory;
+})();
+
 async function init() {
   try { META = await api('meta'); }
   catch (e) { showError(e); return; }
-  if (!META.categories.length) { $('kpis').innerHTML = `<div class="errbox">Sizga ochiq kategoriya yo'q.</div>`; return; }
-  if (!META.data_to) { $('kpis').innerHTML = `<div class="errbox">Bazada hali savdo yo'q — botga savdo faylini yuklang.</div>`; return; }
+  if (META.can_upload) { $('views').hidden = false; $('upLimit').textContent = `.xlsx, ${META.max_upload_mb} MB gacha`; }
+  if (!META.categories.length || !META.data_to) {
+    $('kpis').innerHTML = `<div class="errbox">${!META.categories.length ? "Hali kategoriya yo'q" : "Bazada hali savdo yo'q"} — ${META.can_upload ? "«📥 Yuklash» bo'limidan fayllarni yuklang: tovar spravochnigi, filial spravochnigi, keyin savdo." : "administrator ma'lumot yuklashini kuting."}</div>`;
+    if (META.can_upload) setView('upload');
+    return;
+  }
   $('dataInfo').textContent = `ma'lumot: ${dm(META.data_from)}–${dm(META.data_to)}`;
   st.cat = META.categories[0].id;
   [st.from, st.to] = presetRange(st.preset);

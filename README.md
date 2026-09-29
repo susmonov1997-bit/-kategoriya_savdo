@@ -12,7 +12,8 @@ Barcha fayllar bitta papkada (papka ichida papka yo'q).
 | `loaders_*.py` | Excel yuklovchilar: tovar, filial, savdo, qo'shimcha daromad % |
 | `db.py`, `config.py` | Baza ulanishi, migratsiyalar, sozlamalar |
 | `001_…sql`, `002_…sql`, `003_…sql` | Baza jadvallari (startda avtomatik qo'llanadi) |
-| `index.html`, `app.css`, `app.js` | Mini App (`/app/` manzilida) |
+| `index.html`, `app.css`, `app.js` | Mini App (`/app/` manzilida): Tahlil va 📥 Yuklash bo'limlari |
+| `api_upload.py` | Mini App orqali fayl yuklash: tekshirish → tasdiqlash (100 MB gacha, Telegram cheklovisiz) |
 | `load_file.py` | Botsiz yuklash (katta tarixiy fayllar uchun) |
 | `make_bonus_template.py` | Brend × kategoriya % shablonini yaratish |
 | `Dockerfile`, `railway.json`, `requirements.txt` | Railway deploy |

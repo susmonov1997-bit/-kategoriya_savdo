@@ -29,6 +29,7 @@ from db import create_pool, migrate
 from api_auth import User, allowed_categories, current_user
 from api_queries import (JOINS, Q, compare_period, delta, dimension, kpi_from, load_attrs, metrics_sql)
 from api_schemas import BreakdownRequest, Filters, Kpi
+from api_upload import can_upload, router as upload_router
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Savdo Mini App API", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
+app.include_router(upload_router)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 if config.CORS_ORIGINS:
     app.add_middleware(CORSMiddleware, allow_origins=config.CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
@@ -99,6 +101,7 @@ async def meta(request: Request, user: User = Depends(current_user)):
         })
     return {
         "user": {"id": user.id, "name": user.first_name},
+        "can_upload": can_upload(user), "max_upload_mb": config.MAX_UPLOAD_MB,
         "categories": out,
         "location_path": LOCATION_PATH,
         "dimensions": {"region": "Hudud", "cluster": "Klaster", "branch": "Filial", "brand": "Brend",

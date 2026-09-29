@@ -112,8 +112,11 @@ async def on_document(m: Message, bot: Bot, pool: asyncpg.Pool) -> None:
         await m.answer("Faqat .xlsx fayl qabul qilinadi.")
         return
     if doc.file_size and doc.file_size > config.MAX_FILE_MB * 1024 * 1024:
-        await m.answer(f"Fayl juda katta (> {config.MAX_FILE_MB} MB — Telegram limiti). "
-                       "Kunlarga bo'lib yuboring yoki serverda <code>python load_file.py</code> bilan yuklang.")
+        kb = (InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="📥 Mini App'da yuklash", web_app=WebAppInfo(url=config.WEBAPP_URL))]]) if config.WEBAPP_URL else None)
+        await m.answer(f"Fayl {config.MAX_FILE_MB} MB dan katta — Telegram bot bunday faylni qabul qilmaydi.\n"
+                       f"Mini App → <b>📥 Yuklash</b> bo'limidan yuklang ({config.MAX_UPLOAD_MB} MB gacha).",
+                       reply_markup=kb)
         return
 
     wait = await m.answer("⏳ Fayl tekshirilmoqda…")

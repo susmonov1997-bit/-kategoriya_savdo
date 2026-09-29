@@ -32,20 +32,29 @@ def detect_kind(data: bytes) -> str | None:
     return None
 
 
-async def load_any(pool: asyncpg.Pool, data: bytes, file_name: str | None, tg_user_id: int | None) -> str:
-    """Faylni yuklaydi va Telegram uchun HTML hisobot qaytaradi. LoaderError tashqariga chiqadi."""
+async def load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int | None) -> tuple[str, str, int]:
+    """Faylni yuklaydi. Qaytaradi: (tur, HTML hisobot, upload_id). LoaderError tashqariga chiqadi."""
     kind = await asyncio.to_thread(detect_kind, data)
     if kind == "products":
-        return products.format_report(await products.load_products(pool, data, file_name, tg_user_id))
+        r = await products.load_products(pool, data, file_name, tg_user_id)
+        return kind, products.format_report(r), r.upload_id
     if kind == "branches":
-        return branches.format_report(await branches.load_branches(pool, data, file_name, tg_user_id))
+        r = await branches.load_branches(pool, data, file_name, tg_user_id)
+        return kind, branches.format_report(r), r.upload_id
     if kind == "sales":
-        return sales.format_report(await sales.load_sales(pool, data, file_name, tg_user_id))
+        r = await sales.load_sales(pool, data, file_name, tg_user_id)
+        return kind, sales.format_report(r), r.upload_id
     if kind == "bonus":
-        return bonus.format_report(await bonus.load_bonus(pool, data, file_name, tg_user_id))
+        r = await bonus.load_bonus(pool, data, file_name, tg_user_id)
+        return kind, bonus.format_report(r), r.upload_id
     raise LoaderError(
         "Fayl turi aniqlanmadi. Kutilgan sarlavhalar:\n"
         "• Savdo: Филиал, Категория, Товар ИД, Сана, Сони, Жами(Кирим нархи), Жами(Чиқим нархи)\n"
         "• Tovar spravochnigi: Категория, Товар Ид, Товар номи, Бренд, Подкатегория…\n"
         "• Filial spravochnigi: Территория, Филиал, Кластер\n"
         "• Qo'shimcha daromad: Категория, Бренд, Қўшимча даромад %")
+
+
+async def load_any(pool, data: bytes, file_name: str | None, tg_user_id: int | None) -> str:
+    """Faylni yuklaydi va Telegram uchun HTML hisobot qaytaradi. LoaderError tashqariga chiqadi."""
+    return (await load_any_ex(pool, data, file_name, tg_user_id))[1]
