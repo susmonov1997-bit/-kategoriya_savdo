@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Savdo</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Manrope:wght@600;700;800&display=swap">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="gate" hidden></div>
+<div class="app" id="app">
+  <div class="top">
+    <div class="brandrow">
+      <h1>Savdo</h1>
+      <span class="proto" id="dataInfo"></span>
+    </div>
+    <div class="seg" id="cats" role="group" aria-label="Kategoriya"></div>
+    <div class="chips" id="periods" role="group" aria-label="Davr"></div>
+    <div class="periodline">
+      <div class="dates">
+        <input type="date" id="dFrom" aria-label="Boshlanish sanasi">
+        <span>—</span>
+        <input type="date" id="dTo" aria-label="Tugash sanasi">
+      </div>
+      <label>solishtirish
+        <select id="cmp">
+          <option value="prev">o'tgan teng davr</option>
+          <option value="yoy">o'tgan yil</option>
+          <option value="none">yo'q</option>
+        </select>
+      </label>
+    </div>
+    <div class="chips" id="filters" role="group" aria-label="Filtrlar"></div>
+  </div>
+
+  <section aria-labelledby="kpiH">
+    <div class="sh"><h2 id="kpiH">Ko'rsatkichlar</h2><span class="hint num" id="cmpHint"></span></div>
+    <div class="kpis" id="kpis"></div>
+  </section>
+
+  <section aria-labelledby="dynH">
+    <div class="sh"><h2 id="dynH">Kunlik dinamika</h2>
+      <div class="seg" id="chartMetric" style="flex:0 0 auto">
+        <button data-m="amount" aria-pressed="true">Savdo</button>
+        <button data-m="margin">Marja</button>
+        <button data-m="qty">Dona</button>
+      </div>
+    </div>
+    <div class="chartcard">
+      <div class="legend" id="legend"></div>
+      <div class="chartwrap" id="chart"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="brH">
+    <div class="sh"><h2 id="brH">Qirqim</h2><span class="hint num" id="brHint"></span></div>
+    <div class="ctl">
+      <label>Qatorlar <select id="rowsDim"></select></label>
+      <label>Ustun <select id="colsDim"></select></label>
+      <label>Saralash <select id="sortBy">
+        <option value="amount">savdo</option>
+        <option value="margin">marja</option>
+        <option value="margin_pct">marja %</option>
+        <option value="qty">dona</option>
+        <option value="delta">o'zgarish</option>
+        <option value="name">nomi</option>
+      </select></label>
+    </div>
+    <div class="crumbs" id="crumbs"></div>
+    <div id="breakdown"></div>
+  </section>
+
+  <section aria-labelledby="attrH">
+    <div class="sh"><h2 id="attrH">Xususiyatlar bo'yicha</h2><span class="hint">qatorni bosing — filtrga qo'shiladi</span></div>
+    <div class="ablocks" id="ablocks"></div>
+  </section>
+
+  <section aria-labelledby="topH">
+    <div class="sh"><h2 id="topH">TOP-10 SKU</h2><span class="hint">joriy filtrlar bo'yicha</span></div>
+    <div class="list" id="top"></div>
+  </section>
+
+  <p class="foot">Marja = valovka + qo'shimcha daromad (brend %). O'rtacha narx bonus donalarsiz hisoblanadi. Ulush — joriy filtrlar jamisiga nisbatan.</p>
+</div>
+
+
+<div id="sheetHost"></div>
+<script src="app.js"></script>
+</body>
+</html>

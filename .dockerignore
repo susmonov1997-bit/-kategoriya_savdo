@@ -2,4 +2,3 @@
 __pycache__
 *.xlsx
 .git
-webapp/proto_*.html

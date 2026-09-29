@@ -1,11 +1,11 @@
 # Railway'ga chiqarish
 
-Bitta servis: API + Mini App + bot bitta konteynerda (`python -m app.run`), alohida PostgreSQL.
+Bitta servis: API + Mini App + bot bitta konteynerda (`python run.py`), alohida PostgreSQL.
 
 ## 1. Kodni GitHub'ga joylash
 1. GitHub'da **private** repo oching (masalan `savdo-bot`).
-2. Arxivdagi `savdo_bot` papkasi ichidagi hamma narsani repo ildiziga push qiling
-   (`Dockerfile`, `railway.json`, `app/`, `sql/`, `webapp/` … ildizda turishi kerak).
+2. Arxivdagi `savdo-qirqim-bot` papkasi ichidagi hamma fayllarni repoga yuklang
+   (papkalar yo'q — hamma fayllar repo ildizida turadi).
    `.env` va Excel fayllar `.gitignore` da — repoga tushmaydi.
 
 ## 2. Railway loyihasi
@@ -44,4 +44,4 @@ Keyin har kuni kunlik savdo faylini botga tashlaysiz. `/status` — bazadagi dav
 - Shu tokenli botni bir vaqtda kompyuterda ham ishga tushirmang — Telegram "Conflict" xatosini beradi.
 - Kod GitHub'ga push qilinsa Railway avtomatik qayta deploy qiladi; migratsiyalar o'zi qo'llanadi.
 - Katta tarixiy fayllar uchun muqobil: kompyuterda `DATABASE_URL` ga Railway Postgres'ning
-  **public** URL'ini (`DATABASE_PUBLIC_URL`) qo'yib `python -m scripts.load_file <fayl>` ishlatish.
+  **public** URL'ini (`DATABASE_PUBLIC_URL`) qo'yib `python load_file.py <fayl>` ishlatish.

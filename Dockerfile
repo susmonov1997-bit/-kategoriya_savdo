@@ -8,10 +8,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /srv
 COPY requirements.txt .
 RUN pip install -r requirements.txt
+COPY . .
 
-COPY app ./app
-COPY sql ./sql
-COPY scripts ./scripts
-COPY webapp/app ./webapp/app
-
-CMD ["python", "-m", "app.run"]
+CMD ["python", "run.py"]
