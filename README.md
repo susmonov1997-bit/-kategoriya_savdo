@@ -28,8 +28,12 @@ python run.py               # http://localhost:8000/app/
 Botsiz yuklash: `python load_file.py хусусиятлар.xlsx "Filial spravochnigi.xlsx" savdo.xlsx`
 
 ## Hisob qoidalari
-- Savdo = Жами(Чиқим нархи); Front marja = savdo − Жами(Кирим нархи)
-- Qo'shimcha daromad = Жами(Кирим нархи) × brend % ; Gross marja = Front marja + qo'shimcha daromad
+- Savdo = Жами(Чиқим нархи)
+- Tannarx = Сони × Кирим нархи × kurs (Кирим нархи(Валюта тури) = Доллар) yoki Сони × Кирим нархи (Сум);
+  kurs — botda `/kurs` (admin o'zgartiradi, sanadan boshlab amal qiladi; boshlang'ich 11 800)
+- Front marja = savdo − tannarx; qo'shimcha daromad = tannarx × brend %; Gross marja = front + qo'shimcha
+- Mas'ullar ro'yxati (Группа, Категория, Жавобгар КМ) — filtr va "Mas'ul bo'yicha" ko'rinish uchun
+- Kategoriya oynasi: Barcha kategoriyalar, Butun КБТ/МБТ, mas'ul bo'yicha, alohida kategoriyalar
 - Бонус qatorlar donaga qo'shiladi; o'rtacha narx bonussiz dona bo'yicha
 - Faqat spravochnikdagi kategoriyalar; "К"/"M"/"Z" va qaytarishlar hisobga olinmaydi
 - Bir sana qayta yuklansa, o'sha kun to'liq almashtiriladi

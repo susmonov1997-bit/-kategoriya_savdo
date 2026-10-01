@@ -333,3 +333,8 @@ button.sku{width:100%;border-left:0;border-right:0;border-bottom:0;background:va
 .tlist{margin:0 -12px -12px;border-top:1px solid var(--line);border-radius:0 0 var(--r) var(--r);overflow:hidden}
 .tlist>button.sku:first-child{border-top:0}
 .tlist>.tw.sub{border-radius:0;box-shadow:none}
+
+/* kategoriya oynasi: bo'limlar */
+.optsec{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;padding:12px 4px 6px}
+.optrow .ol{display:flex;flex-direction:column;gap:2px;min-width:0}
+.optrow .os{font-size:12px;color:var(--muted);font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:240px}

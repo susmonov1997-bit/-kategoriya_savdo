@@ -135,7 +135,7 @@ def parse_products(data: bytes) -> ProductsParseResult:
                 raw_attrs[col] = val
 
         p = ParsedProduct(
-            product_id=pid, name=name, grp=clean_text(rec.get(COL_GROUP)) or DEFAULT_GROUP,
+            product_id=pid, name=name, grp=(clean_text(rec.get(COL_GROUP)) or DEFAULT_GROUP).upper(),
             category=cat, brand=brand, status=clean_text(rec.get(COL_STATUS)),
             raw_attrs=raw_attrs, excel_row=r,
         )
@@ -228,6 +228,14 @@ async def _write(con: asyncpg.Connection, parsed: ProductsParseResult, upload_id
                     "INSERT INTO categories(grp, name) VALUES ($1,$2) RETURNING id", p.grp, p.category
                 )
                 new_cats.append(p.category)
+        # guruh (КБТ/МБТ) — fayldagi qiymat bilan yangilanadi
+        file_grp = {}
+        for p in prods:
+            if p.grp != DEFAULT_GROUP:
+                file_grp[p.category] = p.grp
+        for cname, g in file_grp.items():
+            await con.execute("UPDATE categories SET grp = $2 WHERE id = $1 AND grp IS DISTINCT FROM $2",
+                              existing[cname], g)
 
         # --- xususiyatlar: har kategoriya uchun ustun → slot ---
         defs: dict[int, list[dict]] = {}
@@ -351,6 +359,10 @@ async def _write(con: asyncpg.Connection, parsed: ProductsParseResult, upload_id
             """,
             upload_id,
         )
+
+        # mas'ullar ro'yxati (yuklangan bo'lsa) yangi kategoriyalarga ham qo'llanadi
+        from loaders_owners import apply_owner_list
+        await apply_owner_list(con)
 
     return ProductsLoadReport(
         upload_id=upload_id,

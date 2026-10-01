@@ -7,12 +7,13 @@ import asyncpg
 
 import loaders_bonus as bonus
 import loaders_branches as branches
+import loaders_owners as owners
 import loaders_products as products
 import loaders_sales as sales
 from loaders_common import LoaderError, read_headers
 
 KIND_NAMES = {"products": "Tovar spravochnigi", "branches": "Filial spravochnigi", "sales": "Savdo fayli",
-              "bonus": "Qo'shimcha daromad %"}
+              "bonus": "Qo'shimcha daromad %", "owners": "Mas'ullar ro'yxati"}
 
 
 def detect_kind(data: bytes) -> str | None:
@@ -29,6 +30,8 @@ def detect_kind(data: bytes) -> str | None:
             return "branches"
         if bonus.is_bonus_file(h):
             return "bonus"
+        if owners.is_owners_file(h):
+            return "owners"
     return None
 
 
@@ -44,6 +47,9 @@ async def load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int 
     if kind == "sales":
         r = await sales.load_sales(pool, data, file_name, tg_user_id)
         return kind, sales.format_report(r), r.upload_id
+    if kind == "owners":
+        r = await owners.load_owners(pool, data, file_name, tg_user_id)
+        return kind, owners.format_report(r), r.upload_id
     if kind == "bonus":
         r = await bonus.load_bonus(pool, data, file_name, tg_user_id)
         return kind, bonus.format_report(r), r.upload_id
@@ -52,7 +58,8 @@ async def load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int 
         "• Savdo: Филиал, Категория, Товар ИД, Сана, Сони, Жами(Кирим нархи), Жами(Чиқим нархи)\n"
         "• Tovar spravochnigi: Категория, Товар Ид, Товар номи, Бренд + xususiyat ustunlari (Turi, Balandlik (sm), Rang…)\n"
         "• Filial spravochnigi: Территория, Филиал, Кластер\n"
-        "• Qo'shimcha daromad: Категория, Бренд, Қўшимча даромад %")
+        "• Qo'shimcha daromad: Категория, Бренд, Қўшимча даромад %\n"
+        "• Mas'ullar ro'yxati: Группа, Категория, Жавобгар КМ")
 
 
 async def load_any(pool, data: bytes, file_name: str | None, tg_user_id: int | None) -> str:

@@ -91,6 +91,10 @@ DIMENSIONS: dict[str, dict[str, str]] = {
                 "title": "Brend"},
     "status":  {"key": "COALESCE(x.status,'—')", "label": "COALESCE(x.status,'—')", "sort": "NULL::numeric",
                 "sub": "NULL::text", "title": "Status"},
+    "category": {"key": "x.category_id::text", "label": "x.cname", "sort": "NULL::numeric", "sub": "x.owner",
+                 "title": "Kategoriya"},
+    "owner":   {"key": "x.owner", "label": "x.owner", "sort": "NULL::numeric", "sub": "NULL::text",
+                "title": "Mas'ul"},
     "sku":     {"key": "x.product_id::text", "label": "x.pname", "sort": "NULL::numeric", "sub": "x.brand",
                 "title": "SKU"},
 }
@@ -121,8 +125,8 @@ LEFT JOIN branches br ON br.id = x.branch_id
 # So'rov quruvchi
 # ---------------------------------------------------------------------------
 class Q:
-    def __init__(self, f: Filters, attrs: dict[int, AttrDef]):
-        self.f, self.attrs = f, attrs
+    def __init__(self, f: Filters, attrs: dict[int, AttrDef], cats: list[int]):
+        self.f, self.attrs, self.cats = f, attrs, cats
         self.params: list[Any] = []
         self.cmp = compare_period(f)
 
@@ -133,7 +137,7 @@ class Q:
     def base_cte(self, exclude: str | None = None, with_cmp: bool = True) -> str:
         """pd (kategoriya tovarlari + xususiyat qiymatlari) va x (filtrlangan savdo, per='c'|'p')."""
         f = self.f
-        cat = self.p(f.category_id)
+        cat = self.p(self.cats)
         c1, c2 = self.p(f.date_from), self.p(f.date_to)
         if with_cmp and self.cmp:
             p1, p2 = self.p(self.cmp[0]), self.p(self.cmp[1])
@@ -143,8 +147,9 @@ class Q:
         where = [period] + self.filter_conds(exclude)
         return f"""
 WITH pd AS (
-    SELECT p.product_id, p.name AS pname, p.brand, p.status{_attr_cols(self.attrs)}
-    FROM products p WHERE p.category_id = {cat}
+    SELECT p.product_id, p.name AS pname, p.brand, p.status, p.category_id, c.name AS cname,
+           COALESCE(c.owner, '—') AS owner{_attr_cols(self.attrs)}
+    FROM products p JOIN categories c ON c.id = p.category_id WHERE p.category_id = ANY({cat}::int[])
 ), x AS (
     SELECT e.sale_date, e.is_bonus, e.qty, e.amount, e.gross_margin, e.supplier_income, e.margin,
            e.branch_id, b.region_id, b.cluster_id, pd.*,
@@ -167,6 +172,10 @@ WITH pd AS (
             c.append(f"{alias_p}.brand = ANY({self.p(f.brands)}::text[])")
         if f.statuses and exclude != "status":
             c.append(f"COALESCE({alias_p}.status,'—') = ANY({self.p(f.statuses)}::text[])")
+        if f.category_ids and exclude != "category":
+            c.append(f"{alias_p}.category_id = ANY({self.p(f.category_ids)}::int[])")
+        if f.owners and exclude != "owner":
+            c.append(f"{alias_p}.owner = ANY({self.p(f.owners)}::text[])")
         if f.product_ids and exclude != "sku":
             c.append(f"{alias_p}.product_id = ANY({self.p(f.product_ids)}::bigint[])")
         for slot, vals in f.attrs.items():

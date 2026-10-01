@@ -60,6 +60,34 @@ async def _check_category(user: User, category_id: int) -> None:
         raise HTTPException(403, "Bu kategoriya sizga ochiq emas")
 
 
+async def scope_ctx(con, f: Filters, user: User) -> tuple[list[int], dict, bool]:
+    """Ko'rinish doirasini kategoriyalar ro'yxatiga aylantiradi: c:<id> | g:<guruh> | o:<mas'ul> | a:"""
+    kind, _, val = (f.scope or "").partition(":")
+    if kind == "c":
+        try:
+            cats = [r["id"] for r in await con.fetch("SELECT id FROM categories WHERE id = $1", int(val))]
+        except ValueError:
+            raise HTTPException(422, "Noto'g'ri kategoriya")
+    elif kind == "g":
+        cats = [r["id"] for r in await con.fetch("SELECT id FROM categories WHERE grp = $1", val)]
+    elif kind == "o":
+        cats = [r["id"] for r in await con.fetch("SELECT id FROM categories WHERE owner = $1", val)]
+    elif kind == "a":
+        cats = [r["id"] for r in await con.fetch("SELECT id FROM categories")]
+    else:
+        raise HTTPException(422, "Noto'g'ri doira (scope)")
+    allowed = await allowed_categories(user)
+    if allowed is not None:
+        if kind == "c" and cats and cats[0] not in allowed:
+            raise HTTPException(403, "Bu kategoriya sizga ochiq emas")
+        cats = [c for c in cats if c in allowed]
+    if not cats:
+        raise HTTPException(404, "Kategoriya topilmadi")
+    multi = kind != "c"
+    attrs = {} if multi else await load_attrs(con, cats[0])
+    return cats, attrs, multi
+
+
 @app.get("/api/health")
 async def health(request: Request):
     return {"ok": True, "db": await request.app.state.pool.fetchval("SELECT 1") == 1}
@@ -71,7 +99,7 @@ async def meta(request: Request, user: User = Depends(current_user)):
     pool = request.app.state.pool
     allowed = await allowed_categories(user)
     cats = await pool.fetch(
-        """SELECT c.id, c.grp, c.name, count(p.*) skus,
+        """SELECT c.id, c.grp, c.name, c.owner, count(p.*) skus,
                   (SELECT sum(s.amount) FROM sales_daily s JOIN products p2 USING (product_id)
                    WHERE p2.category_id = c.id AND s.sale_date > current_date - 90) recent
            FROM categories c LEFT JOIN products p ON p.category_id = c.id
@@ -84,6 +112,7 @@ async def meta(request: Request, user: User = Depends(current_user)):
     span = await pool.fetchrow("SELECT min(sale_date) d1, max(sale_date) d2 FROM sales_daily")
     last = await pool.fetchrow(
         "SELECT finished_at FROM uploads WHERE kind='sales' AND status='done' ORDER BY id DESC LIMIT 1")
+    rate = await pool.fetchrow("SELECT rate, valid_from FROM fx_rates ORDER BY valid_from DESC LIMIT 1")
 
     out = []
     for c in cats:
@@ -95,21 +124,42 @@ async def meta(request: Request, user: User = Depends(current_user)):
                        if r["category_id"] == c["id"] and r["slot"] == a["slot"]],
         } for a in attrs if a["category_id"] == c["id"]]
         out.append({
-            "id": c["id"], "group": c["grp"], "name": c["name"], "skus": c["skus"], "attributes": a_list,
+            "key": f"c:{c['id']}", "kind": "cat", "id": c["id"], "group": c["grp"], "owner": c["owner"],
+            "name": c["name"], "skus": c["skus"], "attributes": a_list, "extra_dims": [], "cat_ids": [c["id"]],
             # drill-down: Tovar — xususiyatlar → brend → SKU
             "product_path": [a["dim"] for a in a_list] + ["brand", "sku"],
             # to'liq drill-down: Hudud → Klaster → Filial → xususiyatlar → Brend → SKU
             "drill_path": LOCATION_PATH + [a["dim"] for a in a_list] + ["brand", "sku"],
         })
+
+    def multi_scope(key: str, kind: str, name: str, members: list[dict]) -> dict:
+        owners = {m["owner"] for m in members if m["owner"]}
+        extra = ["category"] + (["owner"] if len(owners) > 1 else [])
+        return {"key": key, "kind": kind, "id": None, "name": name, "group": None, "owner": None,
+                "skus": sum(m["skus"] for m in members), "attributes": [], "extra_dims": extra,
+                "cat_ids": [m["id"] for m in members], "n_cats": len(members),
+                "product_path": ["category", "brand", "sku"],
+                "drill_path": LOCATION_PATH + ["category", "brand", "sku"]}
+
+    groups, owners = {}, {}
+    for c in out:
+        if c["group"]:
+            groups.setdefault(c["group"], []).append(c)
+        if c["owner"]:
+            owners.setdefault(c["owner"], []).append(c)
+    scopes = ([multi_scope("a:", "all", "Barcha kategoriyalar", out)] if len(out) > 1 else [])
+    scopes += [multi_scope(f"g:{g}", "group", f"Butun {g}", m) for g, m in sorted(groups.items())]
+    scopes += [multi_scope(f"o:{o}", "owner", o, m) for o, m in sorted(owners.items())]
     return {
         "user": {"id": user.id, "name": user.first_name},
-        "can_upload": can_upload(user), "max_upload_mb": config.MAX_UPLOAD_MB,
-        "categories": out,
+        "can_upload": can_upload(user), "max_upload_mb": config.MAX_UPLOAD_MB, "is_admin": user.is_admin,
+        "categories": out, "scopes": scopes,
         "location_path": LOCATION_PATH,
         "dimensions": {"region": "Hudud", "cluster": "Klaster", "branch": "Filial", "brand": "Brend",
-                       "sku": "SKU", "status": "Status"},
+                       "sku": "SKU", "status": "Status", "category": "Kategoriya", "owner": "Mas'ul"},
         "data_from": span["d1"], "data_to": span["d2"],
         "last_upload": last["finished_at"] if last else None,
+        "fx_rate": float(rate["rate"]) if rate else None, "fx_from": rate["valid_from"] if rate else None,
     }
 
 
@@ -118,14 +168,14 @@ async def meta(request: Request, user: User = Depends(current_user)):
 async def options(f: Filters, request: Request, user: User = Depends(current_user)):
     """Har bir filtr uchun qiymatlar ro'yxati (joriy davrdagi savdo bilan, kamayish tartibida).
     Faceted: masalan hudud tanlansa, filial ro'yxati shu hududnikiga qisqaradi, hudud ro'yxati esa to'liq qoladi."""
-    await _check_category(user, f.category_id)
     pool = request.app.state.pool
     async with pool.acquire() as con:
-        attrs = await load_attrs(con, f.category_id)
-        dims = ["region", "cluster", "branch", "brand", "status"] + [f"attr:{s}" for s in attrs]
+        cats, attrs, multi = await scope_ctx(con, f, user)
+        dims = (["region", "cluster", "branch"] + (["category", "owner"] if multi else []) + ["brand", "status"]
+                + [f"attr:{s}" for s in attrs])
         result = {}
         for dim in dims:
-            q = Q(f, attrs)
+            q = Q(f, attrs, cats)
             d = dimension(dim, attrs)
             sql = (q.base_cte(exclude=dim, with_cmp=False) +
                    f"\nSELECT {d['key']} AS key, {d['label']} AS label, {d['sort']} AS sort, sum(x.amount) amount "
@@ -142,10 +192,9 @@ async def options(f: Filters, request: Request, user: User = Depends(current_use
 # ---------------------------------------------------------------------------
 @app.post("/api/summary")
 async def summary(f: Filters, request: Request, user: User = Depends(current_user)):
-    await _check_category(user, f.category_id)
     async with request.app.state.pool.acquire() as con:
-        attrs = await load_attrs(con, f.category_id)
-        q = Q(f, attrs)
+        cats, attrs, multi = await scope_ctx(con, f, user)
+        q = Q(f, attrs, cats)
         row = await con.fetchrow(q.base_cte() + f"\nSELECT {metrics_sql('c')}, {metrics_sql('p')} FROM x", *q.params)
     cur = kpi_from(row, "c")
     prev = kpi_from(row, "p") if q.cmp else None
@@ -159,10 +208,9 @@ async def summary(f: Filters, request: Request, user: User = Depends(current_use
 # ---------------------------------------------------------------------------
 @app.post("/api/daily")
 async def daily(f: Filters, request: Request, user: User = Depends(current_user)):
-    await _check_category(user, f.category_id)
     async with request.app.state.pool.acquire() as con:
-        attrs = await load_attrs(con, f.category_id)
-        q = Q(f, attrs)
+        cats, attrs, multi = await scope_ctx(con, f, user)
+        q = Q(f, attrs, cats)
         rows = await con.fetch(
             q.base_cte() + """
             SELECT x.sale_date, x.per, sum(x.amount) amount, sum(x.qty) qty, sum(x.margin) margin,
@@ -200,9 +248,8 @@ def _sort_key(item: dict, metric: str):
 async def breakdown(req: BreakdownRequest, request: Request, user: User = Depends(current_user)):
     """Qirqim jadvali. rows — qator o'lchovi, cols — ixtiyoriy ustun o'lchovi (kesma).
     Ulush (share) — joriy filtrlar bo'yicha jami savdoga nisbatan."""
-    await _check_category(user, req.category_id)
     async with request.app.state.pool.acquire() as con:
-        attrs = await load_attrs(con, req.category_id)
+        cats, attrs, multi = await scope_ctx(con, req, user)
         try:
             rd = dimension(req.rows, attrs)
             cd = dimension(req.cols, attrs) if req.cols else None
@@ -211,7 +258,7 @@ async def breakdown(req: BreakdownRequest, request: Request, user: User = Depend
         if cd and req.cols == req.rows:
             raise HTTPException(422, "Qator va ustun o'lchovi bir xil bo'lmasin")
 
-        q = Q(req, attrs)
+        q = Q(req, attrs, cats)
         base = q.base_cte()
         m = f"{metrics_sql('c')}, {metrics_sql('p')}"
         rows = await con.fetch(
@@ -298,15 +345,14 @@ async def breakdown(req: BreakdownRequest, request: Request, user: User = Depend
 @app.post("/api/share-daily")
 async def share_daily(req: BreakdownRequest, request: Request, user: User = Depends(current_user)):
     """Kunlar bo'yicha savdo ulushi (100% ustunlar grafigi uchun). req.rows — o'lchov, req.limit — TOP-N (sukut 5)."""
-    await _check_category(user, req.category_id)
     top_n = min(req.limit, 8) if req.limit != 200 else 5
     async with request.app.state.pool.acquire() as con:
-        attrs = await load_attrs(con, req.category_id)
+        cats, attrs, multi = await scope_ctx(con, req, user)
         try:
             rd = dimension(req.rows, attrs)
         except ValueError as e:
             raise HTTPException(422, str(e))
-        q = Q(req, attrs)
+        q = Q(req, attrs, cats)
         rows = await con.fetch(
             q.base_cte(with_cmp=False) + f"\nSELECT x.sale_date, {rd['key']} AS key, {rd['label']} AS label, "
             f"sum(x.amount) amount FROM x {JOINS} GROUP BY 1, 2, 3", *q.params)
@@ -335,13 +381,12 @@ async def share_daily(req: BreakdownRequest, request: Request, user: User = Depe
 async def attributes(f: Filters, request: Request, user: User = Depends(current_user)):
     """Xususiyatlar bloklari: har bir xususiyat (va brend) bo'yicha barcha qiymatlar — savdo, dona, marja,
     ulush, o'tgan davr ulushi, pp. Faceted: blokning o'z filtri hisobga olinmaydi, tanlangan qiymatlar selected=true."""
-    await _check_category(user, f.category_id)
     out = []
     async with request.app.state.pool.acquire() as con:
-        attrs = await load_attrs(con, f.category_id)
-        for dim in [f"attr:{s}" for s in attrs] + ["brand"]:
+        cats, attrs, multi = await scope_ctx(con, f, user)
+        for dim in (["category", "owner"] if multi else [f"attr:{s}" for s in attrs]) + ["brand"]:
             d = dimension(dim, attrs)
-            q = Q(f, attrs)
+            q = Q(f, attrs, cats)
             rows = await con.fetch(
                 q.base_cte(exclude=dim) + f"\nSELECT {d['key']} AS key, {d['label']} AS label, {d['sort']} AS sort, "
                 f"{metrics_sql('c')}, {metrics_sql('p')} FROM x {JOINS} GROUP BY 1, 2, 3", *q.params)
@@ -354,6 +399,10 @@ async def attributes(f: Filters, request: Request, user: User = Depends(current_
             selected = set()
             if dim == "brand":
                 selected = set(f.brands)
+            elif dim == "category":
+                selected = {str(c) for c in f.category_ids}
+            elif dim == "owner":
+                selected = set(f.owners)
             elif dim.startswith("attr:"):
                 selected = set(f.attrs.get(int(dim[5:]), []))
             for i in items:

@@ -1,7 +1,12 @@
 """Kunlik savdo fayli loaderi ("Chiqim tovarlar ….xlsx").
 
 Kelishilgan qoidalar:
-  * Savdo summasi = Жами(Чиқим нархи);  tannarx = Жами(Кирим нархи);  front marja = summa − tannarx.
+  * Savdo summasi = Жами(Чиқим нархи).
+  * Tannarx = Сони × Кирим нархи × kurs (Кирим нархи(Валюта тури) = Доллар) yoki Сони × Кирим нархи (Сум).
+    Kurs — fx_rates jadvalidan, sana bo'yicha (admin /kurs bilan o'zgartiradi); bazada dollar va so'm
+    qismlari alohida saqlanadi, kurs hisoblash paytida qo'llanadi.
+    Agar faylda Кирим нархи / Валюта тури ustunlari bo'lmasa — eski usul: tannarx = Жами(Кирим нархи).
+  * Front marja = summa − tannarx;  gross marja = front marja + tannarx × brend %.
   * Бонус qatorlari (narx 0) donaga qo'shiladi, tannarxi marjadan ayriladi (is_bonus belgisi bilan saqlanadi).
   * Faqat bazadagi (spravochnikdagi) kategoriyalar yuklanadi; "К"/"M"/"Z" va boshqalar tashlanadi.
   * Qaytarishlar hisobga olinmaydi (faylda yo'q).
@@ -31,6 +36,23 @@ COL_BONUS = "Бонус"
 COL_QTY = "Сони"
 COL_COST = "Жами(Кирим нархи)"
 COL_AMOUNT = "Жами(Чиқим нархи)"
+COL_UNIT = "Кирим нархи"
+COL_CUR = "Кирим нархи(Валюта тури)"
+OPTIONAL = [COL_BONUS, COL_UNIT, COL_CUR]
+_USD = {"доллар", "долл", "dollar", "usd", "$", "у.е.", "уе"}
+_UZS = {"сум", "сўм", "сом", "so'm", "som", "sum", "uzs"}
+
+
+def norm_currency(v) -> str | None:
+    t = clean_text(v)
+    if not t:
+        return None
+    t = t.lower().replace("ʻ", "'").replace("’", "'").replace("`", "'").strip(" .")
+    if t in _USD or t.startswith("долл") or t.startswith("dol"):
+        return "USD"
+    if t in _UZS or t.startswith("сўм") or t.startswith("сум"):
+        return "UZS"
+    return None
 REQUIRED = [COL_BRANCH, COL_CAT, COL_ID, COL_NAME, COL_DATE, COL_QTY, COL_COST, COL_AMOUNT]
 
 
@@ -76,6 +98,8 @@ class SalesLoadReport:
     unknown_branches: list[dict] = field(default_factory=list)
     category_mismatch: int = 0
     errors: list[str] = field(default_factory=list)
+    cost_mode: str = "split"                  # split — Сони×Кирим нархи×kurs; legacy — Жами(Кирим нархи)
+    fx: list[dict] = field(default_factory=list)   # fayl sanalariga qo'llangan kurslar
 
 
 def _fmt_mln(v: float) -> str:
@@ -105,12 +129,13 @@ async def load_sales(
 
 async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLoadReport:
     df, _ = await asyncio.to_thread(read_sheet_with_header, data, [COL_ID, COL_DATE, COL_BRANCH], 15,
-                                    REQUIRED + [COL_BONUS])
+                                    REQUIRED + OPTIONAL)
     missing = [c for c in REQUIRED if c not in df.columns]
     if missing:
         raise LoaderError("Majburiy ustun(lar) yo'q: " + ", ".join(missing))
 
-    keep = REQUIRED + ([COL_BONUS] if COL_BONUS in df.columns else []) + ["_excel_row"]
+    split = COL_UNIT in df.columns and COL_CUR in df.columns
+    keep = REQUIRED + [c for c in OPTIONAL if c in df.columns] + ["_excel_row"]
     df = df[keep].copy()
     rows_total = len(df)
 
@@ -120,6 +145,10 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
     for src, dst in ((COL_QTY, "qty"), (COL_AMOUNT, "amount"), (COL_COST, "cost")):
         df[dst] = pd.to_numeric(df[src], errors="coerce")
     df["is_bonus"] = df[COL_BONUS].notna() if COL_BONUS in df.columns else False
+    if split:
+        df["unit"] = pd.to_numeric(df[COL_UNIT], errors="coerce")
+        cache = {v: norm_currency(v) for v in df[COL_CUR].dropna().unique()}
+        df["cur"] = df[COL_CUR].map(lambda v: cache.get(v) if v is not None and v == v else None)
     df["cat_key"] = df[COL_CAT].map(name_key)
     df["br_key"] = df[COL_BRANCH].map(name_key)
 
@@ -132,6 +161,11 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
         (df["cost"].isna() | (df["cost"] < 0), "«Жами(Кирим нархи)» noto'g'ri"),
         (df["br_key"].isna(), "«Филиал» bo'sh"),
     ]
+    if split:
+        checks += [
+            (df["unit"].isna() | (df["unit"] < 0), "«Кирим нархи» bo'sh yoki noto'g'ri"),
+            (df["cur"].isna(), "«Кирим нархи(Валюта тури)» noma'lum (Доллар yoki Сум bo'lishi kerak)"),
+        ]
     bad = pd.Series(False, index=df.index)
     for mask, msg in checks:
         new = mask & ~bad
@@ -143,6 +177,12 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
     if good.empty:
         raise LoaderError("Faylda birorta ham to'g'ri qator yo'q")
     good["pid"] = good["pid"].astype("int64")
+    if split:
+        good["cost_usd"] = (good["qty"] * good["unit"]).where(good["cur"] == "USD", 0.0)
+        good["cost_uzs"] = (good["qty"] * good["unit"]).where(good["cur"] == "UZS", 0.0)
+    else:
+        good["cost_usd"] = 0.0
+        good["cost_uzs"] = 0.0
     file_dates: list[date] = sorted(good["d"].unique())
 
     # --- qamrov: faqat bazadagi kategoriyalar ---
@@ -177,10 +217,12 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
 
     agg = (
         ok.groupby(["d", "branch_id", "pid", "is_bonus"], as_index=False)
-          .agg(qty=("qty", "sum"), amount=("amount", "sum"), cost=("cost", "sum"))
+          .agg(qty=("qty", "sum"), amount=("amount", "sum"), cost=("cost", "sum"),
+               cost_usd=("cost_usd", "sum"), cost_uzs=("cost_uzs", "sum"))
     )
     records = [
-        (r.d, int(r.branch_id), int(r.pid), bool(r.is_bonus), float(r.qty), float(r.amount), float(r.cost), upload_id)
+        (r.d, int(r.branch_id), int(r.pid), bool(r.is_bonus), float(r.qty), float(r.amount), float(r.cost),
+         float(r.cost_usd), float(r.cost_uzs), split, upload_id)
         for r in agg.itertuples(index=False)
     ]
 
@@ -192,13 +234,18 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
         await con.execute("DELETE FROM sales_daily WHERE sale_date = ANY($1::date[])", file_dates)
         await con.copy_records_to_table(
             "sales_daily", records=records,
-            columns=["sale_date", "branch_id", "product_id", "is_bonus", "qty", "amount", "cost", "upload_id"])
+            columns=["sale_date", "branch_id", "product_id", "is_bonus", "qty", "amount", "cost",
+                     "cost_usd", "cost_uzs", "cost_split", "upload_id"])
         by_cat = await con.fetch(
             """SELECT c.name category, sum(e.amount) amount, sum(e.qty) qty,
                       sum(e.qty) FILTER (WHERE e.is_bonus) bonus_qty,
                       sum(e.gross_margin) gross, sum(e.margin) margin
                FROM sales_enriched e JOIN categories c ON c.id = e.category_id
                WHERE e.upload_id = $1 GROUP BY c.name ORDER BY amount DESC""", upload_id)
+        fx = await con.fetch(
+            """SELECT valid_from, valid_to, rate FROM fx_periods
+               WHERE valid_to > $1::date AND valid_from <= $2::date ORDER BY valid_from""",
+            file_dates[0], file_dates[-1])
 
     return SalesLoadReport(
         upload_id=upload_id,
@@ -219,6 +266,8 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
         unknown_branches=sorted(unknown_branches, key=lambda x: -x["amount"]),
         category_mismatch=mismatch,
         errors=errors,
+        cost_mode="split" if split else "legacy",
+        fx=[{"from": max(r["valid_from"], file_dates[0]).isoformat(), "rate": float(r["rate"])} for r in fx],
     )
 
 
@@ -243,6 +292,12 @@ def format_report(r: SalesLoadReport, max_items: int = 15) -> str:
         out.append(f"<b>Jami: {_fmt_mln(tot_a)} mln · front marja {tot_g / tot_a * 100:.1f}% · "
                    f"gross marja {tot_m / tot_a * 100:.1f}%</b>")
         out.append("<i>gross marja = front marja + qo'shimcha daromad (brend %)</i>")
+    if r.cost_mode == "split":
+        rates = ", ".join(f"{x['rate']:,.0f}".replace(",", " ") + (f" ({x['from']} dan)" if len(r.fx) > 1 else "")
+                          for x in r.fx)
+        out.append(f"💱 Tannarx: Сони × Кирим нархи × kurs ({rates} so'm/$)")
+    else:
+        out.append("⚠️ Faylda «Кирим нархи» / «Кирим нархи(Валюта тури)» yo'q — tannarx Жами(Кирим нархи) dan olindi")
     if r.replaced.get("rows"):
         out.append(f"\n♻️ Shu sanalardagi eski ma'lumot almashtirildi: {r.replaced['rows']} qator, "
                    f"{_fmt_mln(r.replaced['amount'])} mln")

@@ -12,7 +12,10 @@ Metric = Literal["amount", "qty", "gross", "gross_pct", "income", "margin", "mar
 
 class Filters(BaseModel):
     """Barcha endpointlar uchun umumiy filtr. Bo'sh ro'yxat = filtr yo'q."""
-    category_id: int
+    # ko'rinish doirasi: "c:<id>" — bitta kategoriya, "g:<guruh>" — butun KBT/MBT, "o:<mas'ul>" — xodim
+    # kategoriyalari, "a:" — barchasi. Eski mijozlar uchun category_id ham qabul qilinadi.
+    scope: str | None = None
+    category_id: int | None = None
     date_from: date
     date_to: date
     compare: Compare = "prev"
@@ -22,11 +25,17 @@ class Filters(BaseModel):
     brands: list[str] = []
     statuses: list[str] = []
     product_ids: list[int] = []
+    category_ids: list[int] = []       # ko'p kategoriyali doirada kategoriya filtri
+    owners: list[str] = []             # mas'ul xodim filtri
     # xususiyatlar: {"1": ["176–190 sm"], "0": ["Но фрост"]} — kalit slot raqami, qiymat — filtr qiymatlari
     attrs: dict[int, list[str]] = {}
 
     @model_validator(mode="after")
     def _check(self):
+        if not self.scope and self.category_id is None:
+            raise ValueError("scope yoki category_id kerak")
+        if not self.scope:
+            self.scope = f"c:{self.category_id}"
         if self.date_to < self.date_from:
             raise ValueError("date_to < date_from")
         if (self.date_to - self.date_from).days > 800:

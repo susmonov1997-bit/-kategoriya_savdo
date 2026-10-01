@@ -65,9 +65,12 @@ const st = {
 };
 const labels = {};       // "dim|key" -> nom (chip va breadcrumb uchun)
 const remember = (d, k, l) => { labels[d + '|' + k] = l; };
-const cat = () => META.categories.find(c => c.id === st.cat);
+const allScopes = () => [...META.categories, ...(META.scopes || [])];
+const cat = () => allScopes().find(c => c.key === st.cat) || META.categories[0];
+const isMulti = () => cat().kind !== 'cat';
 const attrDims = () => cat().attributes.map(a => a.dim);
-const DIM_NAMES = {region: 'Hudud', cluster: 'Klaster', branch: 'Filial', brand: 'Brend', status: 'Status', sku: 'SKU'};
+const DIM_NAMES = {region: 'Hudud', cluster: 'Klaster', branch: 'Filial', brand: 'Brend', status: 'Status', sku: 'SKU',
+                   category: 'Kategoriya', owner: "Mas'ul"};
 function dimName(d) {
   if (d.startsWith('attr:')) { const a = cat().attributes.find(a => a.dim === d); return a ? a.name : d; }
   return DIM_NAMES[d] || d;
@@ -82,17 +85,19 @@ function nextDim(d) {
   for (let j = i + 1; j < path.length; j++) if (!(st.f[path[j]] && st.f[path[j]].size === 1)) return path[j];
   return null;
 }
-const NUM_DIMS = {region: 'region_ids', cluster: 'cluster_ids', branch: 'branch_ids', sku: 'product_ids'};
+const NUM_DIMS = {region: 'region_ids', cluster: 'cluster_ids', branch: 'branch_ids', sku: 'product_ids', category: 'category_ids'};
 
 function filters() {
-  const F = {category_id: st.cat, date_from: st.from, date_to: st.to, compare: st.compare,
-             region_ids: [], cluster_ids: [], branch_ids: [], product_ids: [], brands: [], statuses: [], attrs: {}};
+  const F = {scope: st.cat, date_from: st.from, date_to: st.to, compare: st.compare,
+             region_ids: [], cluster_ids: [], branch_ids: [], product_ids: [], brands: [], statuses: [], attrs: {},
+             category_ids: [], owners: []};
   for (const d in st.f) {
     const vals = [...st.f[d]];
     if (!vals.length) continue;
     if (NUM_DIMS[d]) F[NUM_DIMS[d]] = vals.map(Number);
     else if (d === 'brand') F.brands = vals;
     else if (d === 'status') F.statuses = vals;
+    else if (d === 'owner') F.owners = vals;
     else if (d.startsWith('attr:')) F.attrs[d.slice(5)] = vals;
   }
   return F;
@@ -125,7 +130,7 @@ function presetRange(k) {
 const periodText = () => (st.preset && PERIOD_NAME[st.preset]) ? PERIOD_NAME[st.preset]
   : (st.from === st.to ? dm(st.from) : `${dm(st.from)}–${dm(st.to)}`);
 const LOC_DIMS = ['region', 'cluster', 'branch'];
-const prodDims = () => [...attrDims(), 'brand', 'status'];
+const prodDims = () => [...attrDims(), ...(cat().extra_dims || []), 'brand', 'status'];
 function renderHeader() {
   const nf = Object.values(st.f).filter(s => s.size).length;
   $('catBtn').innerHTML = `${esc(cat().name)} <span class="car">▾</span>`;
@@ -161,12 +166,22 @@ function closeSheet() { $('sheetHost').innerHTML = ''; syncBack(); }
 const sheetOpen = () => !!$('sheetHost').firstChild;
 
 function openCatSheet() {
-  const host = openSheetBox('Kategoriya', `<div class="optlist">${META.categories.map(c =>
-    `<button class="optrow ${c.id === st.cat ? 'on' : ''}" data-id="${c.id}"><span>${esc(c.name)}</span><span class="a num">${c.skus} SKU</span></button>`).join('')}</div>`);
+  const row = (c, sub) => `<button class="optrow ${c.key === st.cat ? 'on' : ''}" data-k="${esc(c.key)}">
+      <span class="ol"><span>${esc(c.name)}</span>${sub ? `<span class="os">${esc(sub)}</span>` : ''}</span>
+      <span class="a num">${c.kind === 'cat' ? `${c.skus} SKU` : `${c.n_cats} kat.`}</span></button>`;
+  const sc = META.scopes || [];
+  const tops = sc.filter(c => c.kind === 'all' || c.kind === 'group'), owners = sc.filter(c => c.kind === 'owner');
+  const groups = {};
+  META.categories.forEach(c => (groups[c.group || '—'] = groups[c.group || '—'] || []).push(c));
+  const sec = (title, inner) => inner ? `<div class="optsec">${esc(title)}</div><div class="optlist">${inner}</div>` : '';
+  const host = openSheetBox('Kategoriya',
+    sec('Umumiy', tops.map(c => row(c)).join('')) +
+    sec("Mas'ul bo'yicha", owners.map(c => row(c, META.categories.filter(x => x.owner === c.name).map(x => x.name).join(', '))).join('')) +
+    Object.keys(groups).sort().map(g => sec(g === '—' ? 'Kategoriyalar' : g, groups[g].map(c => row(c, c.owner)).join(''))).join(''));
   host.querySelectorAll('.optrow').forEach(b => b.onclick = () => {
-    const id = +b.dataset.id; closeSheet();
-    if (id === st.cat) return;
-    st.cat = id; st.f = {}; st.aExpand = {}; st.aOpen = null; st.rows = 'region'; st.cols = ''; resetView(); load();
+    const k = b.dataset.k; closeSheet();
+    if (k === st.cat) return;
+    st.cat = k; st.f = {}; st.aExpand = {}; st.aOpen = null; st.rows = 'region'; st.cols = ''; resetView(); load();
   });
 }
 
@@ -335,7 +350,7 @@ let FOCUS = null;       // ulush kartasi ko'rsatadigan tugun
 const OPEN = new Set(); // qirqim daraxtining ochiq tugunlari (qayta yuklanganda saqlanadi)
 const SLOTS = 8, CHILD_LIMIT = 15;
 function dimOptions(sel, includeNone) {
-  const dims = [...LOC_PATH, ...attrDims(), 'brand', 'status', 'sku'];
+  const dims = [...LOC_PATH, ...(cat().extra_dims || []), ...attrDims(), 'brand', 'status', 'sku'];
   return (includeNone ? `<option value="">—</option>` : '') + dims.map(d => `<option value="${d}" ${d === sel ? 'selected' : ''}>${esc(dimName(d))}</option>`).join('');
 }
 // Umumiy daraxt yadrosi: qirqim (m), xususiyat qiymatlari (a:…) va TOP-10 SKU (s:…) uchun bir xil
@@ -359,6 +374,7 @@ function pathFilters(path) {
     if (NUM_DIMS[p.dim]) F[NUM_DIMS[p.dim]] = [Number(p.key)];
     else if (p.dim === 'brand') F.brands = [p.key];
     else if (p.dim === 'status') F.statuses = [p.key];
+    else if (p.dim === 'owner') F.owners = [p.key];
     else if (p.dim.startsWith('attr:')) F.attrs = {...F.attrs, [p.dim.slice(5)]: [p.key]};
   }
   return F;
@@ -652,6 +668,7 @@ function attrBlock(b) {
 function renderAttrBlocks() {
   if (!ATTR) return;
   if (!st.aOpen) st.aOpen = new Set();          // sukut: barcha bloklar yig'ilgan
+  $('attrH').textContent = isMulti() ? "Kategoriya va brend bo'yicha" : "Xususiyatlar bo'yicha";
   const host = $('ablocks');
   host.innerHTML = ATTR.blocks.map(attrBlock).join('');
   host.querySelectorAll('.ah').forEach(b => b.onclick = () => { const d = b.dataset.d; st.aOpen.has(d) ? st.aOpen.delete(d) : st.aOpen.add(d); renderAttrBlocks(); });
@@ -919,7 +936,7 @@ async function loadHistory() {
 }
 async function refreshMeta() {
   try { META = await api('meta'); $('dataInfo').textContent = `ma'lumot: ${dm(META.data_from)}–${dm(META.data_to)}`; } catch (e) {}
-  if (!st.cat && META.categories.length) st.cat = META.categories[0].id;
+  if ((!st.cat || !allScopes().some(c => c.key === st.cat)) && META.categories.length) st.cat = META.categories[0].key;
   resetView();
   if (META.data_to) { if (st.preset) [st.from, st.to] = presetRange(st.preset); load(); }
 }
@@ -942,7 +959,8 @@ async function init() {
     return;
   }
   $('dataInfo').textContent = `ma'lumot: ${dm(META.data_from)}–${dm(META.data_to)}`;
-  st.cat = META.categories[0].id;
+  if (META.fx_rate) $('fxInfo').textContent = ` Dollar kursi: ${nf0.format(META.fx_rate)} so'm (tannarx = soni × kirim narxi × kurs).`;
+  st.cat = META.categories[0].key;
   [st.from, st.to] = presetRange(st.preset);
   load();
 }

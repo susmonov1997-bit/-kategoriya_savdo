@@ -62,6 +62,7 @@ async def start(m: Message, pool: asyncpg.Pool) -> None:
         if acc.can_upload:
             text += WELCOME_UPLOAD
         text += "\n\n/status — bazadagi ma'lumotlar holati\n/attrs — kategoriyalar va xususiyatlar"
+        text += "\n/kurs — dollar kursi (front marja uchun)"
         if acc.is_admin:
             text += "\n/users — foydalanuvchilar va kirish so'rovlari"
         await m.answer(text, reply_markup=_app_kb())
@@ -243,6 +244,47 @@ async def attrs(m: Message, pool: asyncpg.Pool) -> None:
             off = "" if r["is_filter"] else " 🙈 yashirin"
             out.append(f"  {r['slot']}. {html.escape(r['name'])}{unit} <i>({html.escape(r['source_col'])}, {r['data_type']})</i>{off}")
     await send_long(m, "\n".join(out).strip() or "Hozircha bo'sh.")
+
+
+@router.message(Command("kurs"))
+async def kurs_cmd(m: Message, pool: asyncpg.Pool) -> None:
+    """/kurs — joriy va oldingi kurslar; /kurs 12000 — bugundan; /kurs 12000 2026-10-05 (yoki 05.10.2026) — sanadan."""
+    if not (await get_access(pool, m.from_user.id)).can_view:
+        return
+    parts = (m.text or "").split()[1:]
+    if parts:
+        if m.from_user.id not in config.ADMIN_IDS:
+            await m.answer("⛔ Kursni faqat admin o'zgartiradi.")
+            return
+        try:
+            rate = float(parts[0].replace(" ", "").replace(",", "."))
+            if not 100 <= rate <= 1_000_000:
+                raise ValueError
+        except ValueError:
+            await m.answer("Masalan: <code>/kurs 12000</code> yoki <code>/kurs 12000 05.10.2026</code>")
+            return
+        if len(parts) > 1:
+            from loaders_sales import _to_date
+            d = _to_date(parts[1])
+            if d is None:
+                await m.answer("Sana noto'g'ri. Masalan: <code>/kurs 12000 05.10.2026</code>")
+                return
+        else:
+            d = await pool.fetchval("SELECT (now() AT TIME ZONE 'Asia/Tashkent')::date")
+        await pool.execute(
+            """INSERT INTO fx_rates(valid_from, rate, set_by) VALUES ($1, $2, $3)
+               ON CONFLICT (valid_from) DO UPDATE SET rate = EXCLUDED.rate, set_by = EXCLUDED.set_by, set_at = now()""",
+            d, rate, m.from_user.id)
+        await m.answer(f"✅ Kurs: <b>{rate:,.0f}</b> so'm/$ — {d.strftime('%d.%m.%Y')} dan boshlab.\n"
+                       "Shu sanadan keyingi savdoning front va gross marjasi yangi kurs bilan hisoblanadi.".replace(",", " "))
+    rows = await pool.fetch("SELECT valid_from, valid_to, rate FROM fx_periods ORDER BY valid_from DESC LIMIT 10")
+    lines = ["<b>💱 Dollar kursi</b> (Кирим нархи dollarda bo'lsa, tannarx = Сони × Кирим нархи × kurs)"]
+    for r in rows:
+        frm = "boshidan" if r["valid_from"].year < 2001 else r["valid_from"].strftime("%d.%m.%Y") + " dan"
+        lines.append(f"  • {float(r['rate']):,.0f}".replace(",", " ") + f" — {frm}")
+    if m.from_user.id in config.ADMIN_IDS:
+        lines.append("\nO'zgartirish: <code>/kurs 12000</code> (bugundan) yoki <code>/kurs 12000 05.10.2026</code>")
+    await m.answer("\n".join(lines))
 
 
 @router.message(Command("status"))
