@@ -356,3 +356,11 @@ h1.ttl{cursor:default}
 .tchip .car{color:var(--muted);font-size:10px}
 .tchip.acc{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .chiprow .fchip{padding:6px 11px;font-size:13px}
+
+/* kategoriya oynasi: yig'iladigan bo'limlar */
+.csec{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card)}
+.csec-h{display:flex;align-items:center;gap:8px;width:100%;padding:12px 14px;border:0;background:var(--card-2);text-align:left;color:var(--ink);cursor:pointer}
+.csec-h .c{color:var(--muted);font-size:12px;width:12px}
+.csec-h .t{font-weight:700;font-size:15px;flex:1}
+.csec-h .n{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:55%}
+.csec .optlist{margin:0;border-top:1px solid var(--line)}

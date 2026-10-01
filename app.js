@@ -189,16 +189,32 @@ function openCatSheet() {
   const tops = sc.filter(c => c.kind === 'all' || c.kind === 'group'), owners = sc.filter(c => c.kind === 'owner');
   const groups = {};
   META.categories.forEach(c => (groups[c.group || '—'] = groups[c.group || '—'] || []).push(c));
-  const sec = (title, inner) => inner ? `<div class="optsec">${esc(title)}</div><div class="optlist">${inner}</div>` : '';
-  const host = openSheetBox('Kategoriya',
-    sec('Umumiy', tops.map(c => row(c)).join('')) +
-    sec("Mas'ul bo'yicha", owners.map(c => row(c, META.categories.filter(x => x.owner === c.name).map(x => x.name).join(', '))).join('')) +
-    Object.keys(groups).sort().map(g => sec(g === '—' ? 'Kategoriyalar' : g, groups[g].map(c => row(c, c.owner)).join(''))).join(''));
-  host.querySelectorAll('.optrow').forEach(b => b.onclick = () => {
-    const k = b.dataset.k; closeSheet();
-    if (k === st.cat) return;
-    st.cat = k; st.f = {}; st.aExpand = {}; st.aOpen = null; st.rows = 'region'; st.cols = ''; resetView(); load();
-  });
+  const secs = [
+    {id: 'top', title: 'Umumiy', items: tops, sub: () => ''},
+    {id: 'own', title: "Mas'ul bo'yicha", items: owners,
+     sub: c => META.categories.filter(x => x.owner === c.name).map(x => x.name).join(', ')},
+    ...Object.keys(groups).sort().map(g => ({id: 'g:' + g, title: g === '—' ? 'Kategoriyalar' : g, items: groups[g], sub: c => c.owner})),
+  ].filter(x => x.items.length);
+  const open = new Set();                       // sukut: hamma bo'lim yig'ilgan
+  const body = () => secs.map(x => {
+    const cur = x.items.find(c => c.key === st.cat), on = open.has(x.id);
+    return `<div class="csec ${on ? 'open' : ''}">
+      <button class="csec-h" data-s="${esc(x.id)}" aria-expanded="${on}"><span class="c">${on ? '▾' : '▸'}</span>
+        <span class="t">${esc(x.title)}</span><span class="n">${cur ? `✓ ${esc(cur.name)} · ` : ''}${x.items.length} ta</span></button>
+      ${on ? `<div class="optlist">${x.items.map(c => row(c, x.sub(c))).join('')}</div>` : ''}</div>`;
+  }).join('');
+  const host = openSheetBox('Kategoriya', body());
+  const sb = host.querySelector('.sbody');
+  const wire = () => {
+    sb.querySelectorAll('.csec-h').forEach(b => b.onclick = () => {
+      const id = b.dataset.s; open.has(id) ? open.delete(id) : open.add(id); sb.innerHTML = body(); wire(); });
+    sb.querySelectorAll('.optrow').forEach(b => b.onclick = () => {
+      const k = b.dataset.k; closeSheet();
+      if (k === st.cat) return;
+      st.cat = k; st.f = {}; st.aExpand = {}; st.aOpen = null; st.rows = 'region'; st.cols = ''; resetView(); load();
+    });
+  };
+  wire();
 }
 
 function openPeriodSheet() {
@@ -230,8 +246,7 @@ async function openFilterSheet() {
   try { opts = await api('options', filters()); }
   catch (e) { closeSheet(); showError(e); return; }
   const draft = {}; for (const d in st.f) draft[d] = new Set(st.f[d]);
-  const open = new Set(Object.keys(draft).filter(d => draft[d].size));
-  if (!open.size) open.add('region');
+  const open = new Set();                     // sukut: barcha bo'limlar yig'ilgan
   for (const d in opts) opts[d].forEach(o => remember(d, o.key, o.label));
   for (const d in draft) for (const k of draft[d]) if (opts[d] && !opts[d].some(o => o.key === k)) opts[d].push({key: k, label: labels[d + '|' + k] || k, amount: 0});
   let q = '';
