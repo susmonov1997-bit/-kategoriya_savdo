@@ -56,7 +56,7 @@ async function api(path, body) {
 // ---------------------------------------------------------------- holat
 let META = null;
 const st = {
-  cat: null, from: null, to: null, preset: '7', compare: 'prev',
+  cat: null, from: null, to: null, preset: '30', compare: 'prev',
   f: {},                 // dim -> Set(key)   (kalitlar API'dagidek matn)
   mode: 'tree',          // tree (daraxt) | pivot (kesma)
   rows: 'region', cols: 'attr:0', sort: 'amount',
@@ -67,6 +67,8 @@ const labels = {};       // "dim|key" -> nom (chip va breadcrumb uchun)
 const remember = (d, k, l) => { labels[d + '|' + k] = l; };
 const allScopes = () => [...META.categories, ...(META.scopes || [])];
 const cat = () => allScopes().find(c => c.key === st.cat) || META.categories[0];
+// ilova ochilganda: Barcha kategoriyalar (bo'lmasa — eng ko'p sotilgan kategoriya)
+const defaultScope = () => ((META.scopes || []).find(s => s.kind === 'all') || META.categories[0]).key;
 const isMulti = () => cat().kind !== 'cat';
 const attrDims = () => cat().attributes.map(a => a.dim);
 const DIM_NAMES = {region: 'Hudud', cluster: 'Klaster', branch: 'Filial', brand: 'Brend', status: 'Status', sku: 'SKU',
@@ -953,7 +955,7 @@ async function loadHistory() {
 }
 async function refreshMeta() {
   try { META = await api('meta'); updMeta(); } catch (e) {}
-  if ((!st.cat || !allScopes().some(c => c.key === st.cat)) && META.categories.length) st.cat = META.categories[0].key;
+  if ((!st.cat || !allScopes().some(c => c.key === st.cat)) && META.categories.length) st.cat = defaultScope();
   resetView();
   if (META.data_to) { if (st.preset) [st.from, st.to] = presetRange(st.preset); load(); }
 }
@@ -977,7 +979,7 @@ async function init() {
   }
   updMeta();
   if (META.fx_rate) $('fxInfo').textContent = ` Dollar kursi: ${nf0.format(META.fx_rate)} so'm (tannarx = soni × kirim narxi × kurs).`;
-  st.cat = META.categories[0].key;
+  st.cat = defaultScope();
   [st.from, st.to] = presetRange(st.preset);
   load();
 }
