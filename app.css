@@ -338,3 +338,21 @@ button.sku{width:100%;border-left:0;border-right:0;border-bottom:0;background:va
 .optsec{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;padding:12px 4px 6px}
 .optrow .ol{display:flex;flex-direction:column;gap:2px;min-width:0}
 .optrow .os{font-size:12px;color:var(--muted);font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:240px}
+
+/* C variant: sarlavha = kategoriya, ostida chiplar qatori */
+.brandrow{align-items:flex-start}
+.ttlbox{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.ttl{display:flex;align-items:baseline;gap:6px;border:0;background:none;padding:0;margin:0;text-align:left;color:var(--ink);
+  font:800 22px/1.2 var(--display);letter-spacing:-.015em;cursor:pointer;min-width:0;max-width:100%}
+h1.ttl{cursor:default}
+.ttl .tn{overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
+.ttl .car{color:var(--muted);font-size:13px;flex:0 0 auto}
+.tmeta{display:flex;flex-wrap:wrap;gap:0 6px;font-size:12.5px;color:var(--muted)}
+.brandrow .icon{flex:0 0 auto}
+.chiprow{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.chiprow .fchips{display:contents}
+.tchip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--card);color:var(--ink);
+  border-radius:999px;padding:6px 12px;font-size:13px;font-weight:600;white-space:nowrap;line-height:1.2}
+.tchip .car{color:var(--muted);font-size:10px}
+.tchip.acc{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.chiprow .fchip{padding:6px 11px;font-size:13px}

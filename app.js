@@ -117,6 +117,8 @@ const PERIODS = [
   ['1', 'Kecha'], ['7', 'Oxirgi 7 kun'], ['14', 'Oxirgi 14 kun'], ['30', 'Oxirgi 30 kun'],
   ['week', 'Shu hafta'], ['lweek', "O'tgan hafta"], ['month', 'Shu oy'], ['lmonth', "O'tgan oy"]];
 const PERIOD_NAME = Object.fromEntries(PERIODS);
+const PERIOD_SHORT = {'1': 'Kecha', '7': '7 kun', '14': '14 kun', '30': '30 kun', week: 'Shu hafta',
+                      lweek: "O'tgan hafta", month: 'Shu oy', lmonth: "O'tgan oy"};
 const CMP_NAME = {prev: "O'tgan davr", yoy: "O'tgan yil", none: "Yo'q"};
 function presetRange(k) {
   const to = META.data_to, dow = (D(to).getUTCDay() + 6) % 7;          // Du = 0
@@ -133,21 +135,33 @@ const LOC_DIMS = ['region', 'cluster', 'branch'];
 const prodDims = () => [...attrDims(), ...(cat().extra_dims || []), 'brand', 'status'];
 function renderHeader() {
   const nf = Object.values(st.f).filter(s => s.size).length;
-  $('catBtn').innerHTML = `${esc(cat().name)} <span class="car">▾</span>`;
-  $('perBtn').innerHTML = `📅 ${periodText()} <span class="car">▾</span>`;
+  const c = cat();
+  $('catBtn').innerHTML = `<span class="tn">${esc(c.name)}</span><span class="car">▾</span>`;
+  updMeta();
+  const per = (st.preset && PERIOD_SHORT[st.preset]) || periodText();
+  $('perBtn').innerHTML = `📅 ${esc(per)}${st.compare === 'yoy' ? ' · o\'tgan yil' : ''} <span class="car">▾</span>`;
   $('filBtn').innerHTML = `⚙ Filtr${nf ? ` <span class="badge">${nf}</span>` : ''}`;
   $('filBtn').classList.toggle('acc', nf > 0);
   const chips = [];
   for (const d of [...LOC_DIMS, ...prodDims()]) {
     const s = st.f[d]; if (!s || !s.size) continue;
     const val = s.size === 1 ? (labels[d + '|' + [...s][0]] || [...s][0]) : `${s.size} ta`;
-    chips.push(`<button class="fchip" data-d="${d}" title="Olib tashlash"><b>${esc(dimName(d))}:</b> ${esc(val)} ✕</button>`);
+    chips.push(s.size === 1
+      ? `<button class="fchip" data-d="${d}" title="${esc(dimName(d))} — olib tashlash">${esc(val)} ✕</button>`
+      : `<button class="fchip" data-d="${d}" title="Olib tashlash"><b>${esc(dimName(d))}:</b> ${esc(val)} ✕</button>`);
   }
   if (chips.length > 1) chips.push(`<button class="fchip clr" id="clrAll">Tozalash</button>`);
   $('fchips').innerHTML = chips.join('');
   $('fchips').hidden = !chips.length;
   $('fchips').querySelectorAll('.fchip[data-d]').forEach(b => b.onclick = () => { delete st.f[b.dataset.d]; resetView(); load(); });
   const ca = $('clrAll'); if (ca) ca.onclick = () => { st.f = {}; resetView(); load(); };
+}
+function updMeta() {
+  if (!META) return;
+  const c = VIEW === 'analytics' && st.cat ? cat() : null;
+  const parts = c ? (c.kind === 'cat' ? [c.group, c.owner] : [`${c.n_cats} ta kategoriya`]) : [];
+  if (META.data_to) parts.push(`ma'lumot ${dm(META.data_to)} gacha`);
+  $('tmeta').textContent = parts.filter(Boolean).join(' · ');
 }
 function resetView() { st.showAll = false; TREE = null; for (const k of [...ROOTS.keys()]) if (k !== 'm') ROOTS.delete(k); }
 
@@ -833,6 +847,9 @@ function setView(v) {
   $('upBtn').textContent = v === 'upload' ? '📊' : '📥';
   $('upBtn').title = v === 'upload' ? 'Tahlilga qaytish' : 'Fayl yuklash';
   $('topAnalytics').hidden = v !== 'analytics';
+  $('catBtn').hidden = v !== 'analytics';
+  $('upTitle').hidden = v === 'analytics';
+  updMeta();
   $('viewAnalytics').hidden = v !== 'analytics';
   $('viewUpload').hidden = v !== 'upload';
   if (v === 'upload') loadHistory();
@@ -935,7 +952,7 @@ async function loadHistory() {
   host.querySelectorAll('.hrow').forEach(b => b.onclick = () => { const r = b.querySelector('.report'); if (r) r.hidden = !r.hidden; });
 }
 async function refreshMeta() {
-  try { META = await api('meta'); $('dataInfo').textContent = `ma'lumot: ${dm(META.data_from)}–${dm(META.data_to)}`; } catch (e) {}
+  try { META = await api('meta'); updMeta(); } catch (e) {}
   if ((!st.cat || !allScopes().some(c => c.key === st.cat)) && META.categories.length) st.cat = META.categories[0].key;
   resetView();
   if (META.data_to) { if (st.preset) [st.from, st.to] = presetRange(st.preset); load(); }
@@ -958,7 +975,7 @@ async function init() {
     if (META.can_upload) setView('upload');
     return;
   }
-  $('dataInfo').textContent = `ma'lumot: ${dm(META.data_from)}–${dm(META.data_to)}`;
+  updMeta();
   if (META.fx_rate) $('fxInfo').textContent = ` Dollar kursi: ${nf0.format(META.fx_rate)} so'm (tannarx = soni × kirim narxi × kurs).`;
   st.cat = META.categories[0].key;
   [st.from, st.to] = presetRange(st.preset);

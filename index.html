@@ -8,29 +8,29 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Manrope:wght@600;700;800&display=swap">
-<link rel="stylesheet" href="app.css?v=20261001a">
+<link rel="stylesheet" href="app.css?v=20261001c">
 </head>
 <body>
 <div id="gate" hidden></div>
 <div class="app" id="app">
   <div class="top">
     <div class="brandrow">
-      <h1>Savdo</h1>
-      <div class="hdr-r"><span class="proto num" id="dataInfo"></span>
-        <button class="icon" id="upBtn" title="Fayl yuklash" aria-label="Fayl yuklash" hidden>📥</button></div>
-    </div>
-    <div class="an" id="topAnalytics">
-      <div class="bar3">
-        <button class="pbtn" id="catBtn" aria-label="Kategoriya">…</button>
-        <button class="pbtn" id="perBtn" aria-label="Davr">📅</button>
-        <button class="pbtn" id="filBtn" aria-label="Filtr">⚙ Filtr</button>
+      <div class="ttlbox">
+        <button class="ttl" id="catBtn" aria-label="Kategoriyani tanlash"><span class="tn">Savdo</span><span class="car">▾</span></button>
+        <h1 class="ttl" id="upTitle" hidden>Fayl yuklash</h1>
+        <div class="tmeta" id="tmeta"></div>
       </div>
-      <div class="fchips" id="fchips" hidden></div>
+      <button class="icon" id="upBtn" title="Fayl yuklash" aria-label="Fayl yuklash" hidden>📥</button>
+    </div>
+    <div class="chiprow" id="topAnalytics">
+      <button class="tchip" id="perBtn" aria-label="Davr">📅</button>
+      <button class="tchip" id="filBtn" aria-label="Filtr">⚙ Filtr</button>
+      <span class="fchips" id="fchips" hidden></span>
     </div>
   </div>
 
   <section id="viewUpload" aria-labelledby="upH" hidden>
-    <div class="sh"><h2 id="upH">Fayl yuklash</h2><span class="hint" id="upLimit">.xlsx</span></div>
+    <div class="sh"><h2 id="upH">Yangi fayl</h2><span class="hint" id="upLimit">.xlsx</span></div>
     <label class="drop" id="drop" for="fileIn">
       <input type="file" id="fileIn" accept=".xlsx,.xlsm">
       <span class="dz-i" aria-hidden="true">⬆</span>
@@ -105,6 +105,6 @@
 
 </div>
 <div id="sheetHost"></div>
-<script src="app.js?v=20261001a"></script>
+<script src="app.js?v=20261001c"></script>
 </body>
 </html>
