@@ -24,11 +24,36 @@ def _minus_year(d: date) -> date:
         return d.replace(year=d.year - 1, day=28)
 
 
+def _month_end(d: date) -> date:
+    nxt = date(d.year + (d.month == 12), d.month % 12 + 1, 1)
+    return nxt - timedelta(days=1)
+
+
+def _minus_months(d: date, k: int, to_end: bool = False) -> date:
+    """k oy orqaga, kun oy oxiriga qisqartiriladi; to_end=True — natija oyning oxirgi kuni."""
+    y, m = divmod(d.year * 12 + d.month - 1 - k, 12)
+    first = date(y, m + 1, 1)
+    last = _month_end(first)
+    return last if to_end else min(d.replace(year=y, month=m + 1, day=1) + timedelta(days=d.day - 1), last)
+
+
+def mom_period(d1: date, d2: date) -> tuple[date, date]:
+    """O'tgan oyning shu kunlari: 01–05.10 → 01–05.09; 01–30.09 (to'liq oy) → 01–31.08.
+    Davr bir oydan uzun bo'lsa, ustma-ust tushmasligi uchun kerakli oy soniga suriladi."""
+    end = d2 == _month_end(d2)
+    k = 1
+    while _minus_months(d2, k, end) >= d1:
+        k += 1
+    return _minus_months(d1, k), _minus_months(d2, k, end)
+
+
 def compare_period(f: Filters) -> tuple[date, date] | None:
     if f.compare == "none":
         return None
     if f.compare == "yoy":
         return _minus_year(f.date_from), _minus_year(f.date_to)
+    if f.compare == "mom":
+        return mom_period(f.date_from, f.date_to)
     days = (f.date_to - f.date_from).days + 1
     return f.date_from - timedelta(days=days), f.date_from - timedelta(days=1)
 

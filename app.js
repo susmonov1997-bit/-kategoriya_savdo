@@ -56,7 +56,7 @@ async function api(path, body) {
 // ---------------------------------------------------------------- holat
 let META = null;
 const st = {
-  cat: null, from: null, to: null, preset: '30', compare: 'prev',
+  cat: null, from: null, to: null, preset: '30', compare: 'mom',
   f: {},                 // dim -> Set(key)   (kalitlar API'dagidek matn)
   mode: 'tree',          // tree (daraxt) | pivot (kesma)
   rows: 'region', cols: 'attr:0', sort: 'amount',
@@ -104,12 +104,23 @@ function filters() {
   }
   return F;
 }
+// k oy orqaga (kun oy oxiriga qisqartiriladi); toEnd — oyning oxirgi kuni
+function minusMonths(s, k, toEnd) {
+  const [y, m, d] = s.split('-').map(Number);
+  const t = y * 12 + (m - 1) - k, ny = Math.floor(t / 12), nm = t % 12 + 1;
+  const last = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
+  return `${ny}-${String(nm).padStart(2, '0')}-${String(toEnd ? last : Math.min(d, last)).padStart(2, '0')}`;
+}
+const isMonthEnd = s => addDays(s, 1).slice(8) === '01';
 function cmpRange() {
   if (st.compare === 'none') return null;
   const len = diffDays(st.from, st.to) + 1;
-  if (st.compare === 'yoy') {
-    const y = s => (+s.slice(0, 4) - 1) + s.slice(4);
-    return [y(st.from), y(st.to)];
+  if (st.compare === 'yoy') return [minusMonths(st.from, 12), minusMonths(st.to, 12)];
+  if (st.compare === 'mom') {          // o'tgan oyning shu kunlari (API'dagi mom_period bilan bir xil)
+    const end = isMonthEnd(st.to);
+    let k = 1;
+    while (minusMonths(st.to, k, end) >= st.from) k++;
+    return [minusMonths(st.from, k), minusMonths(st.to, k, end)];
   }
   return [addDays(st.from, -len), addDays(st.from, -1)];
 }
@@ -121,7 +132,8 @@ const PERIODS = [
 const PERIOD_NAME = Object.fromEntries(PERIODS);
 const PERIOD_SHORT = {'1': 'Kecha', '7': '7 kun', '14': '14 kun', '30': '30 kun', week: 'Shu hafta',
                       lweek: "O'tgan hafta", month: 'Shu oy', lmonth: "O'tgan oy"};
-const CMP_NAME = {prev: "O'tgan davr", yoy: "O'tgan yil", none: "Yo'q"};
+const CMP_NAME = {mom: "O'tgan oy", prev: "Oldingi kunlar", yoy: "O'tgan yil", none: "Yo'q"};
+const CMP_SHORT = {mom: "o'tgan oy", prev: 'oldingi kunlar', yoy: "o'tgan yil", none: ''};
 function presetRange(k) {
   const to = META.data_to, dow = (D(to).getUTCDay() + 6) % 7;          // Du = 0
   const clamp = s => (META.data_from && s < META.data_from ? META.data_from : s);
@@ -225,7 +237,7 @@ function openPeriodSheet() {
     <div class="dates2"><input type="date" id="pF" value="${dFrom}" min="${META.data_from}" max="${META.data_to}" aria-label="Boshlanish">
       <span>—</span><input type="date" id="pT" value="${dTo}" min="${META.data_from}" max="${META.data_to}" aria-label="Tugash"></div>
     <div class="lbl">Solishtirish</div>
-    <div class="pgrid three">${Object.entries(CMP_NAME).map(([k, t]) => `<button class="opt2 cmp ${dCmp === k ? 'on' : ''}" data-c="${k}">${t}</button>`).join('')}</div>`;
+    <div class="pgrid">${Object.entries(CMP_NAME).map(([k, t]) => `<button class="opt2 cmp ${dCmp === k ? 'on' : ''}" data-c="${k}">${t}</button>`).join('')}</div>`;
   const host = openSheetBox('Davr', body(), `<button class="btn primary" id="pApply">Qo'llash</button>`);
   const wire = () => {
     const sb = host.querySelector('.sbody');
@@ -295,7 +307,7 @@ async function openFilterSheet() {
 function renderKpis(s) {
   const C = s.current, Pv = s.previous, d = s.delta || {};
   $('cmpHint').textContent = s.compare_period
-    ? `${dm(st.from)}–${dm(st.to)} vs ${dm(s.compare_period.from)}–${dm(s.compare_period.to)}${st.compare === 'yoy' ? ' (o\'tgan yil)' : ''}`
+    ? `${dm(st.from)}–${dm(st.to)} vs ${dm(s.compare_period.from)}–${dm(s.compare_period.to)}`
     : `${dm(st.from)}–${dm(st.to)}`;
   const neg = v => v < 0 ? ' neg' : '';
   const incPct = C.amount ? C.income / C.amount * 100 : null;
@@ -326,7 +338,7 @@ function renderChart() {
   const pk = 'prev_' + (m === 'amount' ? 'amount' : m === 'margin' ? 'margin' : 'qty');
   const prev = c ? series.map(p => p[pk] || 0) : null;
   $('legend').innerHTML = `<span><i style="background:var(--accent)"></i>Joriy ${dm(st.from)}–${dm(st.to)}</span>` +
-    (c ? `<span><i style="background:var(--prev)"></i>${st.compare === 'yoy' ? 'O\'tgan yil' : 'O\'tgan davr'} ${dm(c[0])}–${dm(c[1])}</span>` : '');
+    (c ? `<span><i style="background:var(--prev)"></i>${CMP_SHORT[st.compare].replace(/^./, x => x.toUpperCase())} ${dm(c[0])}–${dm(c[1])}</span>` : '');
   const host = $('chart');
   if (n < 2) { host.innerHTML = `<div class="empty">Bir kunlik davr uchun dinamika chizilmaydi — 7 kun yoki ko'proq tanlang.</div>`; return; }
   const W = Math.max(280, host.clientWidth || 340), H = 190, L = 58, R = 18, T = 12, Bm = 24;

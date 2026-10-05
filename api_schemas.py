@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-Compare = Literal["prev", "yoy", "none"]
+Compare = Literal["mom", "prev", "yoy", "none"]
 Metric = Literal["amount", "qty", "gross", "gross_pct", "income", "margin", "margin_pct", "avg_price", "share", "name"]
 
 
@@ -18,7 +18,7 @@ class Filters(BaseModel):
     category_id: int | None = None
     date_from: date
     date_to: date
-    compare: Compare = "prev"
+    compare: Compare = "mom"
     region_ids: list[int] = []
     cluster_ids: list[int] = []
     branch_ids: list[int] = []
