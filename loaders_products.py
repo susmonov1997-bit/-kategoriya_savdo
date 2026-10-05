@@ -250,6 +250,9 @@ async def _write(con: asyncpg.Connection, parsed: ProductsParseResult, upload_id
             for col, v in p.raw_attrs.items():
                 vc.setdefault(col, []).append(v)
 
+        header_names = {_norm(split_name_unit(c)[0]) for c in parsed.attr_cols if attr_slot(c) is None}
+        header_cols = {_norm(c) for c in parsed.attr_cols}
+        legacy_slots = {s for c in parsed.attr_cols if (s := attr_slot(c)) is not None}
         slot_of: dict[tuple[int, str], int] = {}               # (cid, ustun) → slot
         dtype_of: dict[tuple[int, int], str] = {}
         new_attrs, hidden, restored, changed = [], [], [], []
@@ -302,7 +305,11 @@ async def _write(con: asyncpg.Connection, parsed: ProductsParseResult, upload_id
                 slot_of[(cid, col)] = d["slot"]
                 dtype_of[(cid, d["slot"])] = d["data_type"]
             for x in cdefs:                                    # faylda endi yo'q xususiyatlar
-                if x["slot"] not in used and x["is_filter"]:
+                # faqat ustunning o'zi faylda bo'lmasa yashiriladi; ustun bor-u bo'sh bo'lsa (masalan,
+                # faqat yangi SKU'lar yuklanganda) — xususiyat joyida qoladi
+                in_file = (_norm(x["name"]) in header_names or _norm(x["source_col"]) in header_cols
+                           or x["slot"] in legacy_slots)
+                if x["slot"] not in used and x["is_filter"] and not in_file:
                     await con.execute("UPDATE category_attributes SET is_filter=FALSE WHERE category_id=$1 AND slot=$2",
                                       cid, x["slot"])
                     hidden.append(f"{cat_name[cid]} → {x['name']}")

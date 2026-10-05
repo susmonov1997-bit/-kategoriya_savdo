@@ -364,3 +364,8 @@ h1.ttl{cursor:default}
 .csec-h .t{font-weight:700;font-size:15px;flex:1}
 .csec-h .n{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:55%}
 .csec .optlist{margin:0;border-top:1px solid var(--line)}
+
+/* spravochnikda yo'qlar Excel tugmasi */
+.btn.xl{width:100%;margin-top:8px;border:1px dashed var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:600}
+.xlbtn{grid-column:1/-1;justify-self:start;margin-top:4px;font-size:12px;font-weight:600;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:3px 10px;cursor:pointer}
+.xlbtn[disabled]{opacity:.6}

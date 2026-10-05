@@ -908,10 +908,11 @@ function renderUp(state, extra) {
   let body = '';
   if (state === 'upload') body = `<div class="pbar"><span style="width:${extra.pct}%"></span></div><div class="hint num">Serverga yuborilmoqda… ${extra.pct}%</div>`;
   else if (state === 'checking') body = `<div class="pbar indet"><span></span></div><div class="hint">Fayl tekshirilmoqda — katta fayllarda 20–60 soniya…</div>`;
-  else if (state === 'checked') body = reportHtml(j.report) +
+  const xl = j.missing ? `<button class="btn xl" id="upMissing">📎 Spravochnikda yo'qlar — Excel'ni botga yuborish</button>` : '';
+  if (state === 'checked') body = reportHtml(j.report) + xl +
     `<div class="upbtns"><button class="btn" id="upCancel">Bekor qilish</button><button class="btn primary" id="upConfirm">Tasdiqlash va yuklash</button></div>`;
   else if (state === 'loading') body = `<div class="pbar indet"><span></span></div><div class="hint">Bazaga yozilmoqda…</div>`;
-  else if (state === 'done') body = reportHtml(j.report) + `<div class="hint num">${j.elapsed ?? ''} s · hisobot botga ham yuborildi</div>
+  else if (state === 'done') body = reportHtml(j.report) + `<div class="hint num">${j.elapsed ?? ''} s · hisobot botga ham yuborildi${j.missing ? " · spravochnikda yo'qlar Excel'i ham botda" : ''}</div>${xl}
     <div class="upbtns"><button class="btn" id="upAgain">Yana fayl yuklash</button><button class="btn primary" id="upGo">Tahlilga o'tish</button></div>`;
   else if (state === 'failed') body = `<div class="errbox">${esc(j.error || extra?.error || 'Xato')}</div>
     <div class="upbtns"><button class="btn primary" id="upAgain">Boshqa fayl tanlash</button></div>`;
@@ -920,6 +921,7 @@ function renderUp(state, extra) {
   const x = $('upCancel'); if (x) x.onclick = cancelUpload;
   const a = $('upAgain'); if (a) a.onclick = () => { UP = null; renderUp(null); $('drop').hidden = false; };
   const g = $('upGo'); if (g) g.onclick = () => setView('analytics');
+  const xb = $('upMissing'); if (xb) xb.onclick = () => sendMissing(xb, `upload/${j.id}/missing`);
   $('drop').hidden = !['failed', 'done'].includes(state) && !!state;
   if (state === 'done' || state === 'failed') $('drop').hidden = true;
 }
@@ -966,6 +968,11 @@ async function cancelUpload() {
   try { await fetch('/api/upload/' + UP.id, {method: 'DELETE', headers: tg && tg.initData ? {'Authorization': 'tma ' + tg.initData} : {}}); } catch (e) {}
   UP = null; renderUp(null); $('drop').hidden = false;
 }
+async function sendMissing(btn, path) {
+  const t = btn.textContent; btn.disabled = true; btn.textContent = 'Yuborilmoqda…';
+  try { await api(path, {}); btn.textContent = '✅ Botga yuborildi — chatni oching'; try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred('success'); } catch (e) {} }
+  catch (e) { btn.textContent = '❌ ' + e.message; btn.disabled = false; setTimeout(() => { btn.textContent = t; }, 4000); }
+}
 async function loadHistory() {
   const host = $('upHist');
   let data;
@@ -976,9 +983,11 @@ async function loadHistory() {
       <span class="hk">${esc(u.kind_name)}${u.period ? ` · <span class="num">${esc(u.period)}</span>` : ''}</span>
       <span class="st ${u.status}">${stName[u.status] || u.status}</span>
       <span class="hm num">#${u.id} · ${fmt(u.started_at)} · ${esc(u.file_name || '')}${u.rows_loaded != null ? ` · ${nf0.format(u.rows_loaded)} qator` : ''}</span>
+      ${u.missing ? `<span class="xlbtn" role="button" tabindex="0" data-u="${u.id}">📎 Spravochnikda yo'q: ${u.missing} ta — Excel'ni botga yuborish</span>` : ''}
       ${u.text || u.error ? `<span class="report" hidden>${u.text ? String(u.text).replace(/\n/g, '<br>') : esc(u.error)}</span>` : ''}
     </button>`).join('') : `<div class="empty">Hali yuklash bo'lmagan.</div>`;
   host.querySelectorAll('.hrow').forEach(b => b.onclick = () => { const r = b.querySelector('.report'); if (r) r.hidden = !r.hidden; });
+  host.querySelectorAll('.xlbtn').forEach(x => x.onclick = e => { e.stopPropagation(); sendMissing(x, `uploads/${x.dataset.u}/missing`); });
 }
 async function refreshMeta() {
   try { META = await api('meta'); updMeta(); } catch (e) {}

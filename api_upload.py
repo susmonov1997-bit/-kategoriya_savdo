@@ -27,6 +27,7 @@ import config
 from api_auth import User, current_user
 from loaders_common import LoaderError
 from loaders_dispatch import KIND_NAMES, detect_kind, load_any_ex
+from export_missing import build_missing_xlsx, has_missing, missing_caption, report_of, send_missing
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -59,8 +60,10 @@ class _OneConnection:
 
 
 def _public(job: dict) -> dict:
-    return {k: job[k] for k in ("id", "status", "file_name", "size_mb", "kind", "kind_name", "report",
-                                "error", "upload_id", "created", "elapsed") if k in job}
+    out = {k: job[k] for k in ("id", "status", "file_name", "size_mb", "kind", "kind_name", "report",
+                               "error", "upload_id", "created", "elapsed") if k in job}
+    out["missing"] = bool(job.get("missing_xlsx"))
+    return out
 
 
 def _cleanup() -> None:
@@ -91,7 +94,12 @@ async def _check(pool, job: dict) -> None:
             tr = con.transaction()
             await tr.start()
             try:
-                _, text, _ = await load_any_ex(_OneConnection(con), data, job["file_name"], job["user_id"])
+                _, text, uid = await load_any_ex(_OneConnection(con), data, job["file_name"], job["user_id"])
+                if kind == "sales":            # spravochnikda yo'qlar — rollback'dan oldin Excel'ga olinadi
+                    rep = await report_of(con, uid)
+                    if has_missing(rep):
+                        job["missing_xlsx"] = await build_missing_xlsx(con, rep)
+                        job["missing_report"] = {k: rep.get(k) for k in ("dates", "unknown_skus", "unknown_branches")}
             finally:
                 await tr.rollback()            # tekshiruv — hech narsa saqlanmaydi
         job.update(status="checked", report=_preview_text(text, kind))
@@ -115,6 +123,15 @@ async def _load(pool, job: dict) -> None:
             "UPDATE uploads SET report = COALESCE(report, '{}'::jsonb) || jsonb_build_object('text', $2::text, "
             "'via', 'miniapp') WHERE id = $1", upload_id, text)
         await _notify(job["user_id"], text)
+        if kind == "sales":
+            async with pool.acquire() as con:
+                rep = await report_of(con, upload_id)
+                if has_missing(rep):
+                    job["missing_xlsx"] = await build_missing_xlsx(con, rep)
+                    job["missing_report"] = {k: rep.get(k) for k in ("dates", "unknown_skus", "unknown_branches")}
+                    await _send_missing(job["user_id"], job["missing_xlsx"], job["missing_report"])
+                else:
+                    job.pop("missing_xlsx", None)
     except LoaderError as e:
         job.update(status="failed", error=str(e))
     except Exception as e:  # noqa: BLE001
@@ -140,6 +157,17 @@ async def _notify(chat_id: int, text: str) -> None:
             await bot.session.close()
     except Exception as e:  # noqa: BLE001
         log.warning("Botga hisobot yuborilmadi: %s", e)
+
+
+async def _send_missing(chat_id: int, data: bytes, rep: dict) -> bool:
+    if not config.BOT_TOKEN:
+        return False
+    try:
+        await send_missing(config.BOT_TOKEN, chat_id, data, rep)
+        return True
+    except Exception as e:  # noqa: BLE001
+        log.warning("Excel botga yuborilmadi: %s", e)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +220,30 @@ async def upload_confirm(jid: str, request: Request, user: User = Depends(upload
     return _public(job)
 
 
+@router.post("/upload/{jid}/missing")
+async def upload_missing_send(jid: str, user: User = Depends(uploader)):
+    """Tekshiruv/yuklash natijasidagi spravochnikda yo'q SKU/filiallar Excel'ini botga yuboradi."""
+    job = _job(jid, user)
+    if not job.get("missing_xlsx"):
+        raise HTTPException(404, "Spravochnikda yo'q tovar yoki filial topilmadi")
+    if not await _send_missing(user.id, job["missing_xlsx"], job["missing_report"]):
+        raise HTTPException(503, "Botga yuborib bo'lmadi — botga /start bosilganini tekshiring")
+    return {"ok": True}
+
+
+@router.post("/uploads/{upload_id}/missing")
+async def history_missing_send(upload_id: int, request: Request, user: User = Depends(uploader)):
+    """Tarixdagi savdo yuklashi bo'yicha spravochnikda yo'qlar Excel'ini botga yuboradi."""
+    async with request.app.state.pool.acquire() as con:
+        rep = await report_of(con, upload_id)
+        if not has_missing(rep):
+            raise HTTPException(404, "Bu yuklashda spravochnikda yo'q tovar yoki filial bo'lmagan")
+        data = await build_missing_xlsx(con, rep)
+    if not await _send_missing(user.id, data, rep):
+        raise HTTPException(503, "Botga yuborib bo'lmadi — botga /start bosilganini tekshiring")
+    return {"ok": True}
+
+
 @router.delete("/upload/{jid}")
 async def upload_cancel(jid: str, user: User = Depends(uploader)):
     job = _job(jid, user)
@@ -207,7 +259,9 @@ async def upload_cancel(jid: str, user: User = Depends(uploader)):
 async def uploads_history(request: Request, limit: int = 30, user: User = Depends(uploader)):
     rows = await request.app.state.pool.fetch(
         """SELECT id, kind, file_name, tg_user_id, status, rows_total, rows_loaded, started_at, finished_at,
-                  report->'dates' AS dates, report->>'text' AS text, report->>'error' AS error
+                  report->'dates' AS dates, report->>'text' AS text, report->>'error' AS error,
+                  COALESCE(jsonb_array_length(report->'unknown_skus'), 0)
+                  + COALESCE(jsonb_array_length(report->'unknown_branches'), 0) AS missing
            FROM uploads ORDER BY id DESC LIMIT $1""", min(max(limit, 1), 100))
     out = []
     for r in rows:
@@ -218,6 +272,6 @@ async def uploads_history(request: Request, limit: int = 30, user: User = Depend
             "rows_total": r["rows_total"], "rows_loaded": r["rows_loaded"],
             "started_at": r["started_at"], "finished_at": r["finished_at"],
             "period": f"{dates[0]} — {dates[-1]}" if dates and len(dates) > 1 else (dates[0] if dates else None),
-            "text": r["text"], "error": r["error"],
+            "text": r["text"], "error": r["error"], "missing": r["missing"],
         })
     return {"uploads": out}

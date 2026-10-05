@@ -38,7 +38,8 @@ COL_COST = "Жами(Кирим нархи)"
 COL_AMOUNT = "Жами(Чиқим нархи)"
 COL_UNIT = "Кирим нархи"
 COL_CUR = "Кирим нархи(Валюта тури)"
-OPTIONAL = [COL_BONUS, COL_UNIT, COL_CUR]
+COL_BRAND = "Бранд"
+OPTIONAL = [COL_BONUS, COL_UNIT, COL_CUR, COL_BRAND]
 _USD = {"доллар", "долл", "dollar", "usd", "$", "у.е.", "уе"}
 _UZS = {"сум", "сўм", "сом", "so'm", "som", "sum", "uzs"}
 
@@ -204,7 +205,8 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
     unk_sku = sc[sc["prod_cat"].isna()]
     unknown_skus = [
         {"product_id": int(pid), "name": clean_text(g[COL_NAME].iloc[0]), "category": clean_text(g[COL_CAT].iloc[0]),
-         "rows": len(g), "amount": float(g["amount"].sum())}
+         "brand": clean_text(g[COL_BRAND].iloc[0]) if COL_BRAND in g.columns else None,
+         "rows": len(g), "amount": float(g["amount"].sum()), "qty": float(g["qty"].sum())}
         for pid, g in unk_sku.groupby("pid")
     ]
     unk_br = sc[sc["branch_id"].isna()]

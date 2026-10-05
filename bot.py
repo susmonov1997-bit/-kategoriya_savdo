@@ -14,14 +14,15 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
-from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp,
+from aiogram.types import (BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp,
                            Message, WebAppInfo)
 
 import config
 from access import ROLE_NAMES, get_access, invalidate
 from db import create_pool, migrate
 from loaders_common import LoaderError
-from loaders_dispatch import load_any
+from loaders_dispatch import load_any, load_any_ex
+from export_missing import build_missing_xlsx, file_name as missing_file_name, has_missing, missing_caption, report_of
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -333,8 +334,9 @@ async def on_document(m: Message, bot: Bot, pool: asyncpg.Pool) -> None:
     await bot.download(doc, destination=buf)
     data = buf.getvalue()
 
+    kind = upload_id = None
     try:
-        text = await load_any(pool, data, doc.file_name, m.from_user.id)
+        kind, text, upload_id = await load_any_ex(pool, data, doc.file_name, m.from_user.id)
     except LoaderError as e:
         text = f"❌ Yuklanmadi: {e}"
     except Exception:  # noqa: BLE001
@@ -342,6 +344,17 @@ async def on_document(m: Message, bot: Bot, pool: asyncpg.Pool) -> None:
         text = "❌ Kutilmagan xato. Loglarni tekshiring — ma'lumot o'zgartirilmadi."
     await wait.delete()
     await send_long(m, text)
+    if kind == "sales" and upload_id:
+        # spravochnikda yo'q SKU/filiallar — to'ldirish uchun tayyor Excel shablon
+        try:
+            async with pool.acquire() as con:
+                rep = await report_of(con, upload_id)
+                xlsx = await build_missing_xlsx(con, rep) if has_missing(rep) else None
+            if xlsx:
+                await m.answer_document(BufferedInputFile(xlsx, filename=missing_file_name(rep)),
+                                        caption=missing_caption(rep))
+        except Exception:  # noqa: BLE001
+            log.exception("Spravochnikda yo'qlar Excel'ini yuborib bo'lmadi")
 
 
 _DP: Dispatcher | None = None
