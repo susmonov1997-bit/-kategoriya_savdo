@@ -283,10 +283,12 @@ async def breakdown(req: BreakdownRequest, request: Request, user: User = Depend
                        for k in ("amount", "qty", "bonus_qty", "gross", "income", "margin")})
     total_cur.gross_pct = round(total_cur.gross / total_cur.amount * 100, 2) if total_cur.amount else None
     total_cur.margin_pct = round(total_cur.margin / total_cur.amount * 100, 2) if total_cur.amount else None
-    total_prev = sum(i["previous"].amount for i in items) if has_cmp else 0
+    sb = req.share_by
+    tot_c = getattr(total_cur, sb)
+    total_prev = sum(getattr(i["previous"], sb) for i in items) if has_cmp else 0
     for i in items:
-        i["share"] = round(i["current"].amount / total_cur.amount * 100, 2) if total_cur.amount else None
-        i["prev_share"] = round(i["previous"].amount / total_prev * 100, 2) if has_cmp and total_prev else None
+        i["share"] = round(getattr(i["current"], sb) / tot_c * 100, 2) if tot_c else None
+        i["prev_share"] = round(getattr(i["previous"], sb) / total_prev * 100, 2) if has_cmp and total_prev else None
         i["share_pp"] = (round(i["share"] - i["prev_share"], 2)
                          if i["share"] is not None and i["prev_share"] is not None else None)
 
@@ -307,17 +309,21 @@ async def breakdown(req: BreakdownRequest, request: Request, user: User = Depend
         # ustunlar: joriy davr savdosi bo'yicha TOP-N, qolganlari "Boshqalar"
         col_amt: dict[str, dict] = {}
         for c in cells_raw:
-            e = col_amt.setdefault(c["ckey"], {"key": c["ckey"], "label": c["clabel"], "sort": c["csort"], "amount": 0.0})
+            e = col_amt.setdefault(c["ckey"], {"key": c["ckey"], "label": c["clabel"], "sort": c["csort"],
+                                               "amount": 0.0, "qty": 0.0})
             e["amount"] += float(c["c_amount"] or 0)
-        cols = sorted(col_amt.values(), key=lambda c: -c["amount"])
+            e["qty"] += float(c["c_qty"] or 0)
+        cols = sorted(col_amt.values(), key=lambda c: -c[sb])
         if cd["sort"] != "NULL::numeric":      # diapazonli/raqamli xususiyat — tabiiy tartib
             cols = sorted(cols, key=lambda c: (c["sort"] is None, c["sort"] or 0, c["label"] or ""))
-        keep = {c["key"] for c in sorted(col_amt.values(), key=lambda c: -c["amount"])[:MAX_PIVOT_COLS]}
+        keep = {c["key"] for c in sorted(col_amt.values(), key=lambda c: -c[sb])[:MAX_PIVOT_COLS]}
         other = len(col_amt) > MAX_PIVOT_COLS
-        cols_out = [{"key": c["key"], "label": c["label"], "amount": c["amount"]} for c in cols if c["key"] in keep]
+        cols_out = [{"key": c["key"], "label": c["label"], "amount": c["amount"], "qty": c["qty"]}
+                    for c in cols if c["key"] in keep]
         if other:
             cols_out.append({"key": "__other__", "label": "Boshqalar",
-                             "amount": sum(c["amount"] for c in col_amt.values() if c["key"] not in keep)})
+                             "amount": sum(c["amount"] for c in col_amt.values() if c["key"] not in keep),
+                             "qty": sum(c["qty"] for c in col_amt.values() if c["key"] not in keep)})
         row_keys = {i["key"] for i in items}
         acc: dict[str, dict[str, dict]] = {}
         for c in cells_raw:
@@ -325,17 +331,20 @@ async def breakdown(req: BreakdownRequest, request: Request, user: User = Depend
                 continue
             ck = c["ckey"] if c["ckey"] in keep else "__other__"
             a = acc.setdefault(c["rkey"], {}).setdefault(ck, {"amount": 0.0, "qty": 0.0, "margin": 0.0, "gross": 0.0,
-                                                             "prev_amount": 0.0})
+                                                             "prev_amount": 0.0, "prev_qty": 0.0})
             a["amount"] += float(c["c_amount"] or 0)
             a["qty"] += float(c["c_qty"] or 0)
             a["margin"] += float(c["c_margin"] or 0)
             a["gross"] += float(c["c_gross"] or 0)
             a["prev_amount"] += float(c["p_amount"] or 0)
+            a["prev_qty"] += float(c["p_qty"] or 0)
         for row in acc.values():
             for a in row.values():
                 a["margin_pct"] = round(a["margin"] / a["amount"] * 100, 2) if a["amount"] else None
                 a["delta_amount"] = (round((a["amount"] - a["prev_amount"]) / a["prev_amount"] * 100, 1)
                                      if has_cmp and a["prev_amount"] else None)
+                a["delta_qty"] = (round((a["qty"] - a["prev_qty"]) / a["prev_qty"] * 100, 1)
+                                  if has_cmp and a["prev_qty"] else None)
         result["cols"] = cols_out
         result["cells"] = acc
     return result
@@ -355,7 +364,7 @@ async def share_daily(req: BreakdownRequest, request: Request, user: User = Depe
         q = Q(req, attrs, cats)
         rows = await con.fetch(
             q.base_cte(with_cmp=False) + f"\nSELECT x.sale_date, {rd['key']} AS key, {rd['label']} AS label, "
-            f"sum(x.amount) amount FROM x {JOINS} GROUP BY 1, 2, 3", *q.params)
+            f"sum(x.{'qty' if req.share_by == 'qty' else 'amount'}) amount FROM x {JOINS} GROUP BY 1, 2, 3", *q.params)
     totals: dict[str, dict] = {}
     for r in rows:
         t = totals.setdefault(r["key"], {"key": r["key"], "label": r["label"], "amount": 0.0})
@@ -394,8 +403,9 @@ async def attributes(f: Filters, request: Request, user: User = Depends(current_
             items = [{"key": r["key"], "label": r["label"], "sort": r["sort"], "current": kpi_from(r, "c"),
                       "previous": kpi_from(r, "p") if has_cmp else None} for r in rows]
             items = [i for i in items if i["current"].amount or i["current"].qty]
-            tc = sum(i["current"].amount for i in items)
-            tp = sum(i["previous"].amount for i in items) if has_cmp else 0
+            sb = f.share_by
+            tc = sum(getattr(i["current"], sb) for i in items)
+            tp = sum(getattr(i["previous"], sb) for i in items) if has_cmp else 0
             selected = set()
             if dim == "brand":
                 selected = set(f.brands)
@@ -406,16 +416,16 @@ async def attributes(f: Filters, request: Request, user: User = Depends(current_
             elif dim.startswith("attr:"):
                 selected = set(f.attrs.get(int(dim[5:]), []))
             for i in items:
-                i["share"] = round(i["current"].amount / tc * 100, 2) if tc else None
-                i["prev_share"] = round(i["previous"].amount / tp * 100, 2) if has_cmp and tp else None
+                i["share"] = round(getattr(i["current"], sb) / tc * 100, 2) if tc else None
+                i["prev_share"] = round(getattr(i["previous"], sb) / tp * 100, 2) if has_cmp and tp else None
                 i["share_pp"] = (round(i["share"] - i["prev_share"], 2)
                                  if i["share"] is not None and i["prev_share"] is not None else None)
                 i["delta"] = delta(i["current"], i["previous"])
                 i["selected"] = i["key"] in selected
             if any(i["sort"] is not None for i in items):
-                items.sort(key=lambda i: (i["sort"] is None, i["sort"] or 0, -i["current"].amount))
+                items.sort(key=lambda i: (i["sort"] is None, i["sort"] or 0, -getattr(i["current"], sb)))
             else:
-                items.sort(key=lambda i: -i["current"].amount)
+                items.sort(key=lambda i: -getattr(i["current"], sb))
             out.append({"dim": dim, "title": d["title"],
                         "unit": attrs[int(dim[5:])].unit if dim.startswith("attr:") else None,
                         "total": tc, "items": [{k: v for k, v in i.items() if k != "sort"} for i in items]})

@@ -60,7 +60,7 @@ const st = {
   f: {},                 // dim -> Set(key)   (kalitlar API'dagidek matn)
   mode: 'tree',          // tree (daraxt) | pivot (kesma)
   rows: 'region', cols: 'attr:0', sort: 'amount',
-  chartMetric: 'amount', shareView: 'struct', pvMode: 'amount',
+  chartMetric: 'amount', shareView: 'struct', pvMode: 'amount', metric: 'amount',
   aExpand: {}, aOpen: null, topOpen: false, showAll: false,
 };
 const labels = {};       // "dim|key" -> nom (chip va breadcrumb uchun)
@@ -69,6 +69,12 @@ const allScopes = () => [...META.categories, ...(META.scopes || [])];
 const cat = () => allScopes().find(c => c.key === st.cat) || META.categories[0];
 // ilova ochilganda: Barcha kategoriyalar (bo'lmasa — eng ko'p sotilgan kategoriya)
 const defaultScope = () => ((META.scopes || []).find(s => s.kind === 'all') || META.categories[0]).key;
+// Savdo | Dona: ulush, tartib va asosiy raqam qaysi ko'rsatkich bo'yicha
+const MQ = () => st.metric === 'qty';
+const mval = k => (MQ() ? k.qty : k.amount) || 0;
+const mfmt = k => (MQ() ? `${nf0.format(k.qty || 0)} dona` : money(k.amount));
+const mnum = k => (MQ() ? nf0.format(k.qty || 0) : money(k.amount));
+const mdelta = d => (d ? (MQ() ? d.qty : d.amount) : null);
 const isMulti = () => cat().kind !== 'cat';
 const attrDims = () => cat().attributes.map(a => a.dim);
 const DIM_NAMES = {region: 'Hudud', cluster: 'Klaster', branch: 'Filial', brand: 'Brend', status: 'Status', sku: 'SKU',
@@ -92,7 +98,7 @@ const NUM_DIMS = {region: 'region_ids', cluster: 'cluster_ids', branch: 'branch_
 function filters() {
   const F = {scope: st.cat, date_from: st.from, date_to: st.to, compare: st.compare,
              region_ids: [], cluster_ids: [], branch_ids: [], product_ids: [], brands: [], statuses: [], attrs: {},
-             category_ids: [], owners: []};
+             category_ids: [], owners: [], share_by: st.metric};
   for (const d in st.f) {
     const vals = [...st.f[d]];
     if (!vals.length) continue;
@@ -155,6 +161,10 @@ function renderHeader() {
   const per = (st.preset && PERIOD_SHORT[st.preset]) || periodText();
   $('perBtn').innerHTML = `📅 ${esc(per)}${st.compare === 'yoy' ? ' · o\'tgan yil' : ''} <span class="car">▾</span>`;
   $('filBtn').innerHTML = `⚙ Filtr${nf ? ` <span class="badge">${nf}</span>` : ''}`;
+  document.querySelectorAll('#metricSeg button').forEach(b => {
+    b.setAttribute('aria-pressed', b.dataset.m === st.metric);
+    b.onclick = () => { if (st.metric === b.dataset.m) return; st.metric = b.dataset.m; resetView(); load(); };
+  });
   $('filBtn').classList.toggle('acc', nf > 0);
   const chips = [];
   for (const d of [...LOC_DIMS, ...prodDims()]) {
@@ -422,9 +432,9 @@ function pathFilters(path) {
   }
   return F;
 }
-const apiSort = () => (st.sort === 'delta' ? 'amount' : st.sort);
+const apiSort = () => (st.sort === 'delta' ? st.metric : st.sort === 'amount' && MQ() ? 'qty' : st.sort);
 function sortRows(rows) {
-  if (st.sort === 'delta') rows.sort((a, b) => (b.delta.amount ?? -1e9) - (a.delta.amount ?? -1e9));
+  if (st.sort === 'delta') rows.sort((a, b) => (mdelta(b.delta) ?? -1e9) - (mdelta(a.delta) ?? -1e9));
   return rows;
 }
 function newRoot(rid, order, path, extra = {}) {
@@ -491,6 +501,8 @@ async function toggleNode(node) {
 
 function renderBreakdown() {
   $('sortBy').value = st.sort;
+  { const o = $('sortBy').querySelector('option[value="amount"]'); if (o) o.textContent = MQ() ? 'dona' : 'savdo';
+    const q = $('sortBy').querySelector('option[value="qty"]'); if (q) q.hidden = MQ(); }
   document.querySelectorAll('#brMode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.m === st.mode));
   $('pvCtl').hidden = st.mode !== 'pivot';
   if (st.mode === 'pivot') {
@@ -506,13 +518,13 @@ function renderBreakdown() {
 }
 function rowHtml(node, rootAmount, indBase = 1) {
   const r = node.row, hasCmp = !!cmpRange(), can = !!node.childDim;
-  const shareTot = rootAmount ? r.current.amount / rootAmount * 100 : null;
+  const shareTot = rootAmount ? mval(r.current) / rootAmount * 100 : null;
   return `<button class="tr lv${Math.min(node.depth, 6)} ${can ? 'can' : ''} ${node.open ? 'op' : ''}" data-s="${esc(nsig(node))}" ${can ? '' : 'tabindex="-1"'}
-      style="--ind:${(node.depth - indBase) * 14}px" title="Umumiy savdodan ${pct(shareTot)}">
+      style="--ind:${(node.depth - indBase) * 14}px" title="Umumiy ${MQ() ? 'donadan' : 'savdodan'} ${pct(shareTot)}">
     <span class="n"><span class="c">${node.loading ? '…' : can ? (node.open ? '▾' : '▸') : '·'}</span><span class="nl">${esc(node.label)}${node.sub && node.dim === 'sku' ? ` <span class="sub2">· ${esc(node.sub)}</span>` : ''}</span>
       <span class="lvtag">${esc(dimName(node.dim))}</span></span>
-    <span class="v num">${money(r.current.amount)}</span>
-    <span class="m num"><span class="bar"><span style="width:${Math.min(100, r.share || 0)}%"></span></span><span>${pct(r.share)}</span>${hasCmp ? pill(r.delta.amount) : ''}<span class="${r.current.margin_pct < 0 ? 'neg' : ''}">GM ${pct(r.current.margin_pct)}</span></span>
+    <span class="v num">${mnum(r.current)}</span>
+    <span class="m num"><span class="bar"><span style="width:${Math.min(100, r.share || 0)}%"></span></span><span>${pct(r.share)}</span>${hasCmp ? pill(mdelta(r.delta)) : ''}${MQ() ? `<span class="alt">${money(r.current.amount)}</span>` : `<span class="${r.current.margin_pct < 0 ? 'neg' : ''}">GM ${pct(r.current.margin_pct)}</span>`}</span>
   </button>`;
 }
 function subtreeRows(node, out, rootAmt, indBase = 1) {
@@ -532,11 +544,12 @@ function wireTree(host) {
 function renderTree() {
   const host = $('breakdown');
   if (!TREE) { host.innerHTML = ''; return; }
-  const T = TREE.total, rootAmt = T ? T.amount : 0;
+  const T = TREE.total, rootAmt = T ? mval(T) : 0;
   if (!TREE.childDim || !T) { host.innerHTML = `<div class="list"><div class="empty">Tanlangan filtrlar bo'yicha savdo yo'q.</div></div>`; return; }
   const out = [`<button class="tr lv0 can ${TREE.open ? 'op' : ''}" data-s="${esc(nsig(TREE))}">
-      <span class="n"><span class="c">${TREE.open ? '▾' : '▸'}</span><b>Jami</b></span><span class="v num">${money(T.amount)}</span>
-      <span class="m num">${nf0.format(T.qty)} dona · front marja ${pct(T.gross_pct)} · gross marja ${pct(T.margin_pct)}</span></button>`];
+      <span class="n"><span class="c">${TREE.open ? '▾' : '▸'}</span><b>Jami</b></span><span class="v num">${mfmt(T)}</span>
+      <span class="m num">${MQ() ? `savdo ${money(T.amount)}${T.bonus_qty ? ` · bonus ${nf0.format(T.bonus_qty)}` : ''}${T.avg_price ? ` · o'rtacha narx ${money(T.avg_price)}` : ''}`
+        : `${nf0.format(T.qty)} dona · front marja ${pct(T.gross_pct)} · gross marja ${pct(T.margin_pct)}`}</span></button>`];
   subtreeRows(TREE, out, rootAmt, 1);
   host.innerHTML = `<div class="tw">${out.join('')}</div>`;
   wireTree(host);
@@ -549,7 +562,7 @@ function renderShare() {
   if (!node || !node.children || !node.children.length) { host.innerHTML = ''; return; }
   const ctx = node.path.length ? node.path.map(p => labels[p.dim + '|' + p.key] || p.key).join(' › ') : 'Jami';
   host.innerHTML = `<div class="chartcard sharecard">
-    <div class="sh"><span class="label">Savdo ulushi · ${esc(dimName(node.childDim))}</span>
+    <div class="sh"><span class="label">${MQ() ? 'Dona' : 'Savdo'} ulushi · ${esc(dimName(node.childDim))}</span>
       <div class="seg mini" id="shareView">
         <button data-v="struct" aria-pressed="${st.shareView === 'struct'}">Tuzilma</button>
         <button data-v="dyn" aria-pressed="${st.shareView === 'dyn'}">Kunlar bo'yicha</button>
@@ -569,7 +582,7 @@ function renderShare() {
 }
 function shareStruct(node) {
   const hasCmp = !!cmpRange();
-  const byAmt = node.raw.slice().sort((a, b) => b.current.amount - a.current.amount);
+  const byAmt = node.raw.slice().sort((a, b) => mval(b.current) - mval(a.current));
   const top = byAmt.slice(0, SLOTS);
   const rows = top.map((i, n) => ({key: i.key, label: i.label, share: i.share || 0, pshare: i.prev_share, pp: i.share_pp, color: `var(--s${n + 1})`}));
   const restCount = node.total_rows - top.length;
@@ -622,7 +635,7 @@ async function shareDyn(node) {
   svg.querySelectorAll('.hitc').forEach(el => {
     const show = () => { const d = days[+el.dataset.di]; const rect = svg.getBoundingClientRect();
       tip.hidden = false;
-      tip.innerHTML = `<b>${dm(d.date)}</b> · ${money(d.total)}<br>` + d.shares.map((p, j) => `${esc(names[j])}: ${nf1.format(p)}%`).join('<br>');
+      tip.innerHTML = `<b>${dm(d.date)}</b> · ${MQ() ? nf0.format(d.total) + ' dona' : money(d.total)}<br>` + d.shares.map((p, j) => `${esc(names[j])}: ${nf1.format(p)}%`).join('<br>');
       tip.style.left = Math.max(80, Math.min(rect.width - 80, (L + (+el.dataset.di) * cw + cw / 2) / W * rect.width)) + 'px'; };
     el.addEventListener('pointerenter', show); el.addEventListener('pointerdown', show);
     el.addEventListener('pointerleave', () => tip.hidden = true);
@@ -634,28 +647,29 @@ function sortedItems() { return sortRows(BD.rows.slice()); }
 function renderPivot(host) {
   const items = sortedItems(), T = BD.total, cols = BD.cols || [], cells = BD.cells || {};
   const rowsShown = items.slice(0, st.showAll ? items.length : 20);
-  const val = (i, c) => { const v = ((cells[i.key] || {})[c.key] || {}).amount || 0;
-    if (st.pvMode === 'row') return i.current.amount ? v / i.current.amount * 100 : 0;
-    if (st.pvMode === 'col') return c.amount ? v / c.amount * 100 : 0;
+  const mk = MQ() ? 'qty' : 'amount';
+  const val = (i, c) => { const v = ((cells[i.key] || {})[c.key] || {})[mk] || 0;
+    if (st.pvMode === 'row') return mval(i.current) ? v / mval(i.current) * 100 : 0;
+    if (st.pvMode === 'col') return c[mk] ? v / c[mk] * 100 : 0;
     return v; };
   let max = 0; for (const i of rowsShown) for (const c of cols) max = Math.max(max, val(i, c));
   const heat = v => { if (!v || !max) return ''; const t = v / max; const s = t > .8 ? '--h5' : t > .6 ? '--h4' : t > .4 ? '--h3' : t > .2 ? '--h2' : '--h1';
     return `background:var(${s});${t > .6 ? 'color:#fff' : ''}`; };
-  const mln = v => v ? nf1.format(v / 1e6) : '·';
+  const mln = v => (v ? (MQ() ? nf0.format(v) : nf1.format(v / 1e6)) : '·');
   const fmtCell = v => st.pvMode === 'amount' ? mln(v) : (v ? nf1.format(v) + '%' : '·');
-  const lastCol = i => st.pvMode === 'amount' ? `<b>${mln(i.current.amount)}</b>` : st.pvMode === 'row' ? '<b>100%</b>' : `<b>${pct(i.share)}</b>`;
+  const lastCol = i => st.pvMode === 'amount' ? `<b>${mln(mval(i.current))}</b>` : st.pvMode === 'row' ? '<b>100%</b>' : `<b>${pct(i.share)}</b>`;
   host.innerHTML = `<div class="seg mini" id="pvMode" style="align-self:flex-start;display:inline-flex">
-      <button data-v="amount" aria-pressed="${st.pvMode === 'amount'}">Savdo, mln</button>
-      <button data-v="row" aria-pressed="${st.pvMode === 'row'}">Qator ichida ulush</button>
-      <button data-v="col" aria-pressed="${st.pvMode === 'col'}">Ustun ichida ulush</button></div>
+      <button data-v="amount" aria-pressed="${st.pvMode === 'amount'}">${MQ() ? 'Dona' : 'Savdo, mln'}</button>
+      <button data-v="row" aria-pressed="${st.pvMode === 'row'}">Qator ichida %</button>
+      <button data-v="col" aria-pressed="${st.pvMode === 'col'}">Ustun ichida %</button></div>
     <div class="pivotwrap"><table class="pv num">
     <thead><tr><th>${esc(dimName(st.rows))} \\ ${esc(dimName(st.cols))}</th>${cols.map(c => `<th>${esc(c.label)}</th>`).join('')}<th>Jami</th></tr></thead>
     <tbody>${rowsShown.map(i => `<tr><td title="${esc(i.label)}">${esc(i.label)}</td>${cols.map(c => { const v = val(i, c);
         const cell = (cells[i.key] || {})[c.key];
-        return `<td class="c" style="${heat(v)}" title="${cell ? `gross marja ${pct(cell.margin_pct)}` : ''}">${fmtCell(v)}</td>`; }).join('')}<td>${lastCol(i)}</td></tr>`).join('')}
-      <tr class="tot"><td>Jami</td>${cols.map(c => `<td>${st.pvMode === 'amount' ? mln(c.amount) : st.pvMode === 'row' ? (T.amount ? nf1.format(c.amount / T.amount * 100) + '%' : '·') : '100%'}</td>`).join('')}<td>${st.pvMode === 'amount' ? mln(T.amount) : '100%'}</td></tr>
+        return `<td class="c" style="${heat(v)}" title="${cell ? (MQ() ? `savdo ${money(cell.amount)} · ` : `${nf0.format(cell.qty)} dona · `) + `gross marja ${pct(cell.margin_pct)}` : ''}">${fmtCell(v)}</td>`; }).join('')}<td>${lastCol(i)}</td></tr>`).join('')}
+      <tr class="tot"><td>Jami</td>${cols.map(c => `<td>${st.pvMode === 'amount' ? mln(c[mk]) : st.pvMode === 'row' ? (mval(T) ? nf1.format((c[mk] || 0) / mval(T) * 100) + '%' : '·') : '100%'}</td>`).join('')}<td>${st.pvMode === 'amount' ? mln(mval(T)) : '100%'}</td></tr>
     </tbody></table></div>
-    <div class="foot">${st.pvMode === 'amount' ? "Kataklarda savdo, mln so'm." : st.pvMode === 'row' ? "Har bir qatorda: shu qator savdosining ustunlar bo'yicha taqsimoti." : "Har bir ustunda: shu ustun savdosining qatorlar bo'yicha taqsimoti."}
+    <div class="foot">${st.pvMode === 'amount' ? (MQ() ? 'Kataklarda dona (bonus bilan).' : "Kataklarda savdo, mln so'm.") : st.pvMode === 'row' ? `Har bir qatorda: shu qator ${MQ() ? 'donasining' : 'savdosining'} ustunlar bo'yicha taqsimoti.` : `Har bir ustunda: shu ustun ${MQ() ? 'donasining' : 'savdosining'} qatorlar bo'yicha taqsimoti.`}
       ${items.length > 20 && !st.showAll ? ` <button class="more" id="more" style="display:inline;width:auto;border:0;padding:0">Barcha ${items.length} qatorni ko'rsatish</button>` : ''}</div>`;
   const mo = $('more'); if (mo) mo.onclick = () => { st.showAll = true; renderBreakdown(); };
   host.querySelectorAll('#pvMode button').forEach(b => b.onclick = () => { st.pvMode = b.dataset.v; renderBreakdown(); });
@@ -672,7 +686,7 @@ function attrBlock(b) {
   const d = b.dim, sel = st.f[d] || new Set(), hasCmp = !!cmpRange();
   const items = b.items;
   items.forEach(i => remember(d, i.key, i.label));
-  const rank = new Map(items.slice().sort((x, y) => y.current.amount - x.current.amount).map((i, n) => [i.key, n]));
+  const rank = new Map(items.slice().sort((x, y) => mval(y.current) - mval(x.current)).map((i, n) => [i.key, n]));
   const color = i => rank.get(i.key) < SLOTS ? `var(--s${rank.get(i.key) + 1})` : 'var(--so)';
   const isOpen = st.aOpen.has(d);
   const expanded = !!st.aExpand[d];
@@ -683,7 +697,7 @@ function attrBlock(b) {
   }
   const max = Math.max(...items.map(i => Math.max(i.share || 0, i.prev_share || 0)), 1);
   const restShare = rest.reduce((s, i) => s + (i.share || 0), 0);
-  const total = items.reduce((s, i) => s + i.current.amount, 0);
+  const total = items.reduce((s, i) => s + mval(i.current), 0);
   const rows = isOpen ? shown.map(i => {
     const node = attrNode(d, i); node.row = i;
     const can = !!node.childDim;
@@ -691,11 +705,11 @@ function attrBlock(b) {
     return `<div class="arow ${sel.has(i.key) ? 'on' : ''} ${can ? 'can' : ''} ${node.open ? 'op' : ''}" role="button" tabindex="0" data-s="${esc(nsig(node))}">
       <span class="c">${node.loading ? '…' : can ? (node.open ? '▾' : '▸') : '·'}</span>
       <span class="al"><span class="sw" style="background:${color(i)}"></span>${esc(i.label)}</span>
-      <span class="aa num">${money(i.current.amount)}</span>
+      <span class="aa num">${mfmt(i.current)}</span>
       <span class="strk"><span class="sf" style="width:${(i.share || 0) / max * 100}%;background:${color(i)}"></span>
         ${hasCmp && i.prev_share != null ? `<span class="sp" style="left:${i.prev_share / max * 100}%"></span>` : ''}</span>
       <span class="as num"><b>${pct(i.share)}</b>${hasCmp ? pill(i.share_pp, true) : ''}</span>
-      <span class="am num"><span>${nf0.format(i.current.qty)} dona${hasCmp ? ` · savdo ${i.delta.amount == null ? '—' : (i.delta.amount > 0 ? '+' : '') + nf1.format(i.delta.amount) + '%'}` : ''} · <span class="${i.current.margin_pct < 0 ? 'neg' : ''}">GM ${pct(i.current.margin_pct)}</span></span>
+      <span class="am num"><span>${MQ() ? `savdo ${money(i.current.amount)}` : `${nf0.format(i.current.qty)} dona`}${hasCmp ? ` · ${MQ() ? 'dona' : 'savdo'} ${mdelta(i.delta) == null ? '—' : (mdelta(i.delta) > 0 ? '+' : '') + nf1.format(mdelta(i.delta)) + '%'}` : ''} · <span class="${i.current.margin_pct < 0 ? 'neg' : ''}">GM ${pct(i.current.margin_pct)}</span></span>
         <button class="fbtn ${sel.has(i.key) ? 'on' : ''}" data-d="${d}" data-k="${esc(i.key)}" title="Filtrga qo'shish / olib tashlash">${sel.has(i.key) ? '✓ filtrda' : '+ filtr'}</button></span>
     </div>${sub.length ? `<div class="tw sub">${sub.join('')}</div>` : ''}`;
   }).join('') : '';
@@ -783,8 +797,8 @@ async function openSku(node) {
 function renderTopBody() {
   const t = TOP; if (!t) return;
   const host = $('top'), head = $('topHead');
-  const sumTop = t.rows.reduce((s, i) => s + i.current.amount, 0), tot = t.total ? t.total.amount : 0;
-  $('topHint').textContent = t.rows.length ? `${t.rows.length} ta · ${money(sumTop)}${tot ? ' · ' + pct(sumTop / tot * 100) : ''}` : "savdo yo'q";
+  const sumTop = t.rows.reduce((s, i) => s + mval(i.current), 0), tot = t.total ? mval(t.total) : 0;
+  $('topHint').textContent = t.rows.length ? `${t.rows.length} ta · ${MQ() ? nf0.format(sumTop) + ' dona' : money(sumTop)}${tot ? ' · ' + pct(sumTop / tot * 100) : ''}` : "savdo yo'q";
   head.querySelector('.c').textContent = st.topOpen ? '▾' : '▸';
   head.setAttribute('aria-expanded', st.topOpen);
   $('topBlock').classList.toggle('open', st.topOpen);
@@ -794,10 +808,10 @@ function renderTopBody() {
   host.innerHTML = t.rows.length ? t.rows.map((i, n) => {
     const rid = `s:${i.key}`;
     const node = ROOTS.get(rid) || newRoot(rid, 'loc', [{dim: 'sku', key: i.key}], {label: i.label, row: i});
-    const sub = []; if (node.open && node.card && !node.card.error) subtreeRows(node, sub, i.current.amount, 1);
+    const sub = []; if (node.open && node.card && !node.card.error) subtreeRows(node, sub, mval(i.current), 1);
     return `<button type="button" class="sku can ${node.open ? 'op' : ''}" aria-expanded="${!!node.open}" data-rid="${esc(rid)}">
-      <span class="rk num">${n + 1}</span><span class="nm"><span class="c">${node.loading ? '…' : node.open ? '▾' : '▸'}</span>${esc(i.label)}</span><span class="amt num">${money(i.current.amount)}</span>
-      <span class="br">${esc(i.sub || '')} · ${nf0.format(i.current.qty)} dona</span><span class="mt num ${i.current.margin_pct < 0 ? 'neg' : ''}">GM ${pct(i.current.margin_pct)}</span>
+      <span class="rk num">${n + 1}</span><span class="nm"><span class="c">${node.loading ? '…' : node.open ? '▾' : '▸'}</span>${esc(i.label)}</span><span class="amt num">${mfmt(i.current)}</span>
+      <span class="br">${esc(i.sub || '')} · ${MQ() ? money(i.current.amount) : nf0.format(i.current.qty) + ' dona'}</span><span class="mt num ${i.current.margin_pct < 0 ? 'neg' : ''}">GM ${pct(i.current.margin_pct)}</span>
     </button>${node.open ? skuCard(node) + (sub.length ? `<div class="tw sub">${sub.join('')}</div>` : '') : ''}`;
   }).join('') : `<div class="empty">Savdo yo'q.</div>`;
   // bosishni konteyner ushlaydi (delegatsiya) — qayta chizilganda ham ishonchli ishlaydi
@@ -830,9 +844,12 @@ async function load() {
   const secs = ['kpis', 'chart', 'breakdown', 'ablocks', 'top'].map($);
   secs.forEach(s => s.classList.add('loading'));
   try {
-    const tasks = [api('summary', F), api('daily', F), api('attributes', F), api('breakdown', {...F, rows: 'sku', sort: 'amount', limit: 10})];
+    const tasks = [api('summary', F), api('daily', F), api('attributes', F), api('breakdown', {...F, rows: 'sku', sort: st.metric, limit: 10})];
     if (st.mode === 'pivot') {
-      if (!st.cols || st.cols === st.rows) st.cols = attrDims().find(d => d !== st.rows) || (st.rows === 'brand' ? 'region' : 'brand');
+      const avail = [...LOC_PATH, ...(cat().extra_dims || []), ...attrDims(), 'brand', 'status', 'sku'];
+      if (!avail.includes(st.rows)) st.rows = 'region';
+      if (!st.cols || st.cols === st.rows || !avail.includes(st.cols))
+        st.cols = attrDims().find(d => d !== st.rows) || (cat().extra_dims || []).find(d => d !== st.rows) || (st.rows === 'brand' ? 'region' : 'brand');
       tasks.push(api('breakdown', {...F, rows: st.rows, cols: st.cols, sort: apiSort(), desc: st.sort !== 'name', limit: 500}));
     } else tasks.push(buildTree());
     const [sum, daily, attrs, top, bd] = await Promise.all(tasks);

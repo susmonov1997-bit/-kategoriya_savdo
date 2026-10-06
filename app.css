@@ -369,3 +369,9 @@ h1.ttl{cursor:default}
 .btn.xl{width:100%;margin-top:8px;border:1px dashed var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:600}
 .xlbtn{grid-column:1/-1;justify-self:start;margin-top:4px;font-size:12px;font-weight:600;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:3px 10px;cursor:pointer}
 .xlbtn[disabled]{opacity:.6}
+
+/* Savdo | Dona almashtirgichi */
+.mseg{display:inline-flex;background:var(--card-2);border:1px solid var(--line);border-radius:999px;padding:2px}
+.mseg button{border:0;background:none;border-radius:999px;padding:4px 11px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer}
+.mseg button[aria-pressed="true"]{background:var(--accent);color:#fff}
+.tr .m .alt{color:var(--muted)}
