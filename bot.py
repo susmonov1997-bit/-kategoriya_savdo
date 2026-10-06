@@ -22,6 +22,7 @@ from access import ROLE_NAMES, get_access, invalidate
 from db import create_pool, migrate
 from loaders_common import LoaderError
 from loaders_dispatch import load_any, load_any_ex
+from notify import broadcast_upload
 from export_missing import build_missing_xlsx, file_name as missing_file_name, has_missing, missing_caption, report_of
 
 log = logging.getLogger(__name__)
@@ -344,6 +345,10 @@ async def on_document(m: Message, bot: Bot, pool: asyncpg.Pool) -> None:
         text = "❌ Kutilmagan xato. Loglarni tekshiring — ma'lumot o'zgartirilmadi."
     await wait.delete()
     await send_long(m, text)
+    if kind and upload_id:
+        # adminlarga to'liq hisobot, savdo bo'lsa — hammaga "yangilandi" xabari (fonda)
+        asyncio.create_task(broadcast_upload(pool, kind, text, upload_id, m.from_user.id,
+                                             m.from_user.full_name, "bot", doc.file_name, bot))
     if kind == "sales" and upload_id:
         # spravochnikda yo'q SKU/filiallar — to'ldirish uchun tayyor Excel shablon
         try:

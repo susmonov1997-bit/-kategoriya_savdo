@@ -27,6 +27,7 @@ import config
 from api_auth import User, current_user
 from loaders_common import LoaderError
 from loaders_dispatch import KIND_NAMES, detect_kind, load_any_ex
+from notify import broadcast_upload
 from export_missing import build_missing_xlsx, has_missing, missing_caption, report_of, send_missing
 
 log = logging.getLogger(__name__)
@@ -123,6 +124,8 @@ async def _load(pool, job: dict) -> None:
             "UPDATE uploads SET report = COALESCE(report, '{}'::jsonb) || jsonb_build_object('text', $2::text, "
             "'via', 'miniapp') WHERE id = $1", upload_id, text)
         await _notify(job["user_id"], text)
+        await broadcast_upload(pool, kind, text, upload_id, job["user_id"], job.get("user_name", ""),
+                               "miniapp", job["file_name"])
         if kind == "sales":
             async with pool.acquire() as con:
                 rep = await report_of(con, upload_id)
@@ -192,7 +195,7 @@ async def upload(request: Request, file: UploadFile = File(...), user: User = De
                 raise HTTPException(413, f"Fayl {config.MAX_UPLOAD_MB} MB dan katta")
             out.write(chunk)
     job = {"id": jid, "status": "checking", "file_name": name, "size_mb": round(size / 1048576, 1),
-           "path": str(path), "user_id": user.id, "created": time.time()}
+           "path": str(path), "user_id": user.id, "user_name": user.first_name or "", "created": time.time()}
     _JOBS[jid] = job
     asyncio.create_task(_check(request.app.state.pool, job))
     return _public(job)
