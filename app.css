@@ -351,3 +351,31 @@ button.x{border:0;background:none;font-size:20px;line-height:1;color:var(--muted
 .btn.xl{width:100%;margin-top:8px;border:1px dashed var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:600}
 .xlbtn{grid-column:1/-1;justify-self:start;margin-top:4px;font-size:12px;font-weight:600;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:3px 10px;cursor:pointer}
 .xlbtn[disabled]{opacity:.6}
+
+/* ---------- Reja tabi ---------- */
+#plCtl{justify-content:flex-start}
+#plCtl select{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--card);border:0;box-shadow:var(--shadow);border-radius:999px;padding:6px 10px}
+#plBody{display:flex;flex-direction:column;gap:10px}
+.ring{flex:0 0 auto;display:block}
+.ring .rt{font:800 14.5px var(--font);fill:var(--ink);letter-spacing:-.02em}
+.ring .rs{font:500 9.5px var(--font);fill:var(--muted)}
+.plh{display:flex;gap:14px;align-items:center}
+.plh .tx{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
+.plh .v{font-size:23px;font-weight:800;letter-spacing:-.02em;line-height:1.15}
+.plh .p,.plg .p{font-size:12.5px;color:var(--ink-2)}
+.plh .p b,.plg .p b{color:var(--ink)}
+.plgs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.plg{background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);padding:13px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:3px;min-width:0}
+.plg b{font-size:15px}
+.plg.solo{grid-column:1/-1}
+.pill.warn{color:var(--warn);background:var(--warn-soft)}
+.plc svg{display:block;width:100%;height:auto}
+.plc .ax{font:500 9.5px var(--font);fill:var(--muted)}
+.plt{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,.9fr) minmax(0,.9fr) minmax(0,.95fr);font-size:12.5px;font-variant-numeric:tabular-nums}
+.plt>*{padding:8px 4px;border-top:1px solid var(--line);text-align:right;min-width:0}
+.plt>.n{text-align:left;font-weight:600;overflow-wrap:anywhere}
+.plt>.h{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;border-top:0;font-weight:600}
+.plt>.g{background:var(--card-2);font-weight:700}
+.plt>button.n{border:0;border-top:1px solid var(--line);background:none;color:var(--accent);padding-left:14px;font:600 12.5px var(--font);text-align:left;cursor:pointer}
+.plt>span.n.sub{padding-left:14px}
+.plt .s2{display:block;font-size:11px;color:var(--muted);font-weight:500}

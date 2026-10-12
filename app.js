@@ -1009,11 +1009,194 @@ document.querySelectorAll('#chartMetric button').forEach(b => b.onclick = () => 
 let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (TAB === 'Umumiy') renderChart(); if (st.shareView === 'dyn' && st.mode === 'tree') renderShare(); }, 150); });
 
 
+// ---------------------------------------------------------------- REJA: yillik reja va bajarilishi
+const MONTHS = ['Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun', 'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr'];
+const MSHORT = ['Yan', 'Fev', 'Mar', 'Apr', 'May', 'Iyn', 'Iyl', 'Avg', 'Sen', 'Okt', 'Noy', 'Dek'];
+const PL = {data: null, year: null, mode: 'month', metric: 'amount', month: null, loading: false};
+const dim = (y, m) => new Date(Date.UTC(y, m + 1, 0)).getUTCDate();          // m: 0..11
+const plCls = p => (p == null ? 'flat' : p >= 100 ? 'up' : p >= 95 ? 'warn' : 'down');
+const plCol = p => (p == null ? 'var(--so)' : p >= 100 ? 'var(--good)' : p >= 95 ? 'var(--s4)' : 'var(--bad)');
+const plPill = p => `<span class="pill ${plCls(p)}">${p == null ? '—' : pct(p)}</span>`;
+const sum = a => a.reduce((s, v) => s + (v || 0), 0);
+// o'tgan kunlar: oyning nechta kuni uchun fakt bor — [data_from, data_to] oralig'ida
+// (bazada ma'lumot yil o'rtasidan boshlansa, undan oldingi oylar rejasi hisobga olinmaydi)
+function elapsed(y, m) {
+  const to = PL.data.data_to, fr = PL.data.data_from; if (!to) return 0;
+  const a = `${y}-${String(m + 1).padStart(2, '0')}-01`, b = `${y}-${String(m + 1).padStart(2, '0')}-${String(dim(y, m)).padStart(2, '0')}`;
+  const lo = fr && fr > a ? fr : a, hi = to < b ? to : b;
+  return hi < lo ? 0 : diffDays(lo, hi) + 1;
+}
+// bitta qator (kategoriya / guruh / jami) uchun tanlangan rejimdagi hisob
+function plCalc(c) {
+  const y = PL.year, pk = PL.metric === 'gross' ? 'plan_gross' : 'plan_amount', fk = PL.metric === 'gross' ? 'fact_gross' : 'fact_amount';
+  const P = c[pk], F = c[fk];
+  const hasPlan = P.some(v => v != null);
+  if (PL.mode === 'month') {
+    const m = PL.month, e = elapsed(y, m), D = dim(y, m), full = P[m];
+    const per = full != null ? full * e / D : null, fact = F[m] || 0;
+    return {hasPlan: full != null, full, per, fact, pct: per ? fact / per * 100 : null, fullPct: full ? fact / full * 100 : null,
+            expPct: e / D * 100, forecast: e ? fact / e * D : null, need: e < D && full != null ? Math.max(0, full - fact) / (D - e) : null,
+            nowDaily: e ? fact / e : null, factAmt: c.fact_amount[m] || 0, planAmt: c.plan_amount[m],
+            factG: c.fact_gross[m] || 0, planG: c.plan_gross[m]};
+  }
+  let per = 0, fact = 0, elD = 0, perA = 0, perG = 0, fA = 0, fG = 0;
+  for (let m = 0; m < 12; m++) {
+    const e = elapsed(y, m), D = dim(y, m);
+    if (!e) continue;
+    per += (P[m] || 0) * e / D; fact += F[m] || 0; elD += e;
+    perA += (c.plan_amount[m] || 0) * e / D; perG += (c.plan_gross[m] || 0) * e / D;
+    fA += c.fact_amount[m] || 0; fG += c.fact_gross[m] || 0;
+  }
+  const full = hasPlan ? sum(P) : null, yd = (y % 4 === 0 ? 366 : 365);
+  const base = {hasPlan, full, per: hasPlan ? per : null, fact, factAmt: fA, planAmt: perA, factG: fG, planG: perG,
+                forecast: elD ? fact / elD * yd : null, expPct: full ? per / full * 100 : null, fullPct: full ? fact / full * 100 : null};
+  base.pct = PL.mode === 'year' ? base.fullPct : (base.per ? fact / base.per * 100 : null);
+  return base;
+}
+function plSumRows(rows, name) {
+  const z = () => Array(12).fill(null);
+  const o = {name, plan_amount: z(), plan_gross: z(), fact_amount: Array(12).fill(0), fact_gross: Array(12).fill(0)};
+  for (const c of rows) for (let m = 0; m < 12; m++) {
+    for (const k of ['plan_amount', 'plan_gross']) if (c[k][m] != null) o[k][m] = (o[k][m] || 0) + c[k][m];
+    o.fact_amount[m] += c.fact_amount[m] || 0; o.fact_gross[m] += c.fact_gross[m] || 0;
+  }
+  return o;
+}
+function ring(p, size = 84, sub = '') {
+  const r = size / 2 - 7, C = 2 * Math.PI * r, d = C * Math.min(p || 0, 100) / 100, c = size / 2;
+  return `<svg class="ring" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" role="img" aria-label="Bajarilish ${pct(p)}">
+    <circle cx="${c}" cy="${c}" r="${r}" stroke="var(--card-2)" stroke-width="9" fill="none"/>
+    <circle cx="${c}" cy="${c}" r="${r}" stroke="${plCol(p)}" stroke-width="9" fill="none" stroke-linecap="round" stroke-dasharray="${d.toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 ${c} ${c})"/>
+    <text class="rt" x="${c}" y="${c + (sub ? 2 : 5)}" text-anchor="middle" style="font-size:${(size * (p != null && p >= 100 ? .15 : .165)).toFixed(1)}px">${p == null ? '—' : nf1.format(p) + '%'}</text>
+    ${sub ? `<text class="rs" x="${c}" y="${c + 15}" text-anchor="middle">${sub}</text>` : ''}</svg>`;
+}
+function periodLabel() {
+  const y = PL.year;
+  if (PL.mode === 'month') return `${MONTHS[PL.month]} ${y}`;
+  const to = PL.data.data_to;
+  const last = to && +to.slice(0, 4) === y ? dm(to) : '31.12';
+  return PL.mode === 'ytd' ? `01.01–${last} ${y}` : `${y} yil`;
+}
+function plChart(total) {
+  const y = PL.year, pk = PL.metric === 'gross' ? 'plan_gross' : 'plan_amount', fk = PL.metric === 'gross' ? 'fact_gross' : 'fact_amount';
+  const P = total[pk], F = total[fk];
+  const W = 360, H = 170, L = 30, B = 22, T = 8;
+  const max = Math.max(...P.map(v => v || 0), ...F, 1);
+  const step = niceStep(max / 3), top = Math.ceil(max / step) * step;
+  const yy = v => T + (H - T - B) * (1 - v / top), bw = (W - L) / 12;
+  let g = '';
+  for (let v = 0; v <= top + 1; v += step) g += `<line x1="${L}" x2="${W}" y1="${yy(v)}" y2="${yy(v)}" stroke="var(--line)" ${v ? 'stroke-dasharray="2 3"' : ''}/><text class="ax" x="${L - 4}" y="${yy(v) + 3}" text-anchor="end">${nf0.format(v / 1e9)}</text>`;
+  for (let m = 0; m < 12; m++) {
+    const x = L + m * bw, e = elapsed(y, m), D = dim(y, m);
+    if (P[m]) g += `<rect x="${x + 3}" y="${yy(P[m])}" width="${bw - 6}" height="${yy(0) - yy(P[m])}" rx="3" fill="var(--card-2)" stroke="var(--line)"/>`;
+    if (F[m]) { const pp = P[m] ? F[m] / (P[m] * e / D) * 100 : null;
+      g += `<rect x="${x + 7}" y="${yy(F[m])}" width="${bw - 14}" height="${yy(0) - yy(F[m])}" rx="2" fill="${P[m] ? plCol(pp) : 'var(--accent)'}"><title>${MONTHS[m]}: fakt ${money(F[m])}${P[m] ? ` · reja ${money(P[m])} · ${pct(pp)}` : ''}</title></rect>`; }
+    g += `<text class="ax" x="${x + bw / 2}" y="${H - 7}" text-anchor="middle" ${PL.mode === 'month' && m === PL.month ? 'style="font-weight:700;fill:var(--ink)"' : ''}>${MSHORT[m]}</text>`;
+  }
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Oylar bo'yicha reja va fakt">${g}</svg>`;
+}
+function renderPlanCtl() {
+  const d = PL.data;
+  const yrs = d.years.length > 1 ? `<select id="plYear" aria-label="Yil">${d.years.map(y => `<option ${y === PL.year ? 'selected' : ''}>${y}</option>`).join('')}</select>` : `<span class="tchip">${PL.year}</span>`;
+  const mon = PL.mode === 'month' ? `<select id="plMon" aria-label="Oy">${MONTHS.map((n, i) => `<option value="${i}" ${i === PL.month ? 'selected' : ''}>${n}</option>`).join('')}</select>` : '';
+  $('plCtl').innerHTML = `${yrs}<span class="mseg" id="plMode"><button data-v="month" aria-pressed="${PL.mode === 'month'}">Oy</button><button data-v="ytd" aria-pressed="${PL.mode === 'ytd'}">Yil boshidan</button><button data-v="year" aria-pressed="${PL.mode === 'year'}">Yil</button></span>${mon}
+    <span class="mseg" id="plMet"><button data-v="amount" aria-pressed="${PL.metric === 'amount'}">Savdo</button><button data-v="gross" aria-pressed="${PL.metric === 'gross'}">Gross</button></span>`;
+  const y = $('plYear'); if (y) y.onchange = () => loadPlan(+y.value);
+  const m = $('plMon'); if (m) m.onchange = () => { PL.month = +m.value; renderPlan(); };
+  $('plMode').querySelectorAll('button').forEach(b => b.onclick = () => { PL.mode = b.dataset.v; renderPlan(); });
+  $('plMet').querySelectorAll('button').forEach(b => b.onclick = () => { PL.metric = b.dataset.v; renderPlan(); });
+}
+function renderPlan() {
+  const host = $('plBody'), d = PL.data;
+  if (!d) return;
+  if (!d.cats.length) {
+    $('plCtl').innerHTML = '';
+    host.innerHTML = `<div class="card"><div class="empty">Reja hali yuklanmagan.<br>${META.can_upload ? "«📥» bo'limidan reja faylini yuklang: Гурух | Категория | январь … декабрь | Жами, sarlavha ustida yil. Gross marja rejasi — shu formatda «Маржа» nomli ikkinchi varaqda." : 'Administrator reja faylini yuklashini kuting.'}</div></div>`;
+    return;
+  }
+  renderPlanCtl();
+  const isG = PL.metric === 'gross';
+  if (isG && !d.cats.some(c => c.plan_gross.some(v => v != null))) {
+    host.innerHTML = `<div class="card"><div class="empty">Gross marja rejasi yuklanmagan — reja faylida «Маржа» nomli varaq qo'shing (format xuddi savdo varag'idek).</div></div>`;
+    return;
+  }
+  // spravochnikda yo'q kategoriyalarning fakti yo'q — jami va guruh bajarilishiga qo'shilmaydi, alohida ko'rsatiladi
+  const live = d.cats.filter(c => c.in_db), orphan = d.cats.filter(c => !c.in_db);
+  if (!live.length) { host.innerHTML = `<div class="card"><div class="empty">Rejadagi kategoriyalar tovar spravochnigida hali yo'q — fakt chiqishi uchun spravochnikni yuklang.</div></div>`; return; }
+  const groups = {};
+  live.forEach(c => (groups[c.grp] = groups[c.grp] || []).push(c));
+  const gnames = Object.keys(groups).sort();
+  const total = plSumRows(live, 'Jami'), T = plCalc(total);
+  const mode = PL.mode, perWord = mode === 'year' ? 'yillik reja' : 'davr rejasi';
+  const fullWord = mode === 'month' ? 'oylik' : 'yillik';
+  const grossLine = c => {
+    const fp = c.factAmt ? c.factG / c.factAmt * 100 : null, pp = c.planAmt && c.planG ? c.planG / c.planAmt * 100 : null;
+    return fp == null && pp == null ? '' : `gross ${pct(fp)}${pp != null ? ` · reja ${pct(pp)}` : ''}`;
+  };
+  const head = `<div class="card"><div class="sh"><span class="label">${esc(periodLabel())} · ${gnames.join(' + ')} · ${isG ? 'gross marja' : 'savdo'}</span>
+      ${T.expPct != null && mode !== 'ytd' ? `<span class="pill warn">kutilgan ${pct(T.expPct)}</span>` : ''}</div>
+    <div class="plh">${ring(T.pct, 88, mode === 'year' ? 'yillikdan' : 'bajarildi')}
+      <div class="tx"><span class="v">${money(T.fact)}</span>
+        <span class="p">${mode === 'year' ? `yillik reja <b>${money(T.full)}</b> · davrgacha ${money(T.per)}` : `${perWord} <b>${money(T.per)}</b> · ${fullWord} ${money(T.full)}`}</span>
+        ${T.forecast != null ? `<span class="p">prognoz <b>${money(T.forecast)}</b>${T.full ? ` (${pct(T.forecast / T.full * 100)})` : ''}</span>` : ''}
+        ${mode === 'month' && T.need != null ? `<span class="p">kunlik kerak <b>${money(T.need)}</b> · hozir ${money(T.nowDaily)}</span>` : ''}
+        ${mode !== 'month' && mode !== 'year' && T.full ? `<span class="p">yillik rejaning <b>${pct(T.fullPct)}</b> · kutilgan ${pct(T.expPct)}</span>` : ''}
+        ${isG ? `<span class="p">${grossLine(T)}</span>` : ''}
+        ${mode !== 'month' && d.data_from && d.data_from > `${PL.year}-01-01` && d.data_from.slice(0, 4) == PL.year ? `<span class="hint">⚠ bazada savdo ${dm(d.data_from)} dan bor — davr rejasi shu kundan hisoblandi</span>` : ''}</div></div></div>`;
+  const gcards = `<div class="plgs">${gnames.map(g => { const c = plCalc(plSumRows(groups[g], g));
+    return `<div class="plg ${gnames.length === 1 ? 'solo' : ''}">${ring(c.pct, 80)}<b>${esc(g)}</b>
+      <span class="p">${money(c.fact)} / ${money(mode === 'year' ? c.full : c.per)}</span>
+      <span class="p">${isG ? grossLine(c) : `gross ${pct(c.factAmt ? c.factG / c.factAmt * 100 : null)}${c.planAmt && c.planG ? ` · reja ${pct(c.planG / c.planAmt * 100)}` : ''}`}</span></div>`; }).join('')}</div>`;
+  const chart = `<div class="card plc"><div class="sh"><span class="label">Oylar bo'yicha · mlrd so'm</span><span class="hint">kulrang — reja</span></div>${plChart(total)}
+    <div class="legend"><span><i style="background:var(--good)"></i>≥100%</span><span><i style="background:var(--s4)"></i>95–100%</span><span><i style="background:var(--bad)"></i>&lt;95%</span></div></div>`;
+  const col3 = mode === 'year' ? 'Yillik reja' : 'Davr reja';
+  const bn = v => (v == null ? '—' : nf2.format(v / 1e9));      // jadvalda — mlrd so'm
+  const row = (c, cls, nameHtml) => `${nameHtml}<span class="${cls}">${c.hasPlan ? bn(mode === 'year' ? c.full : c.per) : '—'}</span><span class="${cls}"><b>${bn(c.fact)}</b>${isG && c.factAmt ? `<span class="s2">${pct(c.factG / c.factAmt * 100)}</span>` : ''}</span><span class="${cls}">${c.hasPlan ? plPill(c.pct) : '—'}</span>`;
+  let rows = '';
+  for (const g of gnames) {
+    rows += row(plCalc(plSumRows(groups[g], g)), 'g', `<span class="n g">${esc(g)}</span>`);
+    for (const c of groups[g])
+      rows += row(plCalc(c), '', `<button class="n" data-cid="${c.id}" title="Kategoriya ko'rsatkichlariga o'tish">${esc(c.name)}</button>`);
+  }
+  rows += row(T, 'g', `<span class="n g">Jami</span>`);
+  const table = `<div class="card"><div class="sh"><span class="label">Kategoriyalar · ${isG ? 'gross marja' : 'savdo'}</span><span class="hint">bosilsa — kategoriyaga o'tadi</span></div>
+    <div class="plt"><span class="n h">Kategoriya</span><span class="h">${col3}</span><span class="h">Fakt</span><span class="h">%</span>${rows}</div>
+    <span class="hint">summalar — mlrd so'm</span>
+    ${orphan.length ? `<span class="hint">⚠ Rejada bor, tovar spravochnigida yo'q (fakt yo'q, jamiga qo'shilmadi): ${orphan.map(c => `${esc(c.name)} (${esc(c.grp)}, ${PL.mode === 'month' ? MONTHS[PL.month].toLowerCase() : 'yillik'} reja ${money(PL.mode === 'month' ? c[isG ? 'plan_gross' : 'plan_amount'][PL.month] : sum(c[isG ? 'plan_gross' : 'plan_amount']))})`).join(', ')}</span>` : ''}</div>`;
+  const note = `<p class="foot">Davr rejasi = oylik reja × o'tgan kunlar / oy kunlari (ma'lumot ${dm(d.data_to)} gacha). Bajarilish = fakt / davr rejasi.
+    Prognoz — hozirgi o'rtacha kunlik sur'at bilan. Reja oy × kategoriya bo'yicha, shuning uchun hudud/brend filtrlari bu yerda qo'llanmaydi.</p>`;
+  host.innerHTML = head + gcards + chart + table + note;
+  host.querySelectorAll('button[data-cid]').forEach(b => b.onclick = () => {
+    const c = META.categories.find(x => String(x.id) === b.dataset.cid); if (!c) return;
+    st.cat = c.key; st.f = {}; st.aExpand = {}; st.aOpen = null; st.rows = 'region'; st.cols = '';
+    resetView(); load(); setTab('Umumiy');
+  });
+}
+async function loadPlan(year) {
+  PL.loading = true;
+  $('plBody').classList.add('loading');
+  try {
+    const d = await api('plan' + (year ? `?year=${year}` : ''));
+    PL.data = d; PL.year = d.year;
+    if (PL.month == null || year) {
+      const to = d.data_to;
+      PL.month = to && +to.slice(0, 4) === d.year ? +to.slice(5, 7) - 1 : 11;
+    }
+    renderPlan();
+  } catch (e) { $('plBody').innerHTML = `<div class="errbox">${esc(e.message)}</div>`; }
+  finally { PL.loading = false; $('plBody').classList.remove('loading'); }
+}
+
 // ---------------------------------------------------------------- tablar: Umumiy / Qirqim / Tovarlar
 let TAB = 'Umumiy';
 function setTab(t) {
   TAB = t;
-  ['Umumiy', 'Qirqim', 'Tovarlar'].forEach(x => { $('pane' + x).hidden = x !== t; });
+  ['Umumiy', 'Qirqim', 'Tovarlar', 'Reja'].forEach(x => { $('pane' + x).hidden = x !== t; });
+  const rj = t === 'Reja';                            // reja — kategoriya/davr/filtrga bog'liq emas
+  $('catBtn').hidden = rj; $('topAnalytics').hidden = rj; $('upTitle').hidden = !rj;
+  if (rj) { $('upTitle').textContent = 'Reja bajarilishi'; $('tmeta').textContent = META.data_to ? `ma'lumot ${dm(META.data_to)} gacha` : ''; }
+  else updMeta();
+  if (rj && !PL.data && !PL.loading) loadPlan();
   document.querySelectorAll('#tabbar button').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === t));
   window.scrollTo(0, 0);
   if (t === 'Umumiy') renderChart();                 // yashirin paytda kenglik 0 bo'ladi — qayta chizamiz
@@ -1032,12 +1215,14 @@ function setView(v) {
   $('topAnalytics').hidden = v !== 'analytics';
   $('catBtn').hidden = v !== 'analytics';
   $('upTitle').hidden = v === 'analytics';
+  $('upTitle').textContent = 'Fayl yuklash';
   updMeta();
   $('viewAnalytics').hidden = v !== 'analytics';
   $('viewUpload').hidden = v !== 'upload';
   $('tabbar').hidden = v !== 'analytics';
   if (v === 'upload') loadHistory();
-  if (v === 'analytics' && NEED_REFRESH) { NEED_REFRESH = false; refreshMeta(); }
+  if (v === 'analytics' && NEED_REFRESH) { NEED_REFRESH = false; PL.data = null; refreshMeta(); }
+  if (v === 'analytics' && TAB === 'Reja') setTab('Reja');
   syncBack();
   window.scrollTo(0, 0);
 }

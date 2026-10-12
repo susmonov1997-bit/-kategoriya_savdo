@@ -11,6 +11,7 @@ Endpointlar (hammasi Authorization: tma <initData> talab qiladi):
   POST /api/share-daily kunlar bo'yicha ulush: tanlangan o'lchovning TOP-N qiymati + "Boshqalar"
   GET  /api/product/{id} SKU kartasi (xususiyatlar)
   POST /api/attributes  xususiyatlar bloklari: har bir xususiyat va brend bo'yicha barcha qiymatlar, ulush va pp
+  GET  /api/plan?year=  yillik reja (oy × kategoriya) va fakt (oy × kategoriya): savdo va gross marja
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ from api_auth import User, allowed_categories, current_user
 from api_queries import (JOINS, Q, compare_period, delta, dimension, kpi_from, load_attrs, metrics_sql)
 from api_schemas import BreakdownRequest, Filters, Kpi
 from api_upload import can_upload, router as upload_router
+from loaders_common import name_key
 
 log = logging.getLogger(__name__)
 
@@ -195,6 +197,7 @@ async def meta(request: Request, user: User = Depends(current_user)):
                        "sku": "SKU", "status": "Status", "category": "Kategoriya", "owner": "Mas'ul"},
         "data_from": span["d1"], "data_to": span["d2"],
         "last_upload": last["finished_at"] if last else None,
+        "plan_years": [r["year"] for r in await pool.fetch("SELECT DISTINCT year FROM sales_plan ORDER BY year")],
         "fx_rate": float(rate["rate"]) if rate else None, "fx_from": rate["valid_from"] if rate else None,
     }
 
@@ -473,6 +476,49 @@ async def attributes(f: Filters, request: Request, user: User = Depends(current_
                         "unit": attrs[int(dim[5:])].unit if dim.startswith("attr:") else None,
                         "total": tc, "items": [{k: v for k, v in i.items() if k != "sort"} for i in items]})
     return {"blocks": out}
+
+
+@app.get("/api/plan")
+async def plan(request: Request, year: int | None = None, user: User = Depends(current_user)):
+    """Reja va fakt: har bir kategoriya uchun 12 oylik massivlar. Bajarilish %, davr rejasi va prognoz —
+    mijozda (data_to bo'yicha) hisoblanadi. Kategoriya menejeriga faqat o'z kategoriyalari rejasi ko'rinadi."""
+    pool = request.app.state.pool
+    years = [r["year"] for r in await pool.fetch("SELECT DISTINCT year FROM sales_plan ORDER BY year")]
+    span = await pool.fetchrow("SELECT min(sale_date) d1, max(sale_date) d2 FROM sales_daily")
+    data_from, data_to = span["d1"], span["d2"]
+    if not years:
+        return {"year": year, "years": [], "data_from": data_from, "data_to": data_to, "cats": []}
+    if year is None or year not in years:
+        year = data_to.year if data_to and data_to.year in years else years[-1]
+    allowed = await allowed_categories(user)
+    cats = {name_key(r["name"]): r for r in await pool.fetch("SELECT id, name, grp FROM categories")}
+    out: dict[str, dict] = {}
+    for r in await pool.fetch("SELECT month, name_key, category, grp, plan_amount, plan_gross FROM sales_plan "
+                              "WHERE year = $1 ORDER BY category, month", year):
+        c = cats.get(r["name_key"])
+        if allowed is not None and (c is None or c["id"] not in allowed):
+            continue
+        d = out.setdefault(r["name_key"], {
+            "key": r["name_key"], "id": c["id"] if c else None, "name": c["name"] if c else r["category"],
+            "grp": r["grp"] or (c["grp"] if c else None) or "—", "in_db": c is not None,
+            "plan_amount": [None] * 12, "plan_gross": [None] * 12, "fact_amount": [0.0] * 12, "fact_gross": [0.0] * 12})
+        m = r["month"] - 1
+        d["plan_amount"][m] = float(r["plan_amount"]) if r["plan_amount"] is not None else None
+        d["plan_gross"][m] = float(r["plan_gross"]) if r["plan_gross"] is not None else None
+    ids = {d["id"]: d for d in out.values() if d["id"] is not None}
+    if ids:
+        from datetime import date as _date
+        rows = await pool.fetch(
+            """SELECT extract(month FROM e.sale_date)::int m, p.category_id cid, sum(e.amount) a, sum(e.margin) g
+               FROM sales_enriched e JOIN products p USING (product_id)
+               WHERE e.sale_date BETWEEN $1 AND $2 AND p.category_id = ANY($3::int[]) GROUP BY 1, 2""",
+            _date(year, 1, 1), _date(year, 12, 31), list(ids))
+        for r in rows:
+            d = ids[r["cid"]]
+            d["fact_amount"][r["m"] - 1] = float(r["a"] or 0)
+            d["fact_gross"][r["m"] - 1] = float(r["g"] or 0)
+    return {"year": year, "years": years, "data_from": data_from, "data_to": data_to,
+            "cats": sorted(out.values(), key=lambda d: (d["grp"], -sum(v or 0 for v in d["plan_amount"])))}
 
 
 # ---------------------------------------------------------------------------

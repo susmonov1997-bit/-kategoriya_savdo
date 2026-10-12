@@ -8,12 +8,14 @@ import asyncpg
 import loaders_bonus as bonus
 import loaders_branches as branches
 import loaders_owners as owners
+import loaders_plan as plan
 import loaders_products as products
 import loaders_sales as sales
 from loaders_common import LoaderError, read_headers
 
 KIND_NAMES = {"products": "Tovar spravochnigi", "branches": "Filial spravochnigi", "sales": "Savdo fayli",
-              "bonus": "Qo'shimcha daromad %", "owners": "Mas'ullar ro'yxati"}
+              "bonus": "Qo'shimcha daromad %", "owners": "Mas'ullar ro'yxati",
+              "plan": "Savdo rejasi"}
 
 
 def detect_kind(data: bytes) -> str | None:
@@ -32,6 +34,8 @@ def detect_kind(data: bytes) -> str | None:
             return "bonus"
         if owners.is_owners_file(h):
             return "owners"
+        if plan.is_plan_file(h):
+            return "plan"
     return None
 
 
@@ -50,6 +54,9 @@ async def load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int 
     if kind == "owners":
         r = await owners.load_owners(pool, data, file_name, tg_user_id)
         return kind, owners.format_report(r), r.upload_id
+    if kind == "plan":
+        r = await plan.load_plan(pool, data, file_name, tg_user_id)
+        return kind, plan.format_report(r), r.upload_id
     if kind == "bonus":
         r = await bonus.load_bonus(pool, data, file_name, tg_user_id)
         return kind, bonus.format_report(r), r.upload_id
@@ -59,7 +66,8 @@ async def load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int 
         "• Tovar spravochnigi: Категория, Товар Ид, Товар номи, Бренд + xususiyat ustunlari (Turi, Balandlik (sm), Rang…)\n"
         "• Filial spravochnigi: Территория, Филиал, Кластер\n"
         "• Qo'shimcha daromad: Категория, Бренд, Қўшимча даромад %\n"
-        "• Mas'ullar ro'yxati: Группа, Категория, Жавобгар КМ")
+        "• Mas'ullar ro'yxati: Группа, Категория, Жавобгар КМ\n"
+        "• Savdo rejasi: Гурух, Категория, январь … декабрь (sarlavha ustida yil)")
 
 
 async def load_any(pool, data: bytes, file_name: str | None, tg_user_id: int | None) -> str:
