@@ -23,7 +23,7 @@ from db import create_pool, migrate
 from fact import ensure_fact
 from loaders_common import LoaderError
 from loaders_dispatch import load_any, load_any_ex
-from notify import broadcast_upload
+from notify import broadcast_upload, get_setting, is_muted, period_text, send_users_update, set_setting
 from export_missing import build_missing_xlsx, file_name as missing_file_name, has_missing, missing_caption, report_of
 
 log = logging.getLogger(__name__)
@@ -68,6 +68,7 @@ async def start(m: Message, pool: asyncpg.Pool) -> None:
         text += "\n/kurs — dollar kursi (front marja uchun)"
         if acc.is_admin:
             text += "\n/users — foydalanuvchilar va kirish so'rovlari"
+            text += "\n/xabar — yuklashdan keyingi xabarlarni o'chirish/yoqish"
         await m.answer(text, reply_markup=_app_kb())
         return
     if acc.status == "pending":
@@ -289,6 +290,70 @@ async def kurs_cmd(m: Message, pool: asyncpg.Pool) -> None:
     if m.from_user.id in config.ADMIN_IDS:
         lines.append("\nO'zgartirish: <code>/kurs 12000</code> (bugundan) yoki <code>/kurs 12000 05.10.2026</code>")
     await m.answer("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# /xabar — yuklashdan keyingi xabarlarni o'chirish/yoqish (faqat admin). Ko'p fayl ketma-ket yuklanganda
+# foydalanuvchilarni bezovta qilmaslik uchun. Holat bazada (app_settings) saqlanadi.
+async def _xabar_view(pool) -> tuple[str, InlineKeyboardMarkup]:
+    muted = await is_muted(pool)
+    a, b = await get_setting(pool, "muted_from"), await get_setting(pool, "muted_to")
+    if muted:
+        text = ("🔕 <b>Yuklashdan keyingi xabarlar O'CHIRILGAN</b>\n"
+                "Fayl yuklanganda foydalanuvchilarga ham, boshqa adminlarga ham xabar bormaydi "
+                "(yuklagan odamning o'ziga hisobot boradi).")
+        if a:
+            text += f"\n\nO'chirilgan paytda yuklangan savdo: <b>{period_text([a, b])}</b>"
+        kb = [[InlineKeyboardButton(text="🔔 Yoqish", callback_data="ntf:on")]]
+        if a:
+            kb.append([InlineKeyboardButton(text="🔔 Yoqish + hammaga bitta xabar yuborish", callback_data="ntf:on_send")])
+    else:
+        text = ("🔔 <b>Yuklashdan keyingi xabarlar YOQILGAN</b>\n"
+                "Savdo yuklanganda hammaga «Savdo ma'lumoti yangilandi», adminlarga — to'liq hisobot boradi.\n\n"
+                "Ko'p fayl ketma-ket yuklayotgan bo'lsangiz, vaqtincha o'chirib qo'ying.")
+        kb = [[InlineKeyboardButton(text="🔕 O'chirish", callback_data="ntf:off")]]
+    return text, InlineKeyboardMarkup(inline_keyboard=kb)
+
+
+@router.message(Command("xabar"))
+async def xabar_cmd(m: Message, pool: asyncpg.Pool) -> None:
+    if not (await get_access(pool, m.from_user.id)).is_admin:
+        await m.answer("⛔ Xabarlarni faqat admin boshqaradi.")
+        return
+    arg = ((m.text or "").split() + [""])[1].lower()
+    if arg in ("off", "ochir", "o'chir", "0"):
+        await set_setting(pool, "notify_muted", "1", m.from_user.id)
+    elif arg in ("on", "yoq", "1"):
+        await set_setting(pool, "notify_muted", "0", m.from_user.id)
+    text, kb = await _xabar_view(pool)
+    await m.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("ntf:"))
+async def xabar_cb(c: CallbackQuery, pool: asyncpg.Pool, bot: Bot) -> None:
+    if not (await get_access(pool, c.from_user.id)).is_admin:
+        await c.answer("Faqat admin uchun", show_alert=True)
+        return
+    act = c.data.split(":", 1)[1]
+    note = ""
+    if act == "off":
+        await set_setting(pool, "notify_muted", "1", c.from_user.id)
+        await set_setting(pool, "muted_from", None)
+        await set_setting(pool, "muted_to", None)
+    else:
+        a, b = await get_setting(pool, "muted_from"), await get_setting(pool, "muted_to")
+        await set_setting(pool, "notify_muted", "0", c.from_user.id)
+        if act == "on_send" and a:
+            n = await send_users_update(pool, bot, period_text([a, b]), {c.from_user.id})
+            note = f"\n\n📨 {n} kishiga «Savdo ma'lumoti yangilandi: {period_text([a, b])}» yuborildi."
+        await set_setting(pool, "muted_from", None)
+        await set_setting(pool, "muted_to", None)
+    text, kb = await _xabar_view(pool)
+    try:
+        await c.message.edit_text(text + note, reply_markup=kb)
+    except Exception:  # noqa: BLE001
+        await c.message.answer(text + note, reply_markup=kb)
+    await c.answer("Saqlandi")
 
 
 @router.message(Command("status"))

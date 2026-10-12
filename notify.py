@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 TG_LIMIT = 3900
 
 
-def _period(dates: list[str] | None) -> str:
+def period_text(dates: list[str] | None) -> str:
     if not dates:
         return ""
     f = lambda d: f"{d[8:10]}.{d[5:7]}.{d[0:4]}"  # noqa: E731
@@ -51,12 +51,60 @@ async def _chunks(bot: Bot, chat_id: int, text: str, kb=None) -> None:
         await bot.send_message(chat_id, p, reply_markup=kb if i == len(parts) - 1 else None)
 
 
+async def get_setting(pool, key: str) -> str | None:
+    return await pool.fetchval("SELECT value FROM app_settings WHERE key = $1", key)
+
+
+async def set_setting(pool, key: str, value: str | None, by: int | None = None) -> None:
+    await pool.execute("""INSERT INTO app_settings(key, value, updated_by) VALUES ($1, $2, $3)
+                          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by,
+                                                          updated_at = now()""", key, value, by)
+
+
+async def is_muted(pool) -> bool:
+    return (await get_setting(pool, "notify_muted")) == "1"
+
+
+async def send_users_update(pool, bot: Bot, period: str, skip: set[int]) -> int:
+    """Tasdiqlangan foydalanuvchilarga qisqa "Savdo ma'lumoti yangilandi" xabari. Yuborilganlar sonini qaytaradi."""
+    users = [r["tg_id"] for r in await pool.fetch("SELECT tg_id FROM users WHERE status = 'approved'")]
+    kb = (InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text="📊 Savdoni ochish", web_app=WebAppInfo(url=config.WEBAPP_URL))]]) if config.WEBAPP_URL else None)
+    msg = f"📊 <b>Savdo ma'lumoti yangilandi</b>" + (f": {period}" if period else "")
+    n = 0
+    for u in users:
+        if u in skip:
+            continue
+        try:
+            await bot.send_message(u, msg, reply_markup=kb)
+            n += 1
+        except Exception as e:  # noqa: BLE001
+            log.warning("Foydalanuvchiga (%s) xabar yuborilmadi: %s", u, e)
+        await asyncio.sleep(0.05)
+    return n
+
+
 async def broadcast_upload(pool: asyncpg.Pool, kind: str, report_text: str, upload_id: int | None,
                            uploader_id: int, uploader_name: str = "", source: str = "bot",
                            file_name_: str | None = None, bot: Bot | None = None) -> None:
     """Xatolar yutiladi — xabar yuborilmasa ham yuklash natijasi o'zgarmaydi."""
     if not config.BOT_TOKEN:
         return
+    # admin /xabar bilan o'chirgan bo'lsa — hech kimga yuborilmaydi (yuklagan odamning o'z hisoboti alohida boradi);
+    # savdo sanalari eslab qolinadi — yoqilganda bitta umumiy xabar yuborish mumkin
+    try:
+        if await is_muted(pool):
+            if kind == "sales" and upload_id:
+                async with pool.acquire() as con:
+                    rep = await report_of(con, upload_id)
+                d = (rep or {}).get("dates") or []
+                if d:
+                    a, b = await get_setting(pool, "muted_from"), await get_setting(pool, "muted_to")
+                    await set_setting(pool, "muted_from", min(filter(None, [a, d[0]])))
+                    await set_setting(pool, "muted_to", max(filter(None, [b, d[-1]])))
+            return
+    except Exception:  # noqa: BLE001
+        log.exception("Xabar sozlamasini o'qib bo'lmadi — xabarlar odatdagidek yuboriladi")
     own = bot is None
     if own:
         bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -65,7 +113,7 @@ async def broadcast_upload(pool: asyncpg.Pool, kind: str, report_text: str, uplo
         if kind == "sales" and upload_id:
             async with pool.acquire() as con:
                 rep = await report_of(con, upload_id)
-        period = _period(rep.get("dates") if rep else None)
+        period = period_text(rep.get("dates") if rep else None)
         who = await _who(pool, uploader_id, uploader_name)
 
         # --- 1. Adminlarga to'liq hisobot ---
@@ -91,19 +139,7 @@ async def broadcast_upload(pool: asyncpg.Pool, kind: str, report_text: str, uplo
         # --- 2. Savdo yangilansa — hammaga qisqa xabar ---
         if kind != "sales":
             return
-        users = [r["tg_id"] for r in await pool.fetch("SELECT tg_id FROM users WHERE status = 'approved'")]
-        skip = {uploader_id, *config.ADMIN_IDS}
-        kb = (InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-            text="📊 Savdoni ochish", web_app=WebAppInfo(url=config.WEBAPP_URL))]]) if config.WEBAPP_URL else None)
-        msg = f"📊 <b>Savdo ma'lumoti yangilandi</b>" + (f": {period}" if period else "")
-        for u in users:
-            if u in skip:
-                continue
-            try:
-                await bot.send_message(u, msg, reply_markup=kb)
-            except Exception as e:  # noqa: BLE001
-                log.warning("Foydalanuvchiga (%s) xabar yuborilmadi: %s", u, e)
-            await asyncio.sleep(0.05)
+        await send_users_update(pool, bot, period, {uploader_id, *config.ADMIN_IDS})
     except Exception:  # noqa: BLE001
         log.exception("Yuklashdan keyingi xabarlarni yuborib bo'lmadi")
     finally:
