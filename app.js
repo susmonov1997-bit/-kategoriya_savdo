@@ -73,6 +73,7 @@ const st = {
   chartMetric: 'amount', shareView: 'struct', pvMode: 'amount', metric: 'amount',
   aExpand: {}, aOpen: null, topOpen: false, showAll: false,
 };
+const NAV = [];          // kategoriyaga kirish tarixi: «‹ Orqaga» uchun {cat, f, y}
 const labels = {};       // "dim|key" -> nom (chip va breadcrumb uchun)
 const remember = (d, k, l) => { labels[d + '|' + k] = l; };
 const allScopes = () => [...META.categories, ...(META.scopes || [])];
@@ -87,18 +88,20 @@ const mnum = k => (MQ() ? nf0.format(k.qty || 0) : money(k.amount));
 const mdelta = d => (d ? (MQ() ? d.qty : d.amount) : null);
 // Kompaniya jamisidagi ulush (maxraj — company_daily, «К»siz; faqat joy filtrlari)
 const LOC_WORD = {region: 'hududda', cluster: 'klasterda', branch: 'filialda'};
-function compShare(curK, prevK, comp) {
+function compShare(curK, prevK, comp, baseCur, basePrev) {
   // Ulush = bizning savdo / set jami («К»siz) — tepadagi filtr davri bo'yicha, ikkala tomon bir xil kunlar.
   // Set jami (company_daily) yo'q kunlarda jami = bizning savdo deb olinadi (jami bizning savdodan kam bo'lmaydi),
   // ya'ni maxraj = kompaniya jami (bor kunlar) + bizning savdo (kompaniya jami yo'q kunlar).
   comp = comp || {};
   const key = MQ() ? 'qty' : 'amount';
   const unc = (k, f) => Math.max(0, (k[f] || 0) - (k['cov_' + f] != null ? k['cov_' + f] : (k[f] || 0)));
-  const sh = (k, f, cv) => { if (!k) return null; const den = (cv || 0) + unc(k, f); return den > 0 ? (k[f] || 0) / den * 100 : null; };
-  const s = sh(curK, key, comp['c_' + key]), ps = sh(prevK, key, comp['p_' + key]);
-  const g = sh(curK, 'gross', comp.c_gross), pg = sh(prevK, 'gross', comp.p_gross);
+  // baseCur/basePrev — maxrajdagi "set jami yo'q kunlar" uchun bizning JAMI savdo (kategoriya/brend qatorida
+  // o'zining savdosi emas, barcha kategoriyalarimiz savdosi olinadi); berilmasa — qatorning o'zi
+  const sh = (k, f, cv, b) => { if (!k) return null; const den = (cv || 0) + unc(b || k, f); return den > 0 ? (k[f] || 0) / den * 100 : null; };
+  const s = sh(curK, key, comp['c_' + key], baseCur), ps = sh(prevK, key, comp['p_' + key], basePrev);
+  const g = sh(curK, 'gross', comp.c_gross, baseCur), pg = sh(prevK, 'gross', comp.p_gross, basePrev);
   return {s, pp: s != null && ps != null ? s - ps : null, g, gpp: g != null && pg != null ? g - pg : null,
-          den: (comp['c_' + key] || 0) + unc(curK, key)};
+          den: (comp['c_' + key] || 0) + unc(baseCur || curK, key)};
 }
 function locScopeWord() {
   const ids = ['region', 'cluster', 'branch'].filter(d => st.f[d] && st.f[d].size);
@@ -268,7 +271,7 @@ function openCatSheet() {
     sb.querySelectorAll('.optrow').forEach(b => b.onclick = () => {
       const k = b.dataset.k; closeSheet();
       if (k === st.cat) return;
-      st.cat = k; st.f = {}; st.aExpand = {}; st.aOpen = null; st.rows = 'region'; st.cols = ''; resetView(); load();
+      NAV.length = 0; st.cat = k; st.f = {}; st.aExpand = {}; st.aOpen = null; st.rows = 'region'; st.cols = ''; resetView(); load(); syncBack();
     });
   };
   wire();
@@ -407,38 +410,88 @@ function renderKpis(s) {
 
 // --- Umumiy: kategoriyalar (bir nechta kategoriya) yoki brendlar (bitta kategoriya) ro'yxati
 let LIST_ALL = false;
+const G_OPEN = new Set();          // ochiq guruhlar (KBT/MBT) — seans davomida saqlanadi
+const KPI_KEYS = ['amount', 'qty', 'bonus_qty', 'gross', 'income', 'margin', 'cov_amount', 'cov_qty', 'cov_gross'];
+function sumK(list) {
+  const o = Object.fromEntries(KPI_KEYS.map(k => [k, 0]));
+  list.forEach(k => KPI_KEYS.forEach(f => { o[f] += (k && k[f]) || 0; }));
+  o.margin_pct = o.amount ? o.margin / o.amount * 100 : null;
+  o.gross_pct = o.amount ? o.gross / o.amount * 100 : null;
+  return o;
+}
+const rel = (a, b) => (b ? (a - b) / Math.abs(b) * 100 : null);
+function listCard(i, o) {
+  // o: {cls, ctl, grpShare, grpPP, sel}
+  const C = i.current, hasCmp = !!cmpRange();
+  const cs = SUM ? compShare(C, i.previous, SUM.company, SUM.current, SUM.previous) : null;
+  return `<button class="li can ${o.cls || ''}" ${o.attr || ''}>
+    <span class="r1"><span class="n">${o.ctl || ''}${esc(i.label)}${o.tag ? `<span class="tag">${o.tag}</span>` : ''}${o.sel ? ' ✓' : ''}</span><span class="v">${mnum(C)}</span></span>
+    ${o.bar != null ? `<span class="bar"><i style="width:${o.bar}%"></i></span>` : ''}
+    <span class="m">${o.grpShare != null ? `<span>guruhda <b>${pct(o.grpShare)}</b>${hasCmp ? ' ' + ppTxt(o.grpPP) : ''}</span>` : ''}
+      <span>${o.grpShare != null ? 'jamida' : 'ulush'} <b>${pct(i.share)}</b>${hasCmp ? ' ' + ppTxt(i.share_pp) : ''}</span>${hasCmp ? dTxt(mdelta(i.delta)) : ''}
+      ${cs && cs.s != null ? `<span class="setsh">set jamida <b>${pct(cs.s)}</b>${hasCmp && cs.pp != null ? ' ' + ppPlain(cs.pp) : ''}</span>` : ''}</span>
+    <span class="m"><span>gross <b class="${C.margin < 0 ? 'neg' : ''}">${money(C.margin)}</b> · ${pct(C.margin_pct)}</span>
+      <span>front <b class="${C.gross < 0 ? 'neg' : ''}">${money(C.gross)}</b> · ${pct(C.gross_pct)}</span><span>${qtyOrAmt(C)}</span></span></button>`;
+}
+function goCategory(c) {
+  NAV.push({cat: st.cat, f: Object.fromEntries(Object.entries(st.f).map(([d, v]) => [d, new Set(v)])), y: window.scrollY});
+  st.cat = c.key; st.f = {}; st.aExpand = {}; st.aOpen = null; st.rows = 'region'; st.cols = ''; LIST_ALL = false;
+  resetView(); load(); window.scrollTo(0, 0); syncBack();
+}
 function renderCatList() {
   if (!LIST) return;
   const multi = isMulti(), host = $('catList');
-  const b = {dim: LIST.dim, items: LIST.rows};
+  const items = LIST.rows.slice().sort((x, y) => mval(y.current) - mval(x.current));
   $('listH').textContent = multi ? 'Kategoriyalar' : 'Brendlar';
-  if (!b || !b.items.length) { host.innerHTML = `<div class="empty">Savdo yo'q</div>`; $('listHint').textContent = ''; return; }
-  const items = b.items.slice().sort((x, y) => mval(y.current) - mval(x.current));
-  items.forEach(i => remember(b.dim, i.key, i.label));
-  const sel = st.f[b.dim] || new Set();
-  $('listHint').textContent = multi ? 'bosing — kategoriyaga o\'tadi' : 'bosing — filtrga qo\'shiladi';
-  const shown = LIST_ALL ? items : items.slice(0, 8);
-  const max = Math.max(...items.map(i => i.share || 0), 1), hasCmp = !!cmpRange();
-  host.innerHTML = shown.map(i => { const C = i.current;
-    return `<button class="li can ${sel.has(i.key) ? 'op' : ''}" data-k="${esc(i.key)}">
-      <span class="r1"><span class="n">${esc(i.label)}${sel.has(i.key) ? ' ✓' : ''}</span><span class="v">${mnum(C)}</span></span>
-      <span class="bar"><i style="width:${(i.share || 0) / max * 100}%"></i></span>
-      <span class="m"><span>ulush <b>${pct(i.share)}</b>${hasCmp ? ' ' + ppTxt(i.share_pp) : ''}</span>${hasCmp ? dTxt(mdelta(i.delta)) : ''}
-        <span>gross <b>${money(C.margin)}</b> · ${pct(C.margin_pct)}</span><span>front <b>${money(C.gross)}</b> · ${pct(C.gross_pct)}</span>
-        <span>${qtyOrAmt(C)}</span></span></button>`; }).join('')
-    + (items.length > 8 ? `<button class="more" id="listMore">${LIST_ALL ? 'Qisqartirish' : `Hammasi (${items.length} ta)`}</button>` : '');
-  host.querySelectorAll('.li[data-k]').forEach(el => el.onclick = () => {
-    const k = el.dataset.k;
-    if (multi) {
-      const c = META.categories.find(c => String(c.id) === String(k)); if (!c) return;
-      st.cat = c.key; st.f = {}; st.aExpand = {}; st.aOpen = null; st.rows = 'region'; st.cols = ''; LIST_ALL = false;
-      resetView(); load(); window.scrollTo(0, 0); return;
+  if (!items.length) { host.innerHTML = `<div class="empty">Savdo yo'q</div>`; $('listHint').textContent = ''; return; }
+  items.forEach(i => remember(LIST.dim, i.key, i.label));
+  const hasCmp = !!cmpRange();
+  if (!multi) {                                     // bitta kategoriya — brendlar (bosilsa filtr)
+    const sel = st.f.brand || new Set();
+    $('listHint').textContent = "bosing — filtrga qo'shiladi";
+    const shown = LIST_ALL ? items : items.slice(0, 8);
+    const max = Math.max(...items.map(i => i.share || 0), 1);
+    host.innerHTML = shown.map(i => listCard(i, {cls: sel.has(i.key) ? 'op' : '', attr: `data-k="${esc(i.key)}"`, sel: sel.has(i.key),
+                                                 bar: (i.share || 0) / max * 100})).join('')
+      + (items.length > 8 ? `<button class="more" id="listMore">${LIST_ALL ? 'Qisqartirish' : `Hammasi (${items.length} ta)`}</button>` : '');
+    host.querySelectorAll('.li[data-k]').forEach(el => el.onclick = () => {
+      const k = el.dataset.k, set = new Set(st.f.brand || []); set.has(k) ? set.delete(k) : set.add(k);
+      if (set.size) st.f.brand = set; else delete st.f.brand;
+      resetView(); load();
+    });
+    const m = $('listMore'); if (m) m.onclick = () => { LIST_ALL = !LIST_ALL; renderCatList(); };
+    return;
+  }
+  // bir nechta kategoriya — KBT / MBT guruhlariga yig'ilgan
+  const grpOf = k => { const c = META.categories.find(c => String(c.id) === String(k)); return (c && c.group) || 'Boshqa'; };
+  const groups = {};
+  items.forEach(i => (groups[grpOf(i.key)] = groups[grpOf(i.key)] || []).push(i));
+  const names = Object.keys(groups).sort((a, b) => sumK(groups[b].map(i => i.current)).amount - sumK(groups[a].map(i => i.current)).amount);
+  if (names.length === 1) G_OPEN.add(names[0]);
+  const totCur = mval(sumK(items.map(i => i.current))), totPrev = hasCmp ? mval(sumK(items.map(i => i.previous))) : 0;
+  $('listHint').textContent = 'guruhni bosing — ochiladi';
+  const out = [];
+  for (const g of names) {
+    const rows = groups[g], cur = sumK(rows.map(i => i.current)), prev = hasCmp ? sumK(rows.map(i => i.previous)) : null;
+    const gs = totCur ? mval(cur) / totCur * 100 : null, gps = hasCmp && totPrev ? mval(prev) / totPrev * 100 : null;
+    const gi = {label: g, current: cur, previous: prev, share: gs, share_pp: gs != null && gps != null ? gs - gps : null,
+                delta: hasCmp ? {amount: rel(cur.amount, prev.amount), qty: rel(cur.qty, prev.qty)} : {}};
+    const op = G_OPEN.has(g);
+    out.push(listCard(gi, {cls: `grp ${op ? 'op' : ''}`, attr: `data-g="${esc(g)}" aria-expanded="${op}"`,
+                           ctl: `<span class="c">${op ? '▾' : '▸'}</span>`, tag: `${rows.length} kategoriya`, bar: gs || 0}));
+    if (!op) continue;
+    const gCur = mval(cur), gPrev = prev ? mval(prev) : 0, gmax = Math.max(...rows.map(i => mval(i.current)), 1);
+    for (const i of rows) {
+      const s1 = gCur ? mval(i.current) / gCur * 100 : null, s0 = hasCmp && gPrev && i.previous ? mval(i.previous) / gPrev * 100 : null;
+      out.push(listCard(i, {cls: 'sub', attr: `data-k="${esc(i.key)}"`, grpShare: s1, grpPP: s1 != null && s0 != null ? s1 - s0 : null,
+                            bar: mval(i.current) / gmax * 100}));
     }
-    const set = new Set(st.f.brand || []); set.has(k) ? set.delete(k) : set.add(k);
-    if (set.size) st.f.brand = set; else delete st.f.brand;
-    resetView(); load();
-  });
-  const m = $('listMore'); if (m) m.onclick = () => { LIST_ALL = !LIST_ALL; renderCatList(); };
+  }
+  host.innerHTML = out.join('');
+  host.querySelectorAll('.li[data-g]').forEach(el => el.onclick = () => {
+    const g = el.dataset.g; G_OPEN.has(g) ? G_OPEN.delete(g) : G_OPEN.add(g); renderCatList(); });
+  host.querySelectorAll('.li[data-k]').forEach(el => el.onclick = () => {
+    const c = META.categories.find(c => String(c.id) === String(el.dataset.k)); if (c) goCategory(c); });
 }
 // ---------------------------------------------------------------- kunlik grafik
 let DAILY = null;
@@ -1035,10 +1088,23 @@ $('colsDim').onchange = e => { st.cols = e.target.value === st.rows ? '' : e.tar
 $('sortBy').onchange = e => { st.sort = e.target.value; resetView(); reloadQirqim(); };
 document.querySelectorAll('#brMode button').forEach(b => b.onclick = () => { if (st.mode === b.dataset.m) return; st.mode = b.dataset.m; resetView(); renderBreakdown(); reloadQirqim(); });
 function syncBack() {
+  const nb = $('navBack');
+  if (nb) {
+    const prev = NAV.length ? allScopes().find(c => c.key === NAV[NAV.length - 1].cat) : null;
+    nb.hidden = !prev || VIEW !== 'analytics';
+    if (prev) nb.textContent = `‹ ${prev.name}`;
+  }
   if (!(tg && tg.BackButton)) return;
-  (sheetOpen() || VIEW === 'upload') ? tg.BackButton.show() : tg.BackButton.hide();
+  (sheetOpen() || VIEW === 'upload' || (NAV.length && VIEW === 'analytics')) ? tg.BackButton.show() : tg.BackButton.hide();
 }
-if (tg && tg.BackButton) tg.BackButton.onClick(() => { if (sheetOpen()) closeSheet(); else if (VIEW === 'upload') setView('analytics'); });
+function navBack() {
+  const p = NAV.pop(); if (!p) return;
+  st.cat = p.cat; st.f = p.f; st.aExpand = {}; st.aOpen = null; st.rows = 'region'; st.cols = ''; LIST_ALL = false;
+  resetView(); syncBack(); load().then(() => window.scrollTo(0, p.y || 0));
+}
+$('navBack').onclick = navBack;
+if (tg && tg.BackButton) tg.BackButton.onClick(() => {
+  if (sheetOpen()) closeSheet(); else if (VIEW === 'upload') setView('analytics'); else if (NAV.length) navBack(); });
 document.querySelectorAll('#chartMetric button').forEach(b => b.onclick = () => {
   st.chartMetric = b.dataset.m;
   document.querySelectorAll('#chartMetric button').forEach(x => x.setAttribute('aria-pressed', x === b));
@@ -1206,8 +1272,7 @@ function renderPlan() {
   host.innerHTML = head + gcards + chart + table + note;
   host.querySelectorAll('button[data-cid]').forEach(b => b.onclick = () => {
     const c = META.categories.find(x => String(x.id) === b.dataset.cid); if (!c) return;
-    st.cat = c.key; st.f = {}; st.aExpand = {}; st.aOpen = null; st.rows = 'region'; st.cols = '';
-    resetView(); load(); setTab('Umumiy');
+    goCategory(c); setTab('Umumiy');
   });
 }
 async function loadPlan(year) {

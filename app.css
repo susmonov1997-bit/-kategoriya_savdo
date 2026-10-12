@@ -379,3 +379,12 @@ button.x{border:0;background:none;font-size:20px;line-height:1;color:var(--muted
 .plt>button.n{border:0;border-top:1px solid var(--line);background:none;color:var(--accent);padding-left:14px;font:600 12.5px var(--font);text-align:left;cursor:pointer}
 .plt>span.n.sub{padding-left:14px}
 .plt .s2{display:block;font-size:11px;color:var(--muted);font-weight:500}
+
+/* kategoriyalar: KBT/MBT guruhlari, set jamidagi ulush, orqaga qaytish */
+.tchip.back{background:var(--accent-soft);color:var(--accent)}
+.li.grp{box-shadow:0 0 0 1.5px var(--line) inset,var(--shadow)}
+.li.grp.op{box-shadow:0 0 0 1.5px var(--accent) inset}
+.li.grp .tag{font-size:10.5px;color:var(--muted);font-weight:600;letter-spacing:.03em;margin-left:4px}
+.li.sub{margin-left:12px;background:color-mix(in srgb,var(--card) 92%,var(--accent) 3%)}
+.setsh{display:inline-flex;gap:4px;align-items:center;background:var(--warn-soft);color:var(--warn);border-radius:999px;padding:1px 8px;font-weight:600}
+.setsh b{color:inherit!important}
