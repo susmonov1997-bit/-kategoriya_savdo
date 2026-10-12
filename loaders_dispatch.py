@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 import asyncpg
@@ -13,6 +14,7 @@ import loaders_plan as plan
 import loaders_products as products
 import loaders_sales as sales
 from fact import ensure_fact
+from pending import format_resolved, resolve_pending
 from loaders_common import LoaderError, read_headers
 
 log = logging.getLogger(__name__)
@@ -56,14 +58,25 @@ async def load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int 
     return res
 
 
+async def _resolve(pool, upload_id: int) -> str:
+    """Spravochnik yuklangach — kutayotgan savdoni ulash; natija upload hisobotiga ham yoziladi."""
+    async with pool.acquire() as con:
+        async with con.transaction():
+            r = await resolve_pending(con)
+        if r["rows"] or r["comp_rows"]:
+            await con.execute("UPDATE uploads SET report = COALESCE(report, '{}'::jsonb) || jsonb_build_object('pending_resolved', $2::jsonb) "
+                              "WHERE id = $1", upload_id, json.dumps(r))
+    return format_resolved(r)
+
+
 async def _load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int | None) -> tuple[str, str, int]:
     kind = await asyncio.to_thread(detect_kind, data)
     if kind == "products":
         r = await products.load_products(pool, data, file_name, tg_user_id)
-        return kind, products.format_report(r), r.upload_id
+        return kind, products.format_report(r) + await _resolve(pool, r.upload_id), r.upload_id
     if kind == "branches":
         r = await branches.load_branches(pool, data, file_name, tg_user_id)
-        return kind, branches.format_report(r), r.upload_id
+        return kind, branches.format_report(r) + await _resolve(pool, r.upload_id), r.upload_id
     if kind == "sales":
         r = await sales.load_sales(pool, data, file_name, tg_user_id)
         return kind, sales.format_report(r), r.upload_id

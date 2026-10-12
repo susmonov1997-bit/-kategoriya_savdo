@@ -114,6 +114,7 @@ class SalesLoadReport:
     cost_mode: str = "split"                  # split — Сони×Кирим нархи×kurs; legacy — Жами(Кирим нархи)
     fx: list[dict] = field(default_factory=list)   # fayl sanalariga qo'llangan kurslar
     company: dict = field(default_factory=dict)    # kompaniya jami: amount, rows, k_excluded, unknown_branch_rows
+    pending: dict = field(default_factory=dict)    # kutayotgan savdo: rows, amount, skus
 
 
 def _fmt_mln(v: float) -> str:
@@ -246,6 +247,33 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
         for _, g in unk_br.groupby("br_key")
     ]
     ok = sc[sc["prod_cat"].notna() & sc["branch_id"].notna()].copy()
+
+    # --- kutayotgan savdo: spravochnikda yo'q SKU/filial qatorlari (bizning kategoriyalar — spravochnikdagi
+    #     yoki mas'ullar ro'yxatidagi) saqlanadi; spravochnik yuklanganda avtomatik ulanadi ---
+    own_keys = set(cats) | {r["name_key"] for r in await con.fetch("SELECT name_key FROM category_owner_list")}
+    pend_src = good[~good["is_k"] & good["cat_key"].isin(own_keys) & ~good.index.isin(ok.index)].copy()
+    pend_src["brand_txt"] = pend_src[COL_BRAND].map(clean_text) if COL_BRAND in pend_src.columns else None
+    pend = (pend_src.groupby(["d", "br_key", "pid", "is_bonus"], as_index=False)
+            .agg(branch_name=(COL_BRANCH, "first"), pname=(COL_NAME, "first"), category=(COL_CAT, "first"),
+                 brand=("brand_txt", "first"), qty=("qty", "sum"), amount=("amount", "sum"), cost=("cost", "sum"),
+                 cost_usd=("cost_usd", "sum"), cost_uzs=("cost_uzs", "sum"))) if len(pend_src) else pend_src
+    pend_records = [(r.d, r.br_key, clean_text(r.branch_name), int(r.pid), clean_text(r.pname), clean_text(r.category),
+                     r.brand if isinstance(r.brand, str) else None, bool(r.is_bonus), float(r.qty), float(r.amount),
+                     float(r.cost), float(r.cost_usd), float(r.cost_uzs), split, upload_id)
+                    for r in pend.itertuples(index=False)] if len(pend_src) else []
+    cpend_src = good[~good["is_k"] & good["branch_id_all"].isna()]
+    cpend = (cpend_src.groupby(["d", "br_key"], as_index=False)
+             .agg(branch_name=(COL_BRANCH, "first"), qty=("qty", "sum"), amount=("amount", "sum"), cost=("cost", "sum"),
+                  cost_usd=("cost_usd", "sum"), cost_uzs=("cost_uzs", "sum"))) if len(cpend_src) else cpend_src
+    cpend_records = [(r.d, r.br_key, clean_text(r.branch_name), float(r.qty), float(r.amount), float(r.cost),
+                      float(r.cost_usd), float(r.cost_uzs), split, upload_id)
+                     for r in cpend.itertuples(index=False)] if len(cpend_src) else []
+    new_cat = pend_src["cat_key"].isin(own_keys - set(cats)) if len(pend_src) else pend_src.get("cat_key")
+    pending_info = {"rows": len(pend_records), "amount": float(pend_src["amount"].sum()) if len(pend_src) else 0.0,
+                    "skus": int(pend_src["pid"].nunique()) if len(pend_src) else 0,
+                    # mas'ullar ro'yxatida bor, lekin tovar spravochnigida hali umuman yo'q kategoriyalar
+                    "new_cat_amount": float(pend_src.loc[new_cat, "amount"].sum()) if len(pend_src) else 0.0,
+                    "new_cats": sorted({clean_text(c) for c in pend_src.loc[new_cat, COL_CAT]}) if len(pend_src) else []}
     mismatch = int((ok["cat_key"].map(cats) != ok["prod_cat"]).sum())   # spravochnik kategoriyasi ustun
 
     agg = (
@@ -275,6 +303,18 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
                 "company_daily", records=comp_records,
                 columns=["sale_date", "branch_id", "qty", "amount", "cost", "cost_usd", "cost_uzs", "cost_split",
                          "upload_id"])
+        await con.execute("DELETE FROM sales_pending WHERE sale_date = ANY($1::date[])", file_dates)
+        if pend_records:
+            await con.copy_records_to_table(
+                "sales_pending", records=pend_records,
+                columns=["sale_date", "branch_key", "branch_name", "product_id", "product_name", "category", "brand",
+                         "is_bonus", "qty", "amount", "cost", "cost_usd", "cost_uzs", "cost_split", "upload_id"])
+        await con.execute("DELETE FROM company_pending WHERE sale_date = ANY($1::date[])", file_dates)
+        if cpend_records:
+            await con.copy_records_to_table(
+                "company_pending", records=cpend_records,
+                columns=["sale_date", "branch_key", "branch_name", "qty", "amount", "cost", "cost_usd", "cost_uzs",
+                         "cost_split", "upload_id"])
         await refresh_dates(con, file_dates)          # tayyor hisob-kitob jadvali (sales_fact) — shu sanalar
         by_cat = await con.fetch(
             """SELECT c.name category, sum(e.amount) amount, sum(e.qty) qty,
@@ -309,6 +349,7 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
         cost_mode="split" if split else "legacy",
         fx=[{"from": max(r["valid_from"], file_dates[0]).isoformat(), "rate": float(r["rate"])} for r in fx],
         company=company_info,
+        pending=pending_info,
     )
 
 
@@ -362,7 +403,13 @@ def format_report(r: SalesLoadReport, max_items: int = 15) -> str:
         out += [f"  • {esc(x['name'])}: {x['rows']} qator, {_fmt_mln(x['amount'])} mln"
                 for x in r.unknown_branches[:max_items]]
     if r.unknown_skus or r.unknown_branches:
-        out.append("→ Spravochnikni to'ldirib, shu faylni qayta yuklang — sanalar almashtiriladi.")
+        p = r.pending or {}
+        out.append(f"⏳ Bu savdo ({_fmt_mln(p.get('amount', 0) - p.get('new_cat_amount', 0))} mln) saqlab qo'yildi — "
+                   "tovar/filial spravochnigiga qo'shilishi bilan avtomatik ulanadi, savdo faylini qayta yuklash shart emas.")
+    p = r.pending or {}
+    if p.get("new_cats"):
+        out.append(f"\nℹ️ Mas'ullar ro'yxatida bor, tovar spravochnigida hali yo'q kategoriyalar savdosi ham saqlandi: "
+                   f"{len(p['new_cats'])} ta, {_fmt_mln(p['new_cat_amount'])} mln — spravochnikka qo'shilganda ulanadi.")
     if r.category_mismatch:
         out.append(f"\n⚠️ Kategoriyasi spravochnikdan farq qilgan qatorlar: {r.category_mismatch} "
                    f"(spravochnik kategoriyasi olindi)")

@@ -125,7 +125,7 @@ async def build_missing_xlsx(con: asyncpg.Connection, report: dict) -> bytes | N
     wi.append(["1. «Tovarlar» varag'ida faqat SARIQ kataklarni to'ldiring (Статус va o'z kategoriyasining xususiyatlari); KULRANG — boshqa kategoriyaniki, bo'sh qoladi."])
     wi.append(["2. Faylni botga yuboring — tovar spravochnigi sifatida yuklanadi (faqat shu SKU'lar qo'shiladi)."])
     wi.append(["3. «Filiallar» varag'ini filial spravochnigingizga ko'chiring (Территория, Кластер) va yuklang."])
-    wi.append(["4. Keyin shu savdo faylini qayta yuklang — sanalar almashtiriladi, yo'qolgan savdo qo'shiladi."])
+    wi.append(["4. Savdo faylini qayta yuklash shart emas — bu SKU/filiallar savdosi saqlab qo'yilgan va spravochnik yuklanishi bilan avtomatik qo'shiladi."])
     wi.append([])
     wi.append(["Tur", "Товар Ид / Филиал", "Nomi", "Категория", "Qator", "Dona", "Summa"])
     for c in wi[wi.max_row]:
@@ -172,4 +172,5 @@ def missing_caption(report: dict) -> str:
     if n_b:
         parts.append(f"{n_b} ta filial")
     return (f"📎 Spravochnikda yo'q: {', '.join(parts)}.\n"
-            "«Tovarlar» varag'ini to'ldirib botga yuboring, so'ng savdo faylini qayta yuklang.")
+            "«Tovarlar» varag'ini to'ldirib botga yuboring — ularning savdosi avtomatik qo'shiladi, "
+            "savdo faylini qayta yuklash shart emas.")
