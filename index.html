@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="app.css?v=20261013a">
+<link rel="stylesheet" href="app.css?v=20261014a">
 </head>
 <body>
 <div id="gate" hidden></div>
@@ -76,13 +76,13 @@
 
   <!-- ============ 2. QIRQIM ============ -->
   <div class="pane" id="paneQirqim" hidden>
-    <div class="ctl">
-      <div class="seg mini" id="brMode">
-        <button data-m="tree" aria-pressed="true">Daraxt</button>
-        <button data-m="pivot" aria-pressed="false">Kesma</button>
-      </div>
+    <div class="seg big" id="brMode" role="group" aria-label="Ko'rinish">
+      <button data-m="tree" aria-pressed="true"><span aria-hidden="true">☰</span> Ro'yxat</button>
+      <button data-m="pivot" aria-pressed="false"><span aria-hidden="true">▦</span> Jadval</button>
+    </div>
+    <div class="ctl sortrow">
       <label class="sortl">Saralash <select id="sortBy">
-        <option value="amount">savdo</option>
+        <option value="amount">summa</option>
         <option value="margin">gross marja</option>
         <option value="margin_pct">gross marja %</option>
         <option value="qty">dona</option>
@@ -123,6 +123,6 @@
   <button data-t="Reja" aria-pressed="false"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="12" cy="12" r="4.5" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/></svg>Reja</button>
 </nav>
 <div id="sheetHost"></div>
-<script src="app.js?v=20261013a"></script>
+<script src="app.js?v=20261014a"></script>
 </body>
 </html>

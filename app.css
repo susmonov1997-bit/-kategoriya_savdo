@@ -181,7 +181,7 @@ section{display:flex;flex-direction:column;gap:8px}
 .strip{display:flex;height:12px;border-radius:4px;overflow:hidden;gap:2px}
 .strip span{display:block;height:100%;min-width:2px}
 .srows{display:flex;flex-direction:column}
-.srow{display:grid;grid-template-columns:10px minmax(0,1fr) 48px minmax(60px,34%) 62px;gap:8px;align-items:center;padding:6px 0;border:0;background:none;text-align:left;width:100%}
+.srow{display:grid;grid-template-columns:10px minmax(0,1fr) 48px minmax(50px,24%) 62px;gap:8px;align-items:center;padding:6px 0;border:0;background:none;text-align:left;width:100%}
 .srow[disabled]{cursor:default;color:inherit}
 .srow .sw{width:10px;height:10px;border-radius:3px}
 .srow .sl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
@@ -190,7 +190,7 @@ section{display:flex;flex-direction:column;gap:8px}
 .srow .sf{position:absolute;left:0;top:0;bottom:0;border-radius:4px}
 .srow .sp{position:absolute;top:-3px;bottom:-3px;width:3px;margin-left:-1.5px;background:var(--ink-2);border-radius:2px}
 .srow .spp{text-align:right}
-@media (max-width:380px){ .srow{grid-template-columns:10px minmax(0,1fr) 44px 28% 58px;gap:6px} }
+@media (max-width:380px){ .srow{grid-template-columns:10px minmax(0,1fr) 44px 20% 58px;gap:6px} }
 
 /* kesma */
 .pivotwrap{overflow-x:auto;background:var(--card);border-radius:var(--r2);box-shadow:var(--shadow)}
@@ -199,8 +199,8 @@ table.pv th,table.pv td{padding:7px 8px;text-align:right;white-space:nowrap;bord
 table.pv th{font-weight:600;color:var(--ink-2);background:var(--card);position:sticky;top:0}
 table.pv th:first-child,table.pv td:first-child{text-align:left;position:sticky;left:0;background:var(--card);z-index:1;max-width:150px;overflow:hidden;text-overflow:ellipsis}
 table.pv td.c{color:var(--ink)}
-table.pv tr.tot td{font-weight:600;background:var(--card-2)}
-table.pv tr.tot td:first-child{background:var(--card-2)}
+table.pv tr.pvtot td{font-weight:600;background:var(--card-2)}
+table.pv tr.pvtot td:first-child{background:var(--card-2)}
 
 /* ---------- xususiyat bloklari ---------- */
 .ablocks{display:flex;flex-direction:column;gap:10px}
@@ -398,3 +398,18 @@ button.x{border:0;background:none;font-size:20px;line-height:1;color:var(--muted
 .li.sub{margin-left:12px;background:color-mix(in srgb,var(--card) 92%,var(--accent) 3%)}
 .setsh{display:inline-flex;gap:4px;align-items:center;background:var(--warn-soft);color:var(--warn);border-radius:999px;padding:1px 8px;font-weight:600}
 .setsh b{color:inherit!important}
+
+/* Qirqim: katta Ro'yxat | Jadval tugmasi */
+.seg.big{display:flex;width:100%;padding:4px;gap:4px;background:var(--card);box-shadow:var(--shadow);border-radius:16px}
+.seg.big button{flex:1 1 0;min-height:44px;font-size:15px;font-weight:700;border-radius:12px;padding:8px 12px;display:flex;align-items:center;justify-content:center;gap:6px}
+.ctl.sortrow{justify-content:flex-end}
+/* Ulush kartasi: O'zgarish */
+.sharecard .chd{font-size:12.5px;font-weight:700;margin-top:4px}
+.sharecard .chd.up{color:var(--good)}.sharecard .chd.dn{color:var(--bad)}
+.crow{display:grid;grid-template-columns:minmax(0,1fr) minmax(50px,28%) 66px 46px;gap:8px;align-items:center;padding:6px 0;border:0;background:none;text-align:left;width:100%;color:inherit;font:inherit}
+.crow[disabled]{cursor:default}
+.crow .sl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
+.crow .ctrk{height:8px;background:var(--card-2);border-radius:4px;overflow:hidden}
+.crow .cf{display:block;height:100%;border-radius:4px}
+.crow .cf.up{background:var(--good)}.crow .cf.dn{background:var(--bad)}
+.crow .cpp{text-align:right}.crow .cs{text-align:right;font-size:12px;color:var(--muted)}

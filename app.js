@@ -658,7 +658,7 @@ async function toggleNode(node) {
 
 function renderBreakdown() {
   $('sortBy').value = st.sort;
-  { const o = $('sortBy').querySelector('option[value="amount"]'); if (o) o.textContent = MQ() ? 'dona' : 'savdo';
+  { const o = $('sortBy').querySelector('option[value="amount"]'); if (o) o.textContent = MQ() ? 'dona' : 'summa';
     const q = $('sortBy').querySelector('option[value="qty"]'); if (q) q.hidden = MQ(); }
   document.querySelectorAll('#brMode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.m === st.mode));
   $('pvCtl').hidden = st.mode !== 'pivot';
@@ -670,7 +670,7 @@ function renderBreakdown() {
     if (BD) renderPivot($('breakdown'));
     return;
   }
-  $('brHint').textContent = 'qatorni bosing — ichi ochiladi';
+  $('brHint').textContent = '';
   renderShare(); renderTree();
 }
 function rowHtml(node, rootAmount, indBase = 1) {
@@ -729,30 +729,51 @@ function renderTree() {
   host.innerHTML = `<div class="tw">${out.join('')}</div>`;
   wireTree(host);
 }
-// --- ulush kartasi: FOCUS tugunining ichki tarkibi
+// --- ulush kartasi: FOCUS tugunining ichki tarkibi (Tuzilma | O'zgarish)
 function renderShare() {
   const host = $('shareHost');
   const node = FOCUS && FOCUS.open && FOCUS.children ? FOCUS : TREE;
   if (!node || !node.children || !node.children.length) { host.innerHTML = ''; return; }
+  const hasCmp = !!cmpRange();
+  if (!hasCmp) st.shareView = 'struct';
   const ctx = node.path.length ? node.path.map(p => labels[p.dim + '|' + p.key] || p.key).join(' › ') : 'Jami';
   host.innerHTML = `<div class="card sharecard">
-    <div class="sh"><h2>${MQ() ? 'Dona' : 'Savdo'} tuzilmasi · ${esc(dimName(node.childDim))}</h2>
-      <div class="seg mini" id="shareView">
+    <div class="sh"><h2>${esc(dimName(node.childDim))} ulushi</h2>
+      ${hasCmp ? `<div class="seg mini" id="shareView">
         <button data-v="struct" aria-pressed="${st.shareView === 'struct'}">Tuzilma</button>
-        <button data-v="dyn" aria-pressed="${st.shareView === 'dyn'}">Kunlar bo'yicha</button>
-      </div></div>
-    <div class="hint">${esc(ctx)}</div>
-    <div id="shareBody">${st.shareView === 'struct' ? shareStruct(node) : '<div class="empty">Yuklanmoqda…</div>'}</div>
+        <button data-v="chg" aria-pressed="${st.shareView === 'chg'}">O'zgarish</button>
+      </div>` : ''}</div>
+    <div class="hint">${esc(ctx)} · ${MQ() ? 'dona' : 'summa'}${hasCmp ? ' · pp — o\'tgan davrga nisbatan' : ''}</div>
+    <div id="shareBody"></div>
   </div>`;
-  const wireRows = () => host.querySelectorAll('.srow.drill').forEach(x => x.onclick = () => {
-    const ch = node.children.find(c => String(c.key) === x.dataset.k); if (ch) toggleNode(ch); });
-  wireRows();
+  const can = !!childDimFor([...node.path, {dim: node.childDim, key: ''}]);
+  const paint = () => {
+    $('shareBody').innerHTML = st.shareView === 'chg' ? shareChange(node, can) : shareStruct(node);
+    host.querySelectorAll('.srow.drill, .crow.drill').forEach(x => x.onclick = () => {
+      const ch = node.children.find(c => String(c.key) === x.dataset.k); if (ch) toggleNode(ch); });
+  };
+  paint();
   host.querySelectorAll('#shareView button').forEach(b => b.onclick = () => {
+    if (st.shareView === b.dataset.v) return;
     st.shareView = b.dataset.v;
     host.querySelectorAll('#shareView button').forEach(x => x.setAttribute('aria-pressed', x === b));
-    if (st.shareView === 'struct') { $('shareBody').innerHTML = shareStruct(node); wireRows(); } else shareDyn(node);
+    paint();
   });
-  if (st.shareView === 'dyn') shareDyn(node);
+}
+function shareChange(node, can) {
+  const items = node.raw.filter(i => i.share_pp != null && Math.abs(i.share_pp) >= 0.05);
+  const up = items.filter(i => i.share_pp > 0).sort((a, b) => b.share_pp - a.share_pp).slice(0, 5);
+  const dn = items.filter(i => i.share_pp < 0).sort((a, b) => a.share_pp - b.share_pp).slice(0, 5);
+  if (!up.length && !dn.length) return `<div class="empty">Ulushlarda sezilarli o'zgarish yo'q.</div>`;
+  const max = Math.max(...[...up, ...dn].map(i => Math.abs(i.share_pp)), 0.1);
+  const row = (i, cls) => `<button class="crow ${can ? 'drill' : ''}" data-k="${esc(i.key)}" ${can ? '' : 'disabled'}>
+      <span class="sl" title="${esc(i.label)}">${esc(i.label)}</span>
+      <span class="ctrk"><span class="cf ${cls}" style="width:${Math.abs(i.share_pp) / max * 100}%"></span></span>
+      <span class="cpp">${pill(i.share_pp, true)}</span>
+      <span class="cs num">${pct(i.share)}</span></button>`;
+  const more = node.total_rows > node.raw.length ? `<div class="hint">Birinchi ${node.raw.length} ta ${esc(dimName(node.childDim)).toLowerCase()} orasidan</div>` : '';
+  return `${up.length ? `<div class="chd up">▲ Ulushi o'sganlar</div>${up.map(i => row(i, 'up')).join('')}` : ''}
+    ${dn.length ? `<div class="chd dn">▼ Ulushi tushganlar</div>${dn.map(i => row(i, 'dn')).join('')}` : ''}${more}`;
 }
 function shareStruct(node) {
   const hasCmp = !!cmpRange();
@@ -778,43 +799,6 @@ function shareStruct(node) {
       <span class="spp">${hasCmp ? pill(r.pp, true) : ''}</span>
     </button>`).join('')}</div>`;
 }
-async function shareDyn(node) {
-  const body = $('shareBody');
-  const req = ++reqSeq.dyn;
-  let data;
-  try { data = await api('share-daily', {...pathFilters(node.path), rows: node.childDim, limit: 5}); }
-  catch (e) { body.innerHTML = `<div class="errbox">${esc(e.message)}</div>`; return; }
-  if (req !== reqSeq.dyn || !$('shareBody')) return;
-  const days = data.days, n = days.length, names = data.series.map(s => s.label);
-  const colors = data.series.map((s, j) => j === data.series.length - 1 ? 'var(--so)' : `var(--s${j + 1})`);
-  const W = Math.max(280, body.clientWidth || 340), H = 200, L = 34, R = 6, Tt = 8, Bm = 22;
-  const cw = (W - L - R) / n, bw = Math.max(2, cw - Math.min(6, cw * .25));
-  const y = v => Tt + (H - Tt - Bm) * (1 - v / 100);
-  const every = Math.ceil(n / 7);
-  let g = '';
-  for (const v of [0, 25, 50, 75, 100]) g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" ${v ? 'stroke-dasharray="2 3"' : ''}/><text x="${L - 5}" y="${y(v) + 4}" text-anchor="end" font-size="10" fill="var(--muted)">${v}%</text>`;
-  days.forEach((d, di) => {
-    const x0 = L + di * cw + (cw - bw) / 2;
-    if (di % every === 0) g += `<text x="${x0 + bw / 2}" y="${H - 6}" text-anchor="middle" font-size="10" fill="var(--muted)">${dm(d.date)}</text>`;
-    if (d.total) {
-      let acc = 0;
-      d.shares.forEach((p, j) => { if (!p) return; const y1 = y(acc + p), y2 = y(acc);
-        g += `<rect x="${x0}" y="${y1}" width="${bw}" height="${Math.max(0, y2 - y1 - 1)}" fill="${colors[j]}" rx="${n <= 14 ? 2 : 0}"/>`; acc += p; });
-    }
-    g += `<rect x="${L + di * cw}" y="${Tt}" width="${cw}" height="${H - Tt - Bm}" fill="transparent" data-di="${di}" class="hitc"/>`;
-  });
-  body.innerHTML = `<div class="legend" style="margin-bottom:4px">${names.map((nm, j) => `<span><i style="background:${colors[j]};height:8px;width:8px;border-radius:2px"></i>${esc(nm)}</span>`).join('')}</div>
-    <div class="chartwrap"><svg viewBox="0 0 ${W} ${H}" style="height:${H}px" role="img" aria-label="Kunlar bo'yicha ulush">${g}</svg><div class="tip" hidden></div></div>`;
-  const svg = body.querySelector('svg'), tip = body.querySelector('.tip');
-  svg.querySelectorAll('.hitc').forEach(el => {
-    const show = () => { const d = days[+el.dataset.di]; const rect = svg.getBoundingClientRect();
-      tip.hidden = false;
-      tip.innerHTML = `<b>${dm(d.date)}</b> · ${MQ() ? nf0.format(d.total) + ' dona' : money(d.total)}<br>` + d.shares.map((p, j) => `${esc(names[j])}: ${nf1.format(p)}%`).join('<br>');
-      tip.style.left = Math.max(80, Math.min(rect.width - 80, (L + (+el.dataset.di) * cw + cw / 2) / W * rect.width)) + 'px'; };
-    el.addEventListener('pointerenter', show); el.addEventListener('pointerdown', show);
-    el.addEventListener('pointerleave', () => tip.hidden = true);
-  });
-}
 
 // --- kesma (ikki o'lchov)
 function sortedItems() { return sortRows(BD.rows.slice()); }
@@ -833,7 +817,7 @@ function renderPivot(host) {
   const fmtCell = v => st.pvMode === 'amount' ? mln(v) : (v ? nf1.format(v) + '%' : '·');
   const lastCol = i => st.pvMode === 'amount' ? `<b>${mln(mval(i.current))}</b>` : st.pvMode === 'row' ? '<b>100%</b>' : `<b>${pct(i.share)}</b>`;
   host.innerHTML = `<div class="seg mini" id="pvMode" style="align-self:flex-start;display:inline-flex">
-      <button data-v="amount" aria-pressed="${st.pvMode === 'amount'}">${MQ() ? 'Dona' : 'Savdo, mln'}</button>
+      <button data-v="amount" aria-pressed="${st.pvMode === 'amount'}">${MQ() ? 'Dona' : 'Summa, mln'}</button>
       <button data-v="row" aria-pressed="${st.pvMode === 'row'}">Qator ichida %</button>
       <button data-v="col" aria-pressed="${st.pvMode === 'col'}">Ustun ichida %</button></div>
     <div class="pivotwrap"><table class="pv num">
@@ -841,9 +825,9 @@ function renderPivot(host) {
     <tbody>${rowsShown.map(i => `<tr><td title="${esc(i.label)}">${esc(i.label)}</td>${cols.map(c => { const v = val(i, c);
         const cell = (cells[i.key] || {})[c.key];
         return `<td class="c" style="${heat(v)}" title="${cell ? (MQ() ? `savdo ${money(cell.amount)} · ` : `${nf0.format(cell.qty)} dona · `) + `gross marja ${pct(cell.margin_pct)}` : ''}">${fmtCell(v)}</td>`; }).join('')}<td>${lastCol(i)}</td></tr>`).join('')}
-      <tr class="tot"><td>Jami</td>${cols.map(c => `<td>${st.pvMode === 'amount' ? mln(c[mk]) : st.pvMode === 'row' ? (mval(T) ? nf1.format((c[mk] || 0) / mval(T) * 100) + '%' : '·') : '100%'}</td>`).join('')}<td>${st.pvMode === 'amount' ? mln(mval(T)) : '100%'}</td></tr>
+      <tr class="pvtot"><td>Jami</td>${cols.map(c => `<td>${st.pvMode === 'amount' ? mln(c[mk]) : st.pvMode === 'row' ? (mval(T) ? nf1.format((c[mk] || 0) / mval(T) * 100) + '%' : '·') : '100%'}</td>`).join('')}<td>${st.pvMode === 'amount' ? mln(mval(T)) : '100%'}</td></tr>
     </tbody></table></div>
-    <div class="foot">${st.pvMode === 'amount' ? (MQ() ? 'Kataklarda dona (bonus bilan).' : "Kataklarda savdo, mln so'm.") : st.pvMode === 'row' ? `Har bir qatorda: shu qator ${MQ() ? 'donasining' : 'savdosining'} ustunlar bo'yicha taqsimoti.` : `Har bir ustunda: shu ustun ${MQ() ? 'donasining' : 'savdosining'} qatorlar bo'yicha taqsimoti.`}
+    <div class="foot">${st.pvMode === 'amount' ? (MQ() ? 'Kataklarda dona (bonus bilan).' : "Kataklarda summa, mln so'm.") : st.pvMode === 'row' ? `Har bir qatorda: shu qator ${MQ() ? 'donasining' : 'savdosining'} ustunlar bo'yicha taqsimoti.` : `Har bir ustunda: shu ustun ${MQ() ? 'donasining' : 'savdosining'} qatorlar bo'yicha taqsimoti.`}
       ${items.length > 20 && !st.showAll ? ` <button class="more" id="more" style="display:inline;width:auto;border:0;padding:0">Barcha ${items.length} qatorni ko'rsatish</button>` : ''}</div>`;
   const mo = $('more'); if (mo) mo.onclick = () => { st.showAll = true; renderBreakdown(); };
   host.querySelectorAll('#pvMode button').forEach(b => b.onclick = () => { st.pvMode = b.dataset.v; renderBreakdown(); });
@@ -1039,7 +1023,7 @@ function renderTopBody() {
 }
 
 // ---------------------------------------------------------------- yuklash
-const reqSeq = {main: 0, dyn: 0};
+const reqSeq = {main: 0};
 function showError(e) {
   if (e.status === 401 || e.status === 403) {
     $('app').hidden = true;
@@ -1149,7 +1133,7 @@ document.querySelectorAll('#chartMetric button').forEach(b => b.onclick = () => 
   document.querySelectorAll('#chartMetric button').forEach(x => x.setAttribute('aria-pressed', x === b));
   renderChart();
 });
-let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (TAB === 'Umumiy') renderChart(); if (st.shareView === 'dyn' && st.mode === 'tree') renderShare(); }, 150); });
+let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (TAB === 'Umumiy') renderChart(); }, 150); });
 
 
 // ---------------------------------------------------------------- REJA: yillik reja va bajarilishi
@@ -1343,7 +1327,6 @@ function setTab(t) {
   window.scrollTo(0, 0);
   if (t === 'Umumiy') renderChart();                 // yashirin paytda kenglik 0 bo'ladi — qayta chizamiz
   if (STALE[t]) loadTab(t);
-  if (t === 'Qirqim' && st.mode === 'tree' && st.shareView === 'dyn') renderShare();
   try { tg && tg.HapticFeedback && tg.HapticFeedback.selectionChanged(); } catch (e) {}
 }
 document.querySelectorAll('#tabbar button').forEach(b => b.onclick = () => { if (TAB !== b.dataset.t) setTab(b.dataset.t); });
