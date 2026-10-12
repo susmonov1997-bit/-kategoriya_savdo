@@ -75,6 +75,27 @@ const mval = k => (MQ() ? k.qty : k.amount) || 0;
 const mfmt = k => (MQ() ? `${nf0.format(k.qty || 0)} dona` : money(k.amount));
 const mnum = k => (MQ() ? nf0.format(k.qty || 0) : money(k.amount));
 const mdelta = d => (d ? (MQ() ? d.qty : d.amount) : null);
+// Kompaniya jamisidagi ulush (maxraj — company_daily, «К»siz; faqat joy filtrlari)
+const LOC_WORD = {region: 'hududda', cluster: 'klasterda', branch: 'filialda'};
+function compShare(curK, prevK, comp) {
+  if (!comp || !comp.c_amount) return null;
+  const key = MQ() ? 'qty' : 'amount', ck = MQ() ? 'c_qty' : 'c_amount', pk = MQ() ? 'p_qty' : 'p_amount';
+  const s = comp[ck] ? (curK[key] || 0) / comp[ck] * 100 : null;
+  const ps = prevK && comp[pk] ? (prevK[key] || 0) / comp[pk] * 100 : null;
+  const g = comp.c_gross > 0 ? (curK.gross || 0) / comp.c_gross * 100 : null;
+  const pg = prevK && comp.p_gross > 0 ? (prevK.gross || 0) / comp.p_gross * 100 : null;
+  return {s, pp: s != null && ps != null ? s - ps : null, g, gpp: g != null && pg != null ? g - pg : null};
+}
+function locScopeWord() {
+  const ids = ['region', 'cluster', 'branch'].filter(d => st.f[d] && st.f[d].size);
+  return ids.length ? 'tanlangan joyda' : 'kompaniyada';
+}
+function compLine(word, cs) {
+  if (!cs) return '';
+  const hasCmp = !!cmpRange();
+  return `<span class="kc">🏢 ${word} <b>${pct(cs.s)}</b>${hasCmp && cs.pp != null ? pill(cs.pp, true) : ''}
+    <span class="kb"><i style="width:${Math.min(100, cs.s || 0)}%"></i></span>front marja ${pct(cs.g)}</span>`;
+}
 const isMulti = () => cat().kind !== 'cat';
 const attrDims = () => cat().attributes.map(a => a.dim);
 const DIM_NAMES = {region: 'Hudud', cluster: 'Klaster', branch: 'Filial', brand: 'Brend', status: 'Status', sku: 'SKU',
@@ -314,6 +335,29 @@ async function openFilterSheet() {
 }
 
 // ---------------------------------------------------------------- KPI
+function companyCard(s) {
+  const comp = s.company, C = s.current, Pv = s.previous;
+  const locs = ['region', 'cluster', 'branch'].filter(d => st.f[d] && st.f[d].size);
+  const one = locs.length === 1 && st.f[locs[0]].size === 1 ? locs[0] : null;
+  const place = !locs.length ? 'Kompaniya' : one ? (labels[one + '|' + [...st.f[one]][0]] || 'Tanlangan joy') : 'Tanlangan joylar';
+  const title = `${esc(place)} savdosidagi ulush`;
+  if (!comp || !comp.c_amount) return `<div class="kpi wide comp"><div><div class="label">${title}</div>
+    <div class="sub">Kompaniya jami savdosi bu davr uchun hali yo'q — savdo faylini qayta yuklang («К»siz jami shundan hisoblanadi).</div></div></div>`;
+  const ours = {amount: C.amount, qty: C.qty, gross: C.gross}, prev = Pv ? {amount: Pv.amount, qty: Pv.qty, gross: Pv.gross} : null;
+  // kompaniya ma'lumoti bizning savdo kunlaridan kam bo'lsa — solishtirish/ulush to'liq emas
+  const partial = s.days && comp.c_days < s.days.c;
+  const pcomp = Pv && comp.p_days >= (s.days ? s.days.p : 0) ? comp : {...comp, p_amount: 0, p_qty: 0, p_gross: 0};
+  const cs = compShare(ours, prev, pcomp);
+  const unit = MQ() ? v => `${nf0.format(v)} dona` : money;
+  return `<div class="kpi wide comp">
+    <div class="ch"><div class="label">${title}</div></div>
+    <div class="cv"><div><div class="hint">${MQ() ? 'Dona' : 'Savdo'}</div><div class="v num">${pct(cs.s)}</div><div class="sub">${Pv && cs.pp != null ? pill(cs.pp, true) : ''}</div></div>
+      <div style="text-align:right"><div class="hint">Front marja</div><div class="v num">${pct(cs.g)}</div><div class="sub" style="justify-content:flex-end">${Pv && cs.gpp != null ? pill(cs.gpp, true) : ''}</div></div></div>
+    <div class="cbar"><i style="width:${Math.min(100, cs.s || 0)}%"></i></div>
+    <div class="cleg num"><span>${isMulti() ? esc(cat().name) : esc(cat().name)}: ${unit(MQ() ? C.qty : C.amount)}</span><span>${esc(place)}: ${unit(MQ() ? comp.c_qty : comp.c_amount)}</span></div>
+    <div class="hint">Jami — «К» bilan belgilangan kategoriyalarsiz${partial ? ` · ⚠ kompaniya ma'lumoti ${comp.c_days}/${s.days.c} kun uchun bor` : ''}</div>
+  </div>`;
+}
 function renderKpis(s) {
   const C = s.current, Pv = s.previous, d = s.delta || {};
   $('cmpHint').textContent = s.compare_period
@@ -327,6 +371,7 @@ function renderKpis(s) {
       <div><div class="label">Gross marja</div><div class="v num${neg(C.margin)}">${money(C.margin)}</div>
         <div class="sub num"><span>${pct(C.margin_pct)}</span>${Pv ? pill(d.margin_pct_pp, true) : ''}</div></div>
     </div>
+    ${companyCard(s)}
     <div class="kpi"><div class="label">Front marja</div><div class="v num${neg(C.gross)}">${money(C.gross)}</div>
       <div class="sub num"><span>${pct(C.gross_pct)}</span>${Pv ? pill(d.gross_pct_pp, true) : ''}</div></div>
     <div class="kpi"><div class="label">Qo'shimcha daromad</div><div class="v num">${money(C.income)}</div>
@@ -446,7 +491,7 @@ function newRoot(rid, order, path, extra = {}) {
 }
 async function fetchChildren(node) {
   const res = await api('breakdown', {...pathFilters(node.path), rows: node.childDim, sort: apiSort(), desc: st.sort !== 'name', limit: 500});
-  node.total = res.total; node.total_rows = res.total_rows; node.raw = sortRows(res.rows);
+  node.total = res.total; node.total_rows = res.total_rows; node.raw = sortRows(res.rows); node.company = res.company_total;
   node.children = node.raw.map(r => {
     remember(node.childDim, r.key, r.label);
     const path = [...node.path, {dim: node.childDim, key: r.key}];
@@ -525,6 +570,7 @@ function rowHtml(node, rootAmount, indBase = 1) {
       <span class="lvtag">${esc(dimName(node.dim))}</span></span>
     <span class="v num">${mnum(r.current)}</span>
     <span class="m num"><span class="bar"><span style="width:${Math.min(100, r.share || 0)}%"></span></span><span>${pct(r.share)}</span>${hasCmp ? pill(mdelta(r.delta)) : ''}${MQ() ? `<span class="alt">${money(r.current.amount)}</span>` : `<span class="${r.current.margin_pct < 0 ? 'neg' : ''}">GM ${pct(r.current.margin_pct)}</span>`}</span>
+    ${LOC_WORD[node.dim] && r.company ? compLine(LOC_WORD[node.dim], compShare(r.current, r.previous, r.company)) : ''}
   </button>`;
 }
 function subtreeRows(node, out, rootAmt, indBase = 1) {
@@ -541,6 +587,11 @@ function wireTree(host) {
   host.querySelectorAll('.tr.can[data-s]').forEach(b => b.onclick = e => { e.stopPropagation(); const n = findBySig(b.dataset.s); if (n) toggleNode(n); });
   host.querySelectorAll('.tr-more[data-more]').forEach(b => b.onclick = e => { e.stopPropagation(); const n = findBySig(b.dataset.more); if (n) { n.showAll = true; rerender(n.root); } });
 }
+function sumPrev(rows) {
+  if (!rows || !rows.length || !rows[0].previous) return null;
+  return rows.reduce((a, r) => ({amount: a.amount + (r.previous.amount || 0), qty: a.qty + (r.previous.qty || 0),
+                                 gross: a.gross + (r.previous.gross || 0)}), {amount: 0, qty: 0, gross: 0});
+}
 function renderTree() {
   const host = $('breakdown');
   if (!TREE) { host.innerHTML = ''; return; }
@@ -549,7 +600,8 @@ function renderTree() {
   const out = [`<button class="tr lv0 can ${TREE.open ? 'op' : ''}" data-s="${esc(nsig(TREE))}">
       <span class="n"><span class="c">${TREE.open ? '▾' : '▸'}</span><b>Jami</b></span><span class="v num">${mfmt(T)}</span>
       <span class="m num">${MQ() ? `savdo ${money(T.amount)}${T.bonus_qty ? ` · bonus ${nf0.format(T.bonus_qty)}` : ''}${T.avg_price ? ` · o'rtacha narx ${money(T.avg_price)}` : ''}`
-        : `${nf0.format(T.qty)} dona · front marja ${pct(T.gross_pct)} · gross marja ${pct(T.margin_pct)}`}</span></button>`];
+        : `${nf0.format(T.qty)} dona · front marja ${pct(T.gross_pct)} · gross marja ${pct(T.margin_pct)}`}</span>
+      ${TREE.company ? compLine(locScopeWord(), compShare(T, sumPrev(TREE.raw), TREE.company)) : ''}</button>`];
   subtreeRows(TREE, out, rootAmt, 1);
   host.innerHTML = `<div class="tw">${out.join('')}</div>`;
   wireTree(host);

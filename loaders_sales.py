@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import html
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
@@ -42,6 +43,16 @@ COL_BRAND = "Бранд"
 OPTIONAL = [COL_BONUS, COL_UNIT, COL_CUR, COL_BRAND]
 _USD = {"доллар", "долл", "dollar", "usd", "$", "у.е.", "уе"}
 _UZS = {"сум", "сўм", "сом", "so'm", "som", "sum", "uzs"}
+
+
+# «К» bilan belgilangan kategoriyalar (masalan «"К" Б/У Смартфонлар») — kompaniya jamisiga kirmaydi.
+# Faqat alohida «К» belgisi: «Кондиционерлар», «Кулерлар» kabi oddiy nomlar ushlanmaydi.
+_K_RE = re.compile(r'^\s*["«“„\'`]?\s*[КK]\s*(["»”“\'`]|\s)')
+
+
+def is_k_category(v) -> bool:
+    t = clean_text(v)
+    return bool(t and _K_RE.match(t))
 
 
 def norm_currency(v) -> str | None:
@@ -101,6 +112,7 @@ class SalesLoadReport:
     errors: list[str] = field(default_factory=list)
     cost_mode: str = "split"                  # split — Сони×Кирим нархи×kurs; legacy — Жами(Кирим нархи)
     fx: list[dict] = field(default_factory=list)   # fayl sanalariga qo'llangan kurslar
+    company: dict = field(default_factory=dict)    # kompaniya jami: amount, rows, k_excluded, unknown_branch_rows
 
 
 def _fmt_mln(v: float) -> str:
@@ -186,6 +198,25 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
         good["cost_uzs"] = 0.0
     file_dates: list[date] = sorted(good["d"].unique())
 
+    # --- kompaniya jami (ulush uchun): barcha kategoriyalar, «К» belgililaridan tashqari ---
+    brs = {r["name_key"]: r["id"] for r in await con.fetch("SELECT id, name_key FROM branches")}
+    good["branch_id_all"] = good["br_key"].map(brs)
+    good["is_k"] = good[COL_CAT].map(is_k_category)
+    k_rows = good[good["is_k"]]
+    k_excluded = [{"category": clean_text(c), "rows": len(g), "amount": float(g["amount"].sum())}
+                  for c, g in k_rows.groupby(COL_CAT)]
+    comp_src = good[~good["is_k"] & good["branch_id_all"].notna()]
+    comp = (comp_src.groupby(["d", "branch_id_all"], as_index=False)
+            .agg(qty=("qty", "sum"), amount=("amount", "sum"), cost=("cost", "sum"),
+                 cost_usd=("cost_usd", "sum"), cost_uzs=("cost_uzs", "sum")))
+    comp_records = [(r.d, int(r.branch_id_all), float(r.qty), float(r.amount), float(r.cost), float(r.cost_usd),
+                     float(r.cost_uzs), split, upload_id) for r in comp.itertuples(index=False)]
+    company_info = {
+        "amount": float(comp_src["amount"].sum()), "rows": int(len(comp_src)),
+        "k_excluded": sorted(k_excluded, key=lambda x: -x["amount"]),
+        "unknown_branch_rows": int((~good["is_k"] & good["branch_id_all"].isna()).sum()),
+    }
+
     # --- qamrov: faqat bazadagi kategoriyalar ---
     cats = {name_key(r["name"]): r["id"] for r in await con.fetch("SELECT id, name FROM categories")}
     in_scope = good["cat_key"].isin(cats.keys())
@@ -198,7 +229,6 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
 
     # --- spravochnik bilan solishtirish ---
     prods = {r["product_id"]: r["category_id"] for r in await con.fetch("SELECT product_id, category_id FROM products")}
-    brs = {r["name_key"]: r["id"] for r in await con.fetch("SELECT id, name_key FROM branches")}
     sc["branch_id"] = sc["br_key"].map(brs)
     sc["prod_cat"] = sc["pid"].map(prods)
 
@@ -238,6 +268,12 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
             "sales_daily", records=records,
             columns=["sale_date", "branch_id", "product_id", "is_bonus", "qty", "amount", "cost",
                      "cost_usd", "cost_uzs", "cost_split", "upload_id"])
+        await con.execute("DELETE FROM company_daily WHERE sale_date = ANY($1::date[])", file_dates)
+        if comp_records:
+            await con.copy_records_to_table(
+                "company_daily", records=comp_records,
+                columns=["sale_date", "branch_id", "qty", "amount", "cost", "cost_usd", "cost_uzs", "cost_split",
+                         "upload_id"])
         by_cat = await con.fetch(
             """SELECT c.name category, sum(e.amount) amount, sum(e.qty) qty,
                       sum(e.qty) FILTER (WHERE e.is_bonus) bonus_qty,
@@ -270,6 +306,7 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
         errors=errors,
         cost_mode="split" if split else "legacy",
         fx=[{"from": max(r["valid_from"], file_dates[0]).isoformat(), "rate": float(r["rate"])} for r in fx],
+        company=company_info,
     )
 
 
@@ -294,6 +331,13 @@ def format_report(r: SalesLoadReport, max_items: int = 15) -> str:
         out.append(f"<b>Jami: {_fmt_mln(tot_a)} mln · front marja {tot_g / tot_a * 100:.1f}% · "
                    f"gross marja {tot_m / tot_a * 100:.1f}%</b>")
         out.append("<i>gross marja = front marja + qo'shimcha daromad (brend %)</i>")
+    if r.company.get("amount"):
+        mine = sum(c["amount"] for c in r.by_category)
+        out.append(f"🏢 Kompaniya jami («К»siz): {_fmt_mln(r.company['amount'])} mln · "
+                   f"bizning ulush {mine / r.company['amount'] * 100:.1f}%")
+        if r.company.get("k_excluded"):
+            ks = ", ".join(f"{esc(k['category'])} ({_fmt_mln(k['amount'])} mln)" for k in r.company["k_excluded"][:5])
+            out.append(f"<i>jamidan chiqarildi: {ks}</i>")
     if r.cost_mode == "split":
         rates = ", ".join(f"{x['rate']:,.0f}".replace(",", " ") + (f" ({x['from']} dan)" if len(r.fx) > 1 else "")
                           for x in r.fx)

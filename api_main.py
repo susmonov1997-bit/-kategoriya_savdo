@@ -88,6 +88,42 @@ async def scope_ctx(con, f: Filters, user: User) -> tuple[list[int], dict, bool]
     return cats, attrs, multi
 
 
+# ---------------------------------------------------------------------------
+# Kompaniya jami (company_daily, «К»siz) — ulush maxraji. Faqat joy filtrlari qo'llanadi
+# (hudud/klaster/filial), tovar filtrlari maxrajga ta'sir qilmaydi.
+COMPANY_KEYS = {"region": "b.region_id::text", "cluster": "b.cluster_id::text", "branch": "b.id::text"}
+
+
+async def company_totals(con, f: Filters, dim: str | None = None) -> dict[str, dict]:
+    params: list = []
+    p = lambda v: (params.append(v), f"${len(params)}")[1]  # noqa: E731
+    c1, c2 = p(f.date_from), p(f.date_to)
+    cmp = compare_period(f)
+    period = f"e.sale_date BETWEEN {c1} AND {c2}"
+    if cmp:
+        p1, p2 = p(cmp[0]), p(cmp[1])
+        period = f"({period} OR e.sale_date BETWEEN {p1} AND {p2})"
+    conds = [period]
+    if f.region_ids:
+        conds.append(f"b.region_id = ANY({p(f.region_ids)}::int[])")
+    if f.cluster_ids:
+        conds.append(f"b.cluster_id = ANY({p(f.cluster_ids)}::int[])")
+    if f.branch_ids:
+        conds.append(f"b.id = ANY({p(f.branch_ids)}::int[])")
+    key = COMPANY_KEYS.get(dim or "", "'all'")
+    cur = f"e.sale_date BETWEEN {c1} AND {c2}"
+    rows = await con.fetch(
+        f"""SELECT {key} AS key,
+                   sum(e.amount) FILTER (WHERE {cur}) c_amount, sum(e.amount - e.cost) FILTER (WHERE {cur}) c_gross,
+                   sum(e.qty) FILTER (WHERE {cur}) c_qty, count(DISTINCT e.sale_date) FILTER (WHERE {cur}) c_days,
+                   sum(e.amount) FILTER (WHERE NOT {cur}) p_amount, sum(e.amount - e.cost) FILTER (WHERE NOT {cur}) p_gross,
+                   sum(e.qty) FILTER (WHERE NOT {cur}) p_qty, count(DISTINCT e.sale_date) FILTER (WHERE NOT {cur}) p_days
+            FROM company_enriched e JOIN branches b ON b.id = e.branch_id
+            WHERE {' AND '.join(conds)} GROUP BY 1""", *params)
+    return {r["key"]: {k: float(r[k] or 0) for k in ("c_amount", "c_gross", "c_qty", "c_days",
+                                                      "p_amount", "p_gross", "p_qty", "p_days")} for r in rows}
+
+
 @app.get("/api/health")
 async def health(request: Request):
     return {"ok": True, "db": await request.app.state.pool.fetchval("SELECT 1") == 1}
@@ -195,13 +231,18 @@ async def summary(f: Filters, request: Request, user: User = Depends(current_use
     async with request.app.state.pool.acquire() as con:
         cats, attrs, multi = await scope_ctx(con, f, user)
         q = Q(f, attrs, cats)
-        row = await con.fetchrow(q.base_cte() + f"\nSELECT {metrics_sql('c')}, {metrics_sql('p')} FROM x", *q.params)
+        row = await con.fetchrow(q.base_cte() + f"\nSELECT {metrics_sql('c')}, {metrics_sql('p')}, "
+                                 "count(DISTINCT x.sale_date) FILTER (WHERE x.per = 'c') c_days, "
+                                 "count(DISTINCT x.sale_date) FILTER (WHERE x.per = 'p') p_days FROM x", *q.params)
+        comp = (await company_totals(con, f)).get("all")
     cur = kpi_from(row, "c")
     prev = kpi_from(row, "p") if q.cmp else None
     return {
         "period": {"from": f.date_from, "to": f.date_to},
         "compare_period": {"from": q.cmp[0], "to": q.cmp[1]} if q.cmp else None,
         "current": cur, "previous": prev, "delta": delta(cur, prev),
+        # kompaniya jami (ulush maxraji) va kunlar qamrovi: kompaniya ma'lumoti bizning savdo kunlaridan kam bo'lsa — to'liq emas
+        "company": comp, "days": {"c": row["c_days"], "p": row["p_days"]},
     }
 
 
@@ -264,6 +305,8 @@ async def breakdown(req: BreakdownRequest, request: Request, user: User = Depend
         rows = await con.fetch(
             base + f"\nSELECT {rd['key']} AS key, {rd['label']} AS label, {rd['sort']} AS sort, {rd['sub']} AS sub, "
                    f"{m} FROM x {JOINS} GROUP BY 1, 2, 3, 4", *q.params)
+        comp_rows = await company_totals(con, req, req.rows) if req.rows in COMPANY_KEYS else {}
+        comp_total = (await company_totals(con, req)).get("all")
         cells_raw = []
         if cd:
             cells_raw = await con.fetch(
@@ -278,7 +321,7 @@ async def breakdown(req: BreakdownRequest, request: Request, user: User = Depend
         if cur.amount == 0 and cur.qty == 0 and (prev is None or prev.amount == 0):
             continue
         items.append({"key": r["key"], "label": r["label"], "sub": r["sub"], "sort": r["sort"], "current": cur,
-                      "previous": prev, "delta": delta(cur, prev)})
+                      "previous": prev, "delta": delta(cur, prev), "company": comp_rows.get(r["key"])})
     total_cur = Kpi(**{k: sum(getattr(i["current"], k) for i in items)
                        for k in ("amount", "qty", "bonus_qty", "gross", "income", "margin")})
     total_cur.gross_pct = round(total_cur.gross / total_cur.amount * 100, 2) if total_cur.amount else None
@@ -301,7 +344,7 @@ async def breakdown(req: BreakdownRequest, request: Request, user: User = Depend
     result = {
         "rows_dim": req.rows, "rows_title": rd["title"],
         "cols_dim": req.cols, "cols_title": cd["title"] if cd else None,
-        "total": total_cur, "total_rows": total_rows,
+        "total": total_cur, "total_rows": total_rows, "company_total": comp_total,
         "rows": [{k: v for k, v in i.items() if k != "sort"} for i in items],
     }
 
