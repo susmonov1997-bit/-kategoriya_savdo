@@ -20,6 +20,7 @@ from aiogram.types import (BufferedInputFile, CallbackQuery, InlineKeyboardButto
 import config
 from access import ROLE_NAMES, get_access, invalidate
 from db import create_pool, migrate
+from fact import ensure_fact
 from loaders_common import LoaderError
 from loaders_dispatch import load_any, load_any_ex
 from notify import broadcast_upload
@@ -277,6 +278,7 @@ async def kurs_cmd(m: Message, pool: asyncpg.Pool) -> None:
             """INSERT INTO fx_rates(valid_from, rate, set_by) VALUES ($1, $2, $3)
                ON CONFLICT (valid_from) DO UPDATE SET rate = EXCLUDED.rate, set_by = EXCLUDED.set_by, set_at = now()""",
             d, rate, m.from_user.id)
+        await ensure_fact(pool)              # marjalar yangi kurs bilan qayta hisoblanadi
         await m.answer(f"✅ Kurs: <b>{rate:,.0f}</b> so'm/$ — {d.strftime('%d.%m.%Y')} dan boshlab.\n"
                        "Shu sanadan keyingi savdoning front va gross marjasi yangi kurs bilan hisoblanadi.".replace(",", " "))
     rows = await pool.fetch("SELECT valid_from, valid_to, rate FROM fx_periods ORDER BY valid_from DESC LIMIT 10")

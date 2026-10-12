@@ -15,8 +15,10 @@ Endpointlar (hammasi Authorization: tma <initData> talab qiladi):
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import timedelta
 
@@ -29,6 +31,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 import config
 from db import create_pool, migrate
+from fact import ensure_fact
 from api_auth import User, allowed_categories, current_user
 from api_queries import (JOINS, Q, compare_period, delta, dimension, kpi_from, load_attrs, metrics_sql)
 from api_schemas import BreakdownRequest, Filters, Kpi
@@ -45,6 +48,7 @@ MAX_PIVOT_COLS = 30
 async def lifespan(app: FastAPI):
     app.state.pool = await create_pool()
     await migrate(app.state.pool)
+    await ensure_fact(app.state.pool)          # tayyor hisob-kitob jadvali (birinchi ishga tushishda quriladi)
     yield
     await app.state.pool.close()
 
@@ -138,9 +142,10 @@ async def meta(request: Request, user: User = Depends(current_user)):
     allowed = await allowed_categories(user)
     cats = await pool.fetch(
         """SELECT c.id, c.grp, c.name, c.owner, count(p.*) skus,
-                  (SELECT sum(s.amount) FROM sales_daily s JOIN products p2 USING (product_id)
-                   WHERE p2.category_id = c.id AND s.sale_date > current_date - 90) recent
+                  max(r.amount) recent
            FROM categories c LEFT JOIN products p ON p.category_id = c.id
+           LEFT JOIN (SELECT p3.category_id, sum(f.amount) amount FROM sales_fact f JOIN products p3 USING (product_id)
+                      WHERE f.sale_date > (SELECT max(sale_date) FROM sales_fact) - 90 GROUP BY 1) r ON r.category_id = c.id
            GROUP BY c.id ORDER BY recent DESC NULLS LAST, c.name""")
     attrs = await pool.fetch(
         """SELECT category_id, slot, name, data_type, unit, sort_order FROM category_attributes
@@ -202,9 +207,44 @@ async def meta(request: Request, user: User = Depends(current_user)):
     }
 
 
+
 # ---------------------------------------------------------------------------
-@app.post("/api/options")
-async def options(f: Filters, request: Request, user: User = Depends(current_user)):
+# Faceted guruhlash: filtri yo'q o'lchovlar BITTA so'rovda (GROUPING SETS), filtri bor o'lchov — alohida
+# (o'z filtrisiz). Avval har bir o'lchov uchun alohida to'liq skan qilinardi.
+def _active(f: Filters, dim: str):
+    if dim.startswith("attr:"):
+        return f.attrs.get(int(dim[5:]))
+    return {"region": f.region_ids, "cluster": f.cluster_ids, "branch": f.branch_ids, "brand": f.brands,
+            "status": f.statuses, "category": f.category_ids, "owner": f.owners, "sku": f.product_ids}.get(dim)
+
+
+async def facet_rows(con, f: Filters, attrs, cats, dims: list[str], metrics: bool, with_cmp: bool = True) -> dict:
+    sel = (f"{metrics_sql('c', False)}, {metrics_sql('p', False)}" if metrics
+           else "sum(x.amount) AS amount")
+    free = [d for d in dims if not _active(f, d)]
+    groups = ([(None, free)] if free else []) + [(d, [d]) for d in dims if _active(f, d)]
+    out: dict[str, list] = {}
+    for exclude, ds in groups:
+        q = Q(f, attrs, cats)
+        cte = q.base_cte(exclude=exclude, with_cmp=with_cmp)
+        defs = [dimension(d, attrs) for d in ds]
+        if len(ds) == 1:
+            dd = defs[0]
+            rows = await con.fetch(cte + f"\nSELECT {dd['key']} AS key, {dd['label']} AS label, {dd['sort']} AS sort, "
+                                         f"{sel} FROM x {JOINS} GROUP BY 1, 2, 3", *q.params)
+            out[ds[0]] = [dict(r) for r in rows]
+            continue
+        cols = ", ".join(f"{dd['key']} AS k{i}, {dd['label']} AS l{i}, {dd['sort']} AS s{i}, GROUPING({dd['key']}) AS g{i}"
+                         for i, dd in enumerate(defs))
+        sets = ", ".join(f"({dd['key']}, {dd['label']}, {dd['sort']})" for dd in defs)
+        rows = await con.fetch(cte + f"\nSELECT {cols}, {sel} FROM x {JOINS} GROUP BY GROUPING SETS ({sets})", *q.params)
+        for i, d in enumerate(ds):
+            out[d] = [{**dict(r), "key": r[f"k{i}"], "label": r[f"l{i}"], "sort": r[f"s{i}"]} for r in rows if r[f"g{i}"] == 0]
+    return out
+
+
+# ---------------------------------------------------------------------------
+async def _options(f: Filters, request: Request, user: User = Depends(current_user)):
     """Har bir filtr uchun qiymatlar ro'yxati (joriy davrdagi savdo bilan, kamayish tartibida).
     Faceted: masalan hudud tanlansa, filial ro'yxati shu hududnikiga qisqaradi, hudud ro'yxati esa to'liq qoladi."""
     pool = request.app.state.pool
@@ -212,16 +252,12 @@ async def options(f: Filters, request: Request, user: User = Depends(current_use
         cats, attrs, multi = await scope_ctx(con, f, user)
         dims = (["region", "cluster", "branch"] + (["category", "owner"] if multi else []) + ["brand", "status"]
                 + [f"attr:{s}" for s in attrs])
+        rows_by = await facet_rows(con, f, attrs, cats, dims, metrics=False, with_cmp=False)
         result = {}
         for dim in dims:
-            q = Q(f, attrs, cats)
-            d = dimension(dim, attrs)
-            sql = (q.base_cte(exclude=dim, with_cmp=False) +
-                   f"\nSELECT {d['key']} AS key, {d['label']} AS label, {d['sort']} AS sort, sum(x.amount) amount "
-                   f"FROM x {JOINS} GROUP BY 1, 2, 3")
-            rows = await con.fetch(sql, *q.params)
+            rows = rows_by.get(dim, [])
             if dim.startswith("attr:"):
-                rows = sorted(rows, key=lambda r: (r["sort"] is None, r["sort"] or 0, r["label"]))
+                rows = sorted(rows, key=lambda r: (r["sort"] is None, r["sort"] or 0, r["label"] or ""))
             else:
                 rows = sorted(rows, key=lambda r: -(r["amount"] or 0))
             result[dim] = [{"key": r["key"], "label": r["label"], "amount": float(r["amount"] or 0)} for r in rows]
@@ -229,15 +265,34 @@ async def options(f: Filters, request: Request, user: User = Depends(current_use
 
 
 # ---------------------------------------------------------------------------
-@app.post("/api/summary")
-async def summary(f: Filters, request: Request, user: User = Depends(current_user)):
-    async with request.app.state.pool.acquire() as con:
+async def _summary(f: Filters, request: Request, user: User = Depends(current_user)):
+    pool = request.app.state.pool
+    async with pool.acquire() as con:
         cats, attrs, multi = await scope_ctx(con, f, user)
+
+    async def sums():
         q = Q(f, attrs, cats)
-        row = await con.fetchrow(q.base_cte() + f"\nSELECT {metrics_sql('c')}, {metrics_sql('p')}, "
-                                 "count(DISTINCT x.sale_date) FILTER (WHERE x.per = 'c') c_days, "
-                                 "count(DISTINCT x.sale_date) FILTER (WHERE x.per = 'p') p_days FROM x", *q.params)
-        comp = (await company_totals(con, f)).get("all")
+        async with pool.acquire() as c:
+            return q, await c.fetchrow(q.base_cte() + f"\nSELECT {metrics_sql('c', False)}, {metrics_sql('p', False)}, "
+                                       "count(DISTINCT x.sale_date) FILTER (WHERE x.per = 'c') c_days, "
+                                       "count(DISTINCT x.sale_date) FILTER (WHERE x.per = 'p') p_days FROM x", *q.params)
+
+    async def distinct(col: str):
+        # SKU / filial soni — alohida (hash) so'rov, parallel: count(DISTINCT) bilan birga qilinsa 2–3 barobar sekin
+        q = Q(f, attrs, cats)
+        async with pool.acquire() as c:
+            rows = await c.fetch(q.base_cte() + f"\nSELECT per, count(*) n FROM (SELECT DISTINCT x.per, x.{col} FROM x) d "
+                                 "GROUP BY per", *q.params)
+        return {r["per"]: r["n"] for r in rows}
+
+    async def comp_all():
+        async with pool.acquire() as c:
+            return (await company_totals(c, f)).get("all")
+
+    (q, row), skus, branches, comp = await asyncio.gather(sums(), distinct("product_id"), distinct("branch_id"), comp_all())
+    row = dict(row)
+    for per in ("c", "p"):
+        row[f"{per}_skus"], row[f"{per}_branches"] = skus.get(per, 0), branches.get(per, 0)
     cur = kpi_from(row, "c")
     prev = kpi_from(row, "p") if q.cmp else None
     return {
@@ -250,8 +305,7 @@ async def summary(f: Filters, request: Request, user: User = Depends(current_use
 
 
 # ---------------------------------------------------------------------------
-@app.post("/api/daily")
-async def daily(f: Filters, request: Request, user: User = Depends(current_user)):
+async def _daily(f: Filters, request: Request, user: User = Depends(current_user)):
     async with request.app.state.pool.acquire() as con:
         cats, attrs, multi = await scope_ctx(con, f, user)
         q = Q(f, attrs, cats)
@@ -288,8 +342,7 @@ def _sort_key(item: dict, metric: str):
     return v if v is not None else float("-inf")
 
 
-@app.post("/api/breakdown")
-async def breakdown(req: BreakdownRequest, request: Request, user: User = Depends(current_user)):
+async def _breakdown(req: BreakdownRequest, request: Request, user: User = Depends(current_user)):
     """Qirqim jadvali. rows — qator o'lchovi, cols — ixtiyoriy ustun o'lchovi (kesma).
     Ulush (share) — joriy filtrlar bo'yicha jami savdoga nisbatan."""
     async with request.app.state.pool.acquire() as con:
@@ -304,7 +357,7 @@ async def breakdown(req: BreakdownRequest, request: Request, user: User = Depend
 
         q = Q(req, attrs, cats)
         base = q.base_cte()
-        m = f"{metrics_sql('c')}, {metrics_sql('p')}"
+        m = f"{metrics_sql('c', False)}, {metrics_sql('p', False)}"
         rows = await con.fetch(
             base + f"\nSELECT {rd['key']} AS key, {rd['label']} AS label, {rd['sort']} AS sort, {rd['sub']} AS sub, "
                    f"{m} FROM x {JOINS} GROUP BY 1, 2, 3, 4", *q.params)
@@ -398,8 +451,7 @@ async def breakdown(req: BreakdownRequest, request: Request, user: User = Depend
 
 
 # ---------------------------------------------------------------------------
-@app.post("/api/share-daily")
-async def share_daily(req: BreakdownRequest, request: Request, user: User = Depends(current_user)):
+async def _share_daily(req: BreakdownRequest, request: Request, user: User = Depends(current_user)):
     """Kunlar bo'yicha savdo ulushi (100% ustunlar grafigi uchun). req.rows — o'lchov, req.limit — TOP-N (sukut 5)."""
     top_n = min(req.limit, 8) if req.limit != 200 else 5
     async with request.app.state.pool.acquire() as con:
@@ -433,20 +485,18 @@ async def share_daily(req: BreakdownRequest, request: Request, user: User = Depe
 
 
 # ---------------------------------------------------------------------------
-@app.post("/api/attributes")
-async def attributes(f: Filters, request: Request, user: User = Depends(current_user)):
+async def _attributes(f: Filters, request: Request, user: User = Depends(current_user)):
     """Xususiyatlar bloklari: har bir xususiyat (va brend) bo'yicha barcha qiymatlar — savdo, dona, marja,
     ulush, o'tgan davr ulushi, pp. Faceted: blokning o'z filtri hisobga olinmaydi, tanlangan qiymatlar selected=true."""
     out = []
     async with request.app.state.pool.acquire() as con:
         cats, attrs, multi = await scope_ctx(con, f, user)
-        for dim in (["category", "owner"] if multi else [f"attr:{s}" for s in attrs]) + ["brand"]:
+        dims = (["category", "owner"] if multi else [f"attr:{s}" for s in attrs]) + ["brand"]
+        rows_by = await facet_rows(con, f, attrs, cats, dims, metrics=True)
+        for dim in dims:
             d = dimension(dim, attrs)
-            q = Q(f, attrs, cats)
-            rows = await con.fetch(
-                q.base_cte(exclude=dim) + f"\nSELECT {d['key']} AS key, {d['label']} AS label, {d['sort']} AS sort, "
-                f"{metrics_sql('c')}, {metrics_sql('p')} FROM x {JOINS} GROUP BY 1, 2, 3", *q.params)
-            has_cmp = q.cmp is not None
+            rows = rows_by.get(dim, [])
+            has_cmp = compare_period(f) is not None
             items = [{"key": r["key"], "label": r["label"], "sort": r["sort"], "current": kpi_from(r, "c"),
                       "previous": kpi_from(r, "p") if has_cmp else None} for r in rows]
             items = [i for i in items if i["current"].amount or i["current"].qty]
@@ -479,8 +529,7 @@ async def attributes(f: Filters, request: Request, user: User = Depends(current_
     return {"blocks": out}
 
 
-@app.get("/api/plan")
-async def plan(request: Request, year: int | None = None, user: User = Depends(current_user)):
+async def _plan(request: Request, year: int | None = None, user: User = Depends(current_user)):
     """Reja va fakt: har bir kategoriya uchun 12 oylik massivlar. Bajarilish %, davr rejasi va prognoz —
     mijozda (data_to bo'yicha) hisoblanadi. Kategoriya menejeriga faqat o'z kategoriyalari rejasi ko'rinadi."""
     pool = request.app.state.pool
@@ -511,7 +560,7 @@ async def plan(request: Request, year: int | None = None, user: User = Depends(c
         from datetime import date as _date
         rows = await pool.fetch(
             """SELECT extract(month FROM e.sale_date)::int m, p.category_id cid, sum(e.amount) a, sum(e.margin) g
-               FROM sales_enriched e JOIN products p USING (product_id)
+               FROM sales_fact e JOIN products p USING (product_id)
                WHERE e.sale_date BETWEEN $1 AND $2 AND p.category_id = ANY($3::int[]) GROUP BY 1, 2""",
             _date(year, 1, 1), _date(year, 12, 31), list(ids))
         for r in rows:
@@ -520,6 +569,68 @@ async def plan(request: Request, year: int | None = None, user: User = Depends(c
             d["fact_gross"][r["m"] - 1] = float(r["g"] or 0)
     return {"year": year, "years": years, "data_from": data_from, "data_to": data_to,
             "cats": sorted(out.values(), key=lambda d: (d["grp"], -sum(v or 0 for v in d["plan_amount"])))}
+
+
+# ---------------------------------------------------------------------------
+# Kesh: bir xil so'rov (filtrlar + ruxsat + ma'lumot versiyasi) qayta hisoblanmaydi. Versiya har qanday
+# yuklash/kurs/spravochnik o'zgarishida oshadi (008_fact.sql triggerlari) — eski natijalar avtomatik eskiradi.
+_CACHE: "OrderedDict[str, object]" = OrderedDict()
+_CACHE_MAX = 600
+_CACHE_VER = {"v": None}
+
+
+async def cached(request: Request, user: User, name: str, payload, fn):
+    ver = await ensure_fact(request.app.state.pool)
+    if ver != _CACHE_VER["v"]:
+        _CACHE.clear()
+        _CACHE_VER["v"] = ver
+    allowed = await allowed_categories(user)
+    key = json.dumps([name, sorted(allowed) if allowed is not None else None, payload], sort_keys=True, default=str)
+    hit = _CACHE.get(key)
+    if hit is not None:
+        _CACHE.move_to_end(key)
+        return hit
+    res = await fn()
+    if _CACHE_VER["v"] == ver:
+        _CACHE[key] = res
+        while len(_CACHE) > _CACHE_MAX:
+            _CACHE.popitem(last=False)
+    return res
+
+
+@app.post("/api/options")
+async def options(f: Filters, request: Request, user: User = Depends(current_user)):
+    return await cached(request, user, "options", f.model_dump(mode="json"), lambda: _options(f, request, user))
+
+
+@app.post("/api/summary")
+async def summary(f: Filters, request: Request, user: User = Depends(current_user)):
+    return await cached(request, user, "summary", f.model_dump(mode="json"), lambda: _summary(f, request, user))
+
+
+@app.post("/api/daily")
+async def daily(f: Filters, request: Request, user: User = Depends(current_user)):
+    return await cached(request, user, "daily", f.model_dump(mode="json"), lambda: _daily(f, request, user))
+
+
+@app.post("/api/breakdown")
+async def breakdown(req: BreakdownRequest, request: Request, user: User = Depends(current_user)):
+    return await cached(request, user, "breakdown", req.model_dump(mode="json"), lambda: _breakdown(req, request, user))
+
+
+@app.post("/api/share-daily")
+async def share_daily(req: BreakdownRequest, request: Request, user: User = Depends(current_user)):
+    return await cached(request, user, "share", req.model_dump(mode="json"), lambda: _share_daily(req, request, user))
+
+
+@app.post("/api/attributes")
+async def attributes(f: Filters, request: Request, user: User = Depends(current_user)):
+    return await cached(request, user, "attributes", f.model_dump(mode="json"), lambda: _attributes(f, request, user))
+
+
+@app.get("/api/plan")
+async def plan(request: Request, year: int | None = None, user: User = Depends(current_user)):
+    return await cached(request, user, "plan", year, lambda: _plan(request, year, user))
 
 
 # ---------------------------------------------------------------------------

@@ -95,7 +95,8 @@ async def _check(pool, job: dict) -> None:
             tr = con.transaction()
             await tr.start()
             try:
-                _, text, uid = await load_any_ex(_OneConnection(con), data, job["file_name"], job["user_id"])
+                _, text, uid = await load_any_ex(_OneConnection(con), data, job["file_name"], job["user_id"],
+                                                 finalize=False)
                 if kind == "sales":            # spravochnikda yo'qlar — rollback'dan oldin Excel'ga olinadi
                     rep = await report_of(con, uid)
                     if has_missing(rep):

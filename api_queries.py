@@ -170,31 +170,33 @@ class Q:
         else:
             period = f"e.sale_date BETWEEN {c1} AND {c2}"
         where = [period] + self.filter_conds(exclude)
+        # kompaniya jami (company_daily) bor kunlar — kompaniyadagi ulush surati uchun (cov)
+        cd_period = period.replace("e.sale_date", "c.sale_date")
         return f"""
 WITH pd AS (
     SELECT p.product_id, p.name AS pname, p.brand, p.status, p.category_id, c.name AS cname,
            COALESCE(c.owner, '—') AS owner{_attr_cols(self.attrs)}
     FROM products p JOIN categories c ON c.id = p.category_id WHERE p.category_id = ANY({cat}::int[])
+), cdays AS (
+    SELECT DISTINCT c.sale_date AS d FROM company_daily c WHERE {cd_period}
 ), x AS (
     SELECT e.sale_date, e.is_bonus, e.qty, e.amount, e.gross_margin, e.supplier_income, e.margin,
-           e.branch_id, b.region_id, b.cluster_id, pd.*,
-           -- kompaniya jami (company_daily) bor kunmi: ulush faqat shu kunlar bo'yicha hisoblanadi
-           EXISTS (SELECT 1 FROM company_daily cd WHERE cd.sale_date = e.sale_date) AS cov,
+           e.branch_id, e.region_id, e.cluster_id, pd.*, (cd.d IS NOT NULL) AS cov,
            CASE WHEN e.sale_date BETWEEN {c1} AND {c2} THEN 'c' ELSE 'p' END AS per
-    FROM sales_enriched e
+    FROM sales_fact e
     JOIN pd USING (product_id)
-    JOIN branches b ON b.id = e.branch_id
+    LEFT JOIN cdays cd ON cd.d = e.sale_date
     WHERE {' AND '.join(where)}
 )"""
 
-    def filter_conds(self, exclude: str | None = None, alias_b: str = "b", alias_p: str = "pd") -> list[str]:
+    def filter_conds(self, exclude: str | None = None, alias_b: str = "e", alias_p: str = "pd") -> list[str]:
         f, c = self.f, []
         if f.region_ids and exclude != "region":
             c.append(f"{alias_b}.region_id = ANY({self.p(f.region_ids)}::int[])")
         if f.cluster_ids and exclude != "cluster":
             c.append(f"{alias_b}.cluster_id = ANY({self.p(f.cluster_ids)}::int[])")
         if f.branch_ids and exclude != "branch":
-            c.append(f"{alias_b}.id = ANY({self.p(f.branch_ids)}::int[])")
+            c.append(f"{alias_b}.branch_id = ANY({self.p(f.branch_ids)}::int[])")
         if f.brands and exclude != "brand":
             c.append(f"{alias_p}.brand = ANY({self.p(f.brands)}::text[])")
         if f.statuses and exclude != "status":
@@ -211,8 +213,12 @@ WITH pd AS (
         return c
 
 
-def metrics_sql(per: str) -> str:
+def metrics_sql(per: str, distinct: bool = True) -> str:
+    """distinct=False — SKU/filial sonini hisoblamaydi (count DISTINCT qimmat; qirqim/bloklarda kerak emas)."""
     w = f"x.per = '{per}'"
+    cnt = (f"count(DISTINCT x.product_id) FILTER (WHERE {w}) AS {per}_skus, "
+           f"count(DISTINCT x.branch_id) FILTER (WHERE {w}) AS {per}_branches") if distinct else \
+          f"0 AS {per}_skus, 0 AS {per}_branches"
     return (f"sum(x.amount) FILTER (WHERE {w}) AS {per}_amount, "
             f"sum(x.qty) FILTER (WHERE {w}) AS {per}_qty, "
             f"sum(x.qty) FILTER (WHERE {w} AND x.is_bonus) AS {per}_bonus_qty, "
@@ -223,8 +229,7 @@ def metrics_sql(per: str) -> str:
             f"sum(x.amount) FILTER (WHERE {w} AND x.cov) AS {per}_cov_amount, "
             f"sum(x.qty) FILTER (WHERE {w} AND x.cov) AS {per}_cov_qty, "
             f"sum(x.gross_margin) FILTER (WHERE {w} AND x.cov) AS {per}_cov_gross, "
-            f"count(DISTINCT x.product_id) FILTER (WHERE {w}) AS {per}_skus, "
-            f"count(DISTINCT x.branch_id) FILTER (WHERE {w}) AS {per}_branches")
+            + cnt)
 
 
 def kpi_from(row: asyncpg.Record | dict, per: str) -> Kpi:

@@ -13,7 +13,7 @@ SQL_DIR = Path(__file__).resolve().parent
 
 
 async def create_pool(dsn: str | None = None) -> asyncpg.Pool:
-    return await asyncpg.create_pool(dsn or config.DATABASE_URL, min_size=1, max_size=5)
+    return await asyncpg.create_pool(dsn or config.DATABASE_URL, min_size=2, max_size=10)
 
 
 async def migrate(pool: asyncpg.Pool) -> list[str]:

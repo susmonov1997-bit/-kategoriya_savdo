@@ -26,6 +26,7 @@ from datetime import date, datetime
 import asyncpg
 import pandas as pd
 
+from fact import refresh_dates
 from loaders_common import LoaderError, clean_text, name_key, read_sheet_with_header
 
 COL_BRANCH = "Филиал"
@@ -274,6 +275,7 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
                 "company_daily", records=comp_records,
                 columns=["sale_date", "branch_id", "qty", "amount", "cost", "cost_usd", "cost_uzs", "cost_split",
                          "upload_id"])
+        await refresh_dates(con, file_dates)          # tayyor hisob-kitob jadvali (sales_fact) — shu sanalar
         by_cat = await con.fetch(
             """SELECT c.name category, sum(e.amount) amount, sum(e.qty) qty,
                       sum(e.qty) FILTER (WHERE e.is_bonus) bonus_qty,

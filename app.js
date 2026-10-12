@@ -408,9 +408,9 @@ function renderKpis(s) {
 // --- Umumiy: kategoriyalar (bir nechta kategoriya) yoki brendlar (bitta kategoriya) ro'yxati
 let LIST_ALL = false;
 function renderCatList() {
-  if (!ATTR) return;
+  if (!LIST) return;
   const multi = isMulti(), host = $('catList');
-  const b = ATTR.blocks.find(x => x.dim === (multi ? 'category' : 'brand'));
+  const b = {dim: LIST.dim, items: LIST.rows};
   $('listH').textContent = multi ? 'Kategoriyalar' : 'Brendlar';
   if (!b || !b.items.length) { host.innerHTML = `<div class="empty">Savdo yo'q</div>`; $('listHint').textContent = ''; return; }
   const items = b.items.slice().sort((x, y) => mval(y.current) - mval(x.current));
@@ -625,7 +625,7 @@ function rowHtml(node, rootAmount, indBase = 1) {
   const cs = LOC_WORD[node.dim] ? compShare(C, r.previous, r.company) : null;
   const third = cs
     ? cell(`${cap(LOC_WORD[node.dim])} ulush`, pct(cs.s), `${hasCmp && cs.pp != null ? ppTxt(cs.pp) + ' · ' : ''}front ${pct(cs.g)}`)
-    : cell("O'rt. narx", C.avg_price ? money(C.avg_price) : '—', hasCmp ? dTxt(dd.avg_price) : `${nf0.format(C.branches || 0)} filial`);
+    : cell("O'rt. narx", C.avg_price ? money(C.avg_price) : '—', hasCmp ? dTxt(dd.avg_price) : '');
   return `<button class="li nd ${can ? 'can' : ''} ${node.open ? 'op' : ''} ${node.depth - indBase > 0 ? 'deep' : ''}" data-s="${esc(nsig(node))}" ${can ? '' : 'tabindex="-1"'}
       style="--ind:${ind}px" aria-expanded="${!!node.open}">
     <span class="r1"><span class="n"><span class="c">${node.loading ? '…' : can ? (node.open ? '▾' : '▸') : '·'}</span>
@@ -961,30 +961,67 @@ function showError(e) {
   box.className = 'errbox'; box.textContent = 'Xato: ' + e.message;
   $('errHost').replaceChildren(box);
 }
+// Tablar bo'yicha yuklash: Umumiy (KPI, grafik, kategoriyalar) har doim; Qirqim va Tovarlar — faqat ochilganda.
+// Filtr/davr o'zgarsa ikkalasi "eskirgan" deb belgilanadi va ochilganda qayta olinadi.
+const STALE = {Qirqim: true, Tovarlar: true};
+let LIST = null;
 async function load() {
   renderHeader();
+  STALE.Qirqim = STALE.Tovarlar = true;
   const F = filters(), seq = ++reqSeq.main;
-  const secs = ['kpis', 'chart', 'catList', 'breakdown', 'ablocks', 'top'].map($);
+  const secs = ['kpis', 'chart', 'catList'].map($);
   secs.forEach(s => s.classList.add('loading'));
   try {
-    const tasks = [api('summary', F), api('daily', F), api('attributes', F), api('breakdown', {...F, rows: 'sku', sort: st.metric, limit: 10})];
-    if (st.mode === 'pivot') {
-      const avail = [...LOC_PATH, ...(cat().extra_dims || []), ...attrDims(), 'brand', 'status', 'sku'];
-      if (!avail.includes(st.rows)) st.rows = 'region';
-      if (!st.cols || st.cols === st.rows || !avail.includes(st.cols))
-        st.cols = attrDims().find(d => d !== st.rows) || (cat().extra_dims || []).find(d => d !== st.rows) || (st.rows === 'brand' ? 'region' : 'brand');
-      tasks.push(api('breakdown', {...F, rows: st.rows, cols: st.cols, sort: apiSort(), desc: st.sort !== 'name', limit: 500}));
-    } else tasks.push(buildTree());
-    const [sum, daily, attrs, top, bd] = await Promise.all(tasks);
+    // kategoriyalar (yoki bitta kategoriyada — brendlar) ro'yxati: o'z filtrisiz (faceted)
+    const listDim = isMulti() ? 'category' : 'brand';
+    const LF = {...F, ...(listDim === 'category' ? {category_ids: []} : {brands: []})};
+    const [sum, daily, list] = await Promise.all([api('summary', F), api('daily', F),
+      api('breakdown', {...LF, rows: listDim, sort: st.metric, limit: 500})]);
     if (seq !== reqSeq.main) return;          // eskirgan javob
-    DAILY = daily; ATTR = attrs; if (st.mode === 'pivot') BD = bd;
     $('errHost').innerHTML = '';
-    renderKpis(sum); renderChart(); renderCatList(); renderBreakdown(); renderAttrBlocks(); renderTop(top);
+    DAILY = daily; LIST = {dim: listDim, rows: list.rows};
+    renderKpis(sum); renderChart(); renderCatList();
+    if (TREE && st.mode === 'tree' && !STALE.Qirqim) renderTree();   // Jami kartasidagi o'zgarish % (SUM)
     renderHeader();
   } catch (e) {
     if (seq === reqSeq.main) showError(e);
   } finally {
     if (seq === reqSeq.main) secs.forEach(s => s.classList.remove('loading'));
+  }
+  if (seq === reqSeq.main && STALE[TAB]) loadTab(TAB);
+}
+async function loadTab(t) {
+  if (!STALE[t]) return;
+  STALE[t] = false;
+  const F = filters(), seq = reqSeq.main;
+  if (t === 'Qirqim') {
+    const host = $('breakdown'); host.classList.add('loading');
+    if (!host.firstChild) host.innerHTML = `<div class="empty">Yuklanmoqda…</div>`;
+    try {
+      if (st.mode === 'pivot') {
+        const avail = [...LOC_PATH, ...(cat().extra_dims || []), ...attrDims(), 'brand', 'status', 'sku'];
+        if (!avail.includes(st.rows)) st.rows = 'region';
+        if (!st.cols || st.cols === st.rows || !avail.includes(st.cols))
+          st.cols = attrDims().find(d => d !== st.rows) || (cat().extra_dims || []).find(d => d !== st.rows) || (st.rows === 'brand' ? 'region' : 'brand');
+        const bd = await api('breakdown', {...F, rows: st.rows, cols: st.cols, sort: apiSort(), desc: st.sort !== 'name', limit: 500});
+        if (seq !== reqSeq.main) return;
+        BD = bd;
+      } else {
+        await buildTree();
+        if (seq !== reqSeq.main) return;
+      }
+      renderBreakdown();
+    } catch (e) { if (seq === reqSeq.main) { STALE[t] = true; showError(e); } }
+    finally { host.classList.remove('loading'); }
+  } else if (t === 'Tovarlar') {
+    const secs = ['ablocks', 'top'].map($); secs.forEach(s => s.classList.add('loading'));
+    if (!$('ablocks').firstChild) $('ablocks').innerHTML = `<div class="empty">Yuklanmoqda…</div>`;
+    try {
+      const [attrs, top] = await Promise.all([api('attributes', F), api('breakdown', {...F, rows: 'sku', sort: st.metric, limit: 10})]);
+      if (seq !== reqSeq.main) return;
+      ATTR = attrs; renderAttrBlocks(); renderTop(top);
+    } catch (e) { if (seq === reqSeq.main) { STALE[t] = true; showError(e); } }
+    finally { secs.forEach(s => s.classList.remove('loading')); }
   }
 }
 
@@ -992,10 +1029,11 @@ async function load() {
 $('catBtn').onclick = openCatSheet;
 $('perBtn').onclick = openPeriodSheet;
 $('filBtn').onclick = openFilterSheet;
-$('rowsDim').onchange = e => { st.rows = e.target.value; if (st.cols === st.rows) st.cols = ''; st.showAll = false; load(); };
-$('colsDim').onchange = e => { st.cols = e.target.value === st.rows ? '' : e.target.value; st.showAll = false; load(); };
-$('sortBy').onchange = e => { st.sort = e.target.value; resetView(); load(); };
-document.querySelectorAll('#brMode button').forEach(b => b.onclick = () => { if (st.mode === b.dataset.m) return; st.mode = b.dataset.m; resetView(); load(); });
+const reloadQirqim = () => { STALE.Qirqim = true; loadTab('Qirqim'); };
+$('rowsDim').onchange = e => { st.rows = e.target.value; if (st.cols === st.rows) st.cols = ''; st.showAll = false; reloadQirqim(); };
+$('colsDim').onchange = e => { st.cols = e.target.value === st.rows ? '' : e.target.value; st.showAll = false; reloadQirqim(); };
+$('sortBy').onchange = e => { st.sort = e.target.value; resetView(); reloadQirqim(); };
+document.querySelectorAll('#brMode button').forEach(b => b.onclick = () => { if (st.mode === b.dataset.m) return; st.mode = b.dataset.m; resetView(); renderBreakdown(); reloadQirqim(); });
 function syncBack() {
   if (!(tg && tg.BackButton)) return;
   (sheetOpen() || VIEW === 'upload') ? tg.BackButton.show() : tg.BackButton.hide();
@@ -1200,6 +1238,7 @@ function setTab(t) {
   document.querySelectorAll('#tabbar button').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === t));
   window.scrollTo(0, 0);
   if (t === 'Umumiy') renderChart();                 // yashirin paytda kenglik 0 bo'ladi — qayta chizamiz
+  if (STALE[t]) loadTab(t);
   if (t === 'Qirqim' && st.mode === 'tree' && st.shareView === 'dyn') renderShare();
   try { tg && tg.HapticFeedback && tg.HapticFeedback.selectionChanged(); } catch (e) {}
 }

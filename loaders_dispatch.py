@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import asyncpg
 
@@ -11,7 +12,10 @@ import loaders_owners as owners
 import loaders_plan as plan
 import loaders_products as products
 import loaders_sales as sales
+from fact import ensure_fact
 from loaders_common import LoaderError, read_headers
+
+log = logging.getLogger(__name__)
 
 KIND_NAMES = {"products": "Tovar spravochnigi", "branches": "Filial spravochnigi", "sales": "Savdo fayli",
               "bonus": "Qo'shimcha daromad %", "owners": "Mas'ullar ro'yxati",
@@ -39,8 +43,20 @@ def detect_kind(data: bytes) -> str | None:
     return None
 
 
-async def load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int | None) -> tuple[str, str, int]:
-    """Faylni yuklaydi. Qaytaradi: (tur, HTML hisobot, upload_id). LoaderError tashqariga chiqadi."""
+async def load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int | None,
+                      finalize: bool = True) -> tuple[str, str, int]:
+    """Faylni yuklaydi. Qaytaradi: (tur, HTML hisobot, upload_id). LoaderError tashqariga chiqadi.
+    finalize=True — yuklashdan keyin sales_fact kerak bo'lsa qayta quriladi (tekshiruvda — yo'q)."""
+    res = await _load_any_ex(pool, data, file_name, tg_user_id)
+    if finalize:
+        try:
+            await ensure_fact(pool)
+        except Exception:  # noqa: BLE001
+            log.exception("sales_fact qayta qurilmadi — API keyingi so'rovda quradi")
+    return res
+
+
+async def _load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int | None) -> tuple[str, str, int]:
     kind = await asyncio.to_thread(detect_kind, data)
     if kind == "products":
         r = await products.load_products(pool, data, file_name, tg_user_id)
