@@ -32,6 +32,16 @@ function pill(v, pp) {
   return `<span class="pill ${cls} num">${arrow}${nf1.format(Math.abs(v))}${pp ? ' pp' : '%'}</span>`;
 }
 
+// pp va % — rangli matn (kartalar ichida)
+const sgn = v => (Math.abs(v) < 0.05 ? '' : v > 0 ? 'up' : 'dn');
+const sg = v => (Math.abs(v) < 0.05 ? '' : v > 0 ? '+' : '−');
+const ppTxt = v => (v == null || !isFinite(v)) ? '' : `<span class="pp ${sgn(v)}">${sg(v)}${nf1.format(Math.abs(v))} pp</span>`;
+const dTxt = v => (v == null || !isFinite(v)) ? '' : `<span class="pp ${sgn(v)}">${sgn(v) === 'up' ? '▲' : sgn(v) === 'dn' ? '▼' : ''} ${nf1.format(Math.abs(v))}%</span>`;
+const ppPlain = v => (v == null || !isFinite(v)) ? '' : `${sg(v)}${nf1.format(Math.abs(v))} pp`;
+const cap = t => String(t || '').replace(/^./, x => x.toUpperCase());
+const cell = (k, x, y) => `<span><span class="k">${k}</span><span class="x">${x}</span><span class="y">${y || '&nbsp;'}</span></span>`;
+const qtyOrAmt = C => (MQ() ? `savdo <b>${money(C.amount)}</b>` : `<b>${nf0.format(C.qty || 0)}</b> dona`);
+
 // ---------------------------------------------------------------- sanalar (ISO, UTC)
 const D = s => new Date(s + 'T00:00:00Z');
 const iso = d => d.toISOString().slice(0, 10);
@@ -180,8 +190,8 @@ function renderHeader() {
   $('catBtn').innerHTML = `<span class="tn">${esc(c.name)}</span><span class="car">▾</span>`;
   updMeta();
   const per = (st.preset && PERIOD_SHORT[st.preset]) || periodText();
-  $('perBtn').innerHTML = `📅 ${esc(per)}${st.compare === 'yoy' ? ' · o\'tgan yil' : ''} <span class="car">▾</span>`;
-  $('filBtn').innerHTML = `⚙ Filtr${nf ? ` <span class="badge">${nf}</span>` : ''}`;
+  $('perBtn').innerHTML = `${esc(per)}${st.compare === 'yoy' ? ' · o\'tgan yil' : ''} <span class="car">▾</span>`;
+  $('filBtn').innerHTML = `Filtr${nf ? ` <span class="badge">${nf}</span>` : ''}`;
   document.querySelectorAll('#metricSeg button').forEach(b => {
     b.setAttribute('aria-pressed', b.dataset.m === st.metric);
     b.onclick = () => { if (st.metric === b.dataset.m) return; st.metric = b.dataset.m; resetView(); load(); };
@@ -340,9 +350,9 @@ function companyCard(s) {
   const locs = ['region', 'cluster', 'branch'].filter(d => st.f[d] && st.f[d].size);
   const one = locs.length === 1 && st.f[locs[0]].size === 1 ? locs[0] : null;
   const place = !locs.length ? 'Kompaniya' : one ? (labels[one + '|' + [...st.f[one]][0]] || 'Tanlangan joy') : 'Tanlangan joylar';
-  const title = `${esc(place)} savdosidagi ulush`;
-  if (!comp || !comp.c_amount) return `<div class="kpi wide comp"><div><div class="label">${title}</div>
-    <div class="sub">Kompaniya jami savdosi bu davr uchun hali yo'q — savdo faylini qayta yuklang («К»siz jami shundan hisoblanadi).</div></div></div>`;
+  const title = `${esc(place)} savdosidagi ulush («К»siz)`;
+  if (!comp || !comp.c_amount) return `<div class="kpi wide comp"><span class="l">${title}</span>
+    <span class="p">Kompaniya jami savdosi bu davr uchun hali yo'q — savdo faylini qayta yuklang.</span></div>`;
   const ours = {amount: C.amount, qty: C.qty, gross: C.gross}, prev = Pv ? {amount: Pv.amount, qty: Pv.qty, gross: Pv.gross} : null;
   // kompaniya ma'lumoti bizning savdo kunlaridan kam bo'lsa — solishtirish/ulush to'liq emas
   const partial = s.days && comp.c_days < s.days.c;
@@ -350,38 +360,87 @@ function companyCard(s) {
   const cs = compShare(ours, prev, pcomp);
   const unit = MQ() ? v => `${nf0.format(v)} dona` : money;
   return `<div class="kpi wide comp">
-    <div class="ch"><div class="label">${title}</div></div>
-    <div class="cv"><div><div class="hint">${MQ() ? 'Dona' : 'Savdo'}</div><div class="v num">${pct(cs.s)}</div><div class="sub">${Pv && cs.pp != null ? pill(cs.pp, true) : ''}</div></div>
-      <div style="text-align:right"><div class="hint">Front marja</div><div class="v num">${pct(cs.g)}</div><div class="sub" style="justify-content:flex-end">${Pv && cs.gpp != null ? pill(cs.gpp, true) : ''}</div></div></div>
+    <span class="l">${title}</span>
+    <div class="cv"><div><span class="v">${pct(cs.s)}</span> ${Pv && cs.pp != null ? pill(cs.pp, true) : ''}
+        <div class="p">${MQ() ? 'donada' : 'savdoda'}: ${unit(MQ() ? C.qty : C.amount)} / ${unit(MQ() ? comp.c_qty : comp.c_amount)}</div></div>
+      <div style="text-align:right"><span class="l">front marjada</span>
+        <div class="v" style="font-size:17px">${pct(cs.g)} ${Pv && cs.gpp != null ? pill(cs.gpp, true) : ''}</div></div></div>
     <div class="cbar"><i style="width:${Math.min(100, cs.s || 0)}%"></i></div>
-    <div class="cleg num"><span>${isMulti() ? esc(cat().name) : esc(cat().name)}: ${unit(MQ() ? C.qty : C.amount)}</span><span>${esc(place)}: ${unit(MQ() ? comp.c_qty : comp.c_amount)}</span></div>
-    <div class="hint">Jami — «К» bilan belgilangan kategoriyalarsiz${partial ? ` · ⚠ kompaniya ma'lumoti ${comp.c_days}/${s.days.c} kun uchun bor` : ''}</div>
+    ${partial ? `<span class="hint">⚠ kompaniya ma'lumoti ${comp.c_days}/${s.days.c} kun uchun bor</span>` : ''}
   </div>`;
 }
+let SUM = null;
+function heroSpark() {
+  if (!DAILY || DAILY.series.length < 2) return '';
+  const s = DAILY.series, n = s.length, W = 330, H = 46;
+  const cur = s.map(p => p.amount || 0), prev = cmpRange() ? s.map(p => p.prev_amount || 0) : null;
+  const max = Math.max(...cur, ...(prev || []), 1);
+  const pts = a => a.map((v, i) => `${(i / (n - 1) * W).toFixed(1)},${(H - 3 - (H - 8) * v / max).toFixed(1)}`).join(' ');
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+    ${prev ? `<polyline fill="none" stroke="var(--prev)" stroke-width="2" vector-effect="non-scaling-stroke" points="${pts(prev)}"/>` : ''}
+    <polyline fill="none" stroke="var(--accent)" stroke-width="2.5" vector-effect="non-scaling-stroke" points="${pts(cur)}"/></svg>`;
+}
 function renderKpis(s) {
-  const C = s.current, Pv = s.previous, d = s.delta || {};
+  SUM = s;
+  const C = s.current, Pv = s.previous, d = s.delta || {}, cw = CMP_SHORT[st.compare];
   $('cmpHint').textContent = s.compare_period
-    ? `${dm(st.from)}–${dm(st.to)} vs ${dm(s.compare_period.from)}–${dm(s.compare_period.to)}`
+    ? `${dm(st.from)}–${dm(st.to)} · solishtirish: ${cw} ${dm(s.compare_period.from)}–${dm(s.compare_period.to)}`
     : `${dm(st.from)}–${dm(st.to)}`;
-  const neg = v => v < 0 ? ' neg' : '';
+  const neg = v => (v < 0 ? ' neg' : '');
   const incPct = C.amount ? C.income / C.amount * 100 : null;
+  const pincPct = Pv && Pv.amount ? Pv.income / Pv.amount * 100 : null;
+  const card = (l, v, p, pl, cls = '') => `<div class="kpi"><span class="l">${l}</span><span class="v${cls}">${v}</span>
+    <span class="p">${p}</span>${pl ? `<span class="pl">${pl}</span>` : ''}</div>`;
   $('kpis').innerHTML = `
-    <div class="kpi wide">
-      <div><div class="label">Savdo</div><div class="v num">${money(C.amount)}</div><div class="sub">${Pv ? pill(d.amount) : ''}</div></div>
-      <div><div class="label">Gross marja</div><div class="v num${neg(C.margin)}">${money(C.margin)}</div>
-        <div class="sub num"><span>${pct(C.margin_pct)}</span>${Pv ? pill(d.margin_pct_pp, true) : ''}</div></div>
-    </div>
-    ${companyCard(s)}
-    <div class="kpi"><div class="label">Front marja</div><div class="v num${neg(C.gross)}">${money(C.gross)}</div>
-      <div class="sub num"><span>${pct(C.gross_pct)}</span>${Pv ? pill(d.gross_pct_pp, true) : ''}</div></div>
-    <div class="kpi"><div class="label">Qo'shimcha daromad</div><div class="v num">${money(C.income)}</div>
-      <div class="sub num"><span>${pct(incPct)}</span>${Pv ? pill(d.income) : ''}</div></div>
-    <div class="kpi"><div class="label">Dona</div><div class="v num">${nf0.format(C.qty)}</div>
-      <div class="sub num">${Pv ? pill(d.qty) : ''}${C.bonus_qty ? `<span>bonus ${nf0.format(C.bonus_qty)}</span>` : ''}</div></div>
-    <div class="kpi"><div class="label">O'rtacha narx</div><div class="v num">${C.avg_price ? money(C.avg_price) : '—'}</div>
-      <div class="sub num">${Pv ? pill(d.avg_price) : ''}<span>${C.skus} SKU · ${C.branches} filial</span></div></div>`;
+    <div class="kpi wide hero"><div class="top2"><span class="l">Savdo</span>
+      ${Pv ? `<span>${pill(d.amount)} <span class="hint">${cw}: ${money(Pv.amount)}</span></span>` : ''}</div>
+      <span class="v">${money(C.amount)}</span>${heroSpark()}</div>
+    ${card('Gross marja', money(C.margin), `${pct(C.margin_pct)} savdodan`, Pv ? pill(d.margin_pct_pp, true) + pill(d.margin) : '', neg(C.margin))}
+    ${card('Front marja', money(C.gross), `${pct(C.gross_pct)} savdodan`, Pv ? pill(d.gross_pct_pp, true) + pill(d.gross) : '', neg(C.gross))}
+    ${card("Qo'shimcha daromad", money(C.income), `${pct(incPct)} savdodan`,
+           Pv ? (incPct != null && pincPct != null ? pill(incPct - pincPct, true) : '') + pill(d.income) : '')}
+    ${card('Dona', nf0.format(C.qty), C.bonus_qty ? `shundan bonus ${nf0.format(C.bonus_qty)}` : (Pv ? `${cw}: ${nf0.format(Pv.qty)}` : '&nbsp;'), Pv ? pill(d.qty) : '')}
+    ${card("O'rtacha narx", C.avg_price ? money(C.avg_price) : '—', Pv && Pv.avg_price ? `${cw}: ${money(Pv.avg_price)}` : 'bonussiz', Pv ? pill(d.avg_price) : '')}
+    ${card('Qamrov', `${nf0.format(C.skus)} SKU`, `${nf0.format(C.branches)} filial`,
+           Pv ? `<span class="hint">${cw}: ${nf0.format(Pv.skus)} SKU · ${nf0.format(Pv.branches)} filial</span>` : '')}
+    ${companyCard(s)}`;
 }
 
+// --- Umumiy: kategoriyalar (bir nechta kategoriya) yoki brendlar (bitta kategoriya) ro'yxati
+let LIST_ALL = false;
+function renderCatList() {
+  if (!ATTR) return;
+  const multi = isMulti(), host = $('catList');
+  const b = ATTR.blocks.find(x => x.dim === (multi ? 'category' : 'brand'));
+  $('listH').textContent = multi ? 'Kategoriyalar' : 'Brendlar';
+  if (!b || !b.items.length) { host.innerHTML = `<div class="empty">Savdo yo'q</div>`; $('listHint').textContent = ''; return; }
+  const items = b.items.slice().sort((x, y) => mval(y.current) - mval(x.current));
+  items.forEach(i => remember(b.dim, i.key, i.label));
+  const sel = st.f[b.dim] || new Set();
+  $('listHint').textContent = multi ? 'bosing — kategoriyaga o\'tadi' : 'bosing — filtrga qo\'shiladi';
+  const shown = LIST_ALL ? items : items.slice(0, 8);
+  const max = Math.max(...items.map(i => i.share || 0), 1), hasCmp = !!cmpRange();
+  host.innerHTML = shown.map(i => { const C = i.current;
+    return `<button class="li can ${sel.has(i.key) ? 'op' : ''}" data-k="${esc(i.key)}">
+      <span class="r1"><span class="n">${esc(i.label)}${sel.has(i.key) ? ' ✓' : ''}</span><span class="v">${mnum(C)}</span></span>
+      <span class="bar"><i style="width:${(i.share || 0) / max * 100}%"></i></span>
+      <span class="m"><span>ulush <b>${pct(i.share)}</b>${hasCmp ? ' ' + ppTxt(i.share_pp) : ''}</span>${hasCmp ? dTxt(mdelta(i.delta)) : ''}
+        <span>gross <b>${money(C.margin)}</b> · ${pct(C.margin_pct)}</span><span>front <b>${money(C.gross)}</b> · ${pct(C.gross_pct)}</span>
+        <span>${qtyOrAmt(C)}</span></span></button>`; }).join('')
+    + (items.length > 8 ? `<button class="more" id="listMore">${LIST_ALL ? 'Qisqartirish' : `Hammasi (${items.length} ta)`}</button>` : '');
+  host.querySelectorAll('.li[data-k]').forEach(el => el.onclick = () => {
+    const k = el.dataset.k;
+    if (multi) {
+      const c = META.categories.find(c => String(c.id) === String(k)); if (!c) return;
+      st.cat = c.key; st.f = {}; st.aExpand = {}; st.aOpen = null; st.rows = 'region'; st.cols = ''; LIST_ALL = false;
+      resetView(); load(); window.scrollTo(0, 0); return;
+    }
+    const set = new Set(st.f.brand || []); set.has(k) ? set.delete(k) : set.add(k);
+    if (set.size) st.f.brand = set; else delete st.f.brand;
+    resetView(); load();
+  });
+  const m = $('listMore'); if (m) m.onclick = () => { LIST_ALL = !LIST_ALL; renderCatList(); };
+}
 // ---------------------------------------------------------------- kunlik grafik
 let DAILY = null;
 function niceStep(raw) { if (raw <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(raw))); const f = raw / p;
@@ -562,20 +621,25 @@ function renderBreakdown() {
   renderShare(); renderTree();
 }
 function rowHtml(node, rootAmount, indBase = 1) {
-  const r = node.row, hasCmp = !!cmpRange(), can = !!node.childDim;
-  const shareTot = rootAmount ? mval(r.current) / rootAmount * 100 : null;
-  return `<button class="tr lv${Math.min(node.depth, 6)} ${can ? 'can' : ''} ${node.open ? 'op' : ''}" data-s="${esc(nsig(node))}" ${can ? '' : 'tabindex="-1"'}
-      style="--ind:${(node.depth - indBase) * 14}px" title="Umumiy ${MQ() ? 'donadan' : 'savdodan'} ${pct(shareTot)}">
-    <span class="n"><span class="c">${node.loading ? '…' : can ? (node.open ? '▾' : '▸') : '·'}</span><span class="nl">${esc(node.label)}${node.sub && node.dim === 'sku' ? ` <span class="sub2">· ${esc(node.sub)}</span>` : ''}</span>
-      <span class="lvtag">${esc(dimName(node.dim))}</span></span>
-    <span class="v num">${mnum(r.current)}</span>
-    <span class="m num"><span class="bar"><span style="width:${Math.min(100, r.share || 0)}%"></span></span><span>${pct(r.share)}</span>${hasCmp ? pill(mdelta(r.delta)) : ''}${MQ() ? `<span class="alt">${money(r.current.amount)}</span>` : `<span class="${r.current.margin_pct < 0 ? 'neg' : ''}">GM ${pct(r.current.margin_pct)}</span>`}</span>
-    ${LOC_WORD[node.dim] && r.company ? compLine(LOC_WORD[node.dim], compShare(r.current, r.previous, r.company)) : ''}
+  const r = node.row, C = r.current, dd = r.delta || {}, hasCmp = !!cmpRange(), can = !!node.childDim;
+  const ind = Math.min(Math.max(node.depth - indBase, 0), 4) * 12;
+  const cs = LOC_WORD[node.dim] && r.company ? compShare(C, r.previous, r.company) : null;
+  const third = cs
+    ? cell(`${cap(LOC_WORD[node.dim])} ulush`, pct(cs.s), `${hasCmp && cs.pp != null ? ppTxt(cs.pp) + ' · ' : ''}front ${pct(cs.g)}`)
+    : cell("O'rt. narx", C.avg_price ? money(C.avg_price) : '—', hasCmp ? dTxt(dd.avg_price) : `${nf0.format(C.branches || 0)} filial`);
+  return `<button class="li nd ${can ? 'can' : ''} ${node.open ? 'op' : ''} ${node.depth - indBase > 0 ? 'deep' : ''}" data-s="${esc(nsig(node))}" ${can ? '' : 'tabindex="-1"'}
+      style="--ind:${ind}px" aria-expanded="${!!node.open}">
+    <span class="r1"><span class="n"><span class="c">${node.loading ? '…' : can ? (node.open ? '▾' : '▸') : '·'}</span>
+      <span>${esc(node.label)}${node.sub && node.dim === 'sku' ? ` <span class="sub2">· ${esc(node.sub)}</span>` : ''} <span class="lvtag">${esc(dimName(node.dim))}</span></span></span>
+      <span class="v">${mnum(C)}</span></span>
+    <span class="m"><span>ulush <b>${pct(r.share)}</b>${hasCmp ? ' ' + ppTxt(r.share_pp) : ''}</span>${hasCmp ? pill(mdelta(dd)) : ''}<span>${qtyOrAmt(C)}</span></span>
+    <span class="bar"><i style="width:${Math.min(100, r.share || 0)}%"></i></span>
+    <span class="mx">${cell('Gross marja', `<span class="${C.margin < 0 ? 'neg' : ''}">${money(C.margin)}</span>`, `${pct(C.margin_pct)}${hasCmp && dd.margin_pct_pp != null ? ' · ' + ppTxt(dd.margin_pct_pp) : ''}`)}${cell('Front marja', `<span class="${C.gross < 0 ? 'neg' : ''}">${money(C.gross)}</span>`, `${pct(C.gross_pct)}${hasCmp && dd.gross_pct_pp != null ? ' · ' + ppTxt(dd.gross_pct_pp) : ''}`)}${third}</span>
   </button>`;
 }
 function subtreeRows(node, out, rootAmt, indBase = 1) {
   if (!node.open || !node.children) return;
-  const ind = (node.depth + 1 - indBase) * 14 + 18;
+  const ind = Math.min(Math.max(node.depth + 1 - indBase, 0), 4) * 12;
   if (!node.children.length) { out.push(`<div class="tr-empty" style="--ind:${ind}px">Savdo yo'q</div>`); return; }
   const shown = node.showAll ? node.children : node.children.slice(0, CHILD_LIMIT);
   for (const ch of shown) { out.push(rowHtml(ch, rootAmt, indBase)); subtreeRows(ch, out, rootAmt, indBase); }
@@ -584,7 +648,7 @@ function subtreeRows(node, out, rootAmt, indBase = 1) {
   if (node.total_rows > node.children.length) out.push(`<div class="tr-empty" style="--ind:${ind}px">Birinchi ${node.children.length} ta ko'rsatilgan (jami ${node.total_rows})</div>`);
 }
 function wireTree(host) {
-  host.querySelectorAll('.tr.can[data-s]').forEach(b => b.onclick = e => { e.stopPropagation(); const n = findBySig(b.dataset.s); if (n) toggleNode(n); });
+  host.querySelectorAll('.nd.can[data-s], .tot[data-s]').forEach(b => b.onclick = e => { e.stopPropagation(); const n = findBySig(b.dataset.s); if (n) toggleNode(n); });
   host.querySelectorAll('.tr-more[data-more]').forEach(b => b.onclick = e => { e.stopPropagation(); const n = findBySig(b.dataset.more); if (n) { n.showAll = true; rerender(n.root); } });
 }
 function sumPrev(rows) {
@@ -597,24 +661,28 @@ function renderTree() {
   if (!TREE) { host.innerHTML = ''; return; }
   const T = TREE.total, rootAmt = T ? mval(T) : 0;
   if (!TREE.childDim || !T) { host.innerHTML = `<div class="list"><div class="empty">Tanlangan filtrlar bo'yicha savdo yo'q.</div></div>`; return; }
-  const out = [`<button class="tr lv0 can ${TREE.open ? 'op' : ''}" data-s="${esc(nsig(TREE))}">
-      <span class="n"><span class="c">${TREE.open ? '▾' : '▸'}</span><b>Jami</b></span><span class="v num">${mfmt(T)}</span>
-      <span class="m num">${MQ() ? `savdo ${money(T.amount)}${T.bonus_qty ? ` · bonus ${nf0.format(T.bonus_qty)}` : ''}${T.avg_price ? ` · o'rtacha narx ${money(T.avg_price)}` : ''}`
-        : `${nf0.format(T.qty)} dona · front marja ${pct(T.gross_pct)} · gross marja ${pct(T.margin_pct)}`}</span>
-      ${TREE.company ? compLine(locScopeWord(), compShare(T, sumPrev(TREE.raw), TREE.company)) : ''}</button>`];
+  const d = (SUM && SUM.delta) || {}, hasCmp = !!cmpRange();
+  const cs = TREE.company ? compShare(T, sumPrev(TREE.raw), TREE.company) : null;
+  const tc = (k, x, y) => `<span><span class="k">${k}</span><span class="x">${x}</span><span class="y">${y || '&nbsp;'}</span></span>`;
+  const out = [`<button class="tot" data-s="${esc(nsig(TREE))}" aria-expanded="${!!TREE.open}">
+      <span class="r1"><span class="l">Jami ${MQ() ? 'dona' : 'savdo'}</span>${hasCmp ? pill(mdelta(d)) : ''}</span>
+      <span class="v">${mfmt(T)}</span>
+      <span class="g">${tc('Gross marja', money(T.margin), `${pct(T.margin_pct)}${hasCmp && d.margin_pct_pp != null ? ' · ' + ppPlain(d.margin_pct_pp) : ''}`)}${tc('Front marja', money(T.gross), `${pct(T.gross_pct)}${hasCmp && d.gross_pct_pp != null ? ' · ' + ppPlain(d.gross_pct_pp) : ''}`)}${cs
+        ? tc(cap(locScopeWord()), pct(cs.s), `${hasCmp && cs.pp != null ? ppPlain(cs.pp) + ' · ' : ''}front ${pct(cs.g)}`)
+        : tc(MQ() ? 'Savdo' : 'Dona', MQ() ? money(T.amount) : nf0.format(T.qty), T.avg_price ? `o'rt. ${money(T.avg_price)}` : '')}</span>
+      <span class="ft">${TREE.open ? '▾' : '▸'} ${esc(dimName(TREE.childDim))} bo'yicha ${TREE.open ? 'yopish' : 'ochish'}${MQ() ? '' : ` · ${nf0.format(T.qty)} dona`}</span></button>`];
   subtreeRows(TREE, out, rootAmt, 1);
   host.innerHTML = `<div class="tw">${out.join('')}</div>`;
   wireTree(host);
 }
-
 // --- ulush kartasi: FOCUS tugunining ichki tarkibi
 function renderShare() {
   const host = $('shareHost');
   const node = FOCUS && FOCUS.open && FOCUS.children ? FOCUS : TREE;
   if (!node || !node.children || !node.children.length) { host.innerHTML = ''; return; }
   const ctx = node.path.length ? node.path.map(p => labels[p.dim + '|' + p.key] || p.key).join(' › ') : 'Jami';
-  host.innerHTML = `<div class="chartcard sharecard">
-    <div class="sh"><span class="label">${MQ() ? 'Dona' : 'Savdo'} ulushi · ${esc(dimName(node.childDim))}</span>
+  host.innerHTML = `<div class="card sharecard">
+    <div class="sh"><h2>${MQ() ? 'Dona' : 'Savdo'} tuzilmasi · ${esc(dimName(node.childDim))}</h2>
       <div class="seg mini" id="shareView">
         <button data-v="struct" aria-pressed="${st.shareView === 'struct'}">Tuzilma</button>
         <button data-v="dyn" aria-pressed="${st.shareView === 'dyn'}">Kunlar bo'yicha</button>
@@ -738,7 +806,8 @@ function attrBlock(b) {
   const d = b.dim, sel = st.f[d] || new Set(), hasCmp = !!cmpRange();
   const items = b.items;
   items.forEach(i => remember(d, i.key, i.label));
-  const rank = new Map(items.slice().sort((x, y) => mval(y.current) - mval(x.current)).map((i, n) => [i.key, n]));
+  const byVal = items.slice().sort((x, y) => mval(y.current) - mval(x.current));
+  const rank = new Map(byVal.map((i, n) => [i.key, n]));
   const color = i => rank.get(i.key) < SLOTS ? `var(--s${rank.get(i.key) + 1})` : 'var(--so)';
   const isOpen = st.aOpen.has(d);
   const expanded = !!st.aExpand[d];
@@ -747,28 +816,28 @@ function attrBlock(b) {
     shown = items.filter(i => rank.get(i.key) < A_TOP || sel.has(i.key));
     rest = items.filter(i => !(rank.get(i.key) < A_TOP || sel.has(i.key)));
   }
-  const max = Math.max(...items.map(i => Math.max(i.share || 0, i.prev_share || 0)), 1);
+  const max = Math.max(...items.map(i => i.share || 0), 1);
   const restShare = rest.reduce((s, i) => s + (i.share || 0), 0);
   const total = items.reduce((s, i) => s + mval(i.current), 0);
   const rows = isOpen ? shown.map(i => {
     const node = attrNode(d, i); node.row = i;
-    const can = !!node.childDim;
+    const can = !!node.childDim, C = i.current, on = sel.has(i.key);
     const sub = []; subtreeRows(node, sub, total, 1);
-    return `<div class="arow ${sel.has(i.key) ? 'on' : ''} ${can ? 'can' : ''} ${node.open ? 'op' : ''}" role="button" tabindex="0" data-s="${esc(nsig(node))}">
-      <span class="c">${node.loading ? '…' : can ? (node.open ? '▾' : '▸') : '·'}</span>
-      <span class="al"><span class="sw" style="background:${color(i)}"></span>${esc(i.label)}</span>
-      <span class="aa num">${mfmt(i.current)}</span>
-      <span class="strk"><span class="sf" style="width:${(i.share || 0) / max * 100}%;background:${color(i)}"></span>
-        ${hasCmp && i.prev_share != null ? `<span class="sp" style="left:${i.prev_share / max * 100}%"></span>` : ''}</span>
-      <span class="as num"><b>${pct(i.share)}</b>${hasCmp ? pill(i.share_pp, true) : ''}</span>
-      <span class="am num"><span>${MQ() ? `savdo ${money(i.current.amount)}` : `${nf0.format(i.current.qty)} dona`}${hasCmp ? ` · ${MQ() ? 'dona' : 'savdo'} ${mdelta(i.delta) == null ? '—' : (mdelta(i.delta) > 0 ? '+' : '') + nf1.format(mdelta(i.delta)) + '%'}` : ''} · <span class="${i.current.margin_pct < 0 ? 'neg' : ''}">GM ${pct(i.current.margin_pct)}</span></span>
-        <button class="fbtn ${sel.has(i.key) ? 'on' : ''}" data-d="${d}" data-k="${esc(i.key)}" title="Filtrga qo'shish / olib tashlash">${sel.has(i.key) ? '✓ filtrda' : '+ filtr'}</button></span>
+    return `<div class="it ${on ? 'on' : ''} ${can ? 'can' : ''} ${node.open ? 'op' : ''}" role="button" tabindex="0" data-s="${esc(nsig(node))}" aria-expanded="${!!node.open}">
+      <span class="n"><span class="c">${node.loading ? '…' : can ? (node.open ? '▾' : '▸') : '·'}</span><span class="sw" style="background:${color(i)}"></span><span>${esc(i.label)}</span></span>
+      <span class="v">${mnum(C)}</span>
+      <button class="fbtn ${on ? 'on' : ''}" data-d="${d}" data-k="${esc(i.key)}" title="${on ? 'Filtrdan olib tashlash' : "Filtrga qo'shish"}" aria-label="${on ? 'Filtrdan olib tashlash' : "Filtrga qo'shish"}">${on ? '✓' : '+'}</button>
+      <span class="bar"><i style="width:${(i.share || 0) / max * 100}%;background:${color(i)}"></i></span>
+      <span class="m"><span>ulush <b>${pct(i.share)}</b>${hasCmp ? ' ' + ppTxt(i.share_pp) : ''}</span>${hasCmp ? dTxt(mdelta(i.delta)) : ''}
+        <span>gross <b class="${C.margin < 0 ? 'neg' : ''}">${money(C.margin)}</b> · ${pct(C.margin_pct)}</span>
+        <span>front <b class="${C.gross < 0 ? 'neg' : ''}">${money(C.gross)}</b> · ${pct(C.gross_pct)}</span><span>${qtyOrAmt(C)}</span></span>
     </div>${sub.length ? `<div class="tw sub">${sub.join('')}</div>` : ''}`;
   }).join('') : '';
+  const lead = byVal[0];
   return `<div class="ablock ${isOpen ? 'open' : ''}">
     <button class="ah" data-d="${d}" aria-expanded="${isOpen}"><h3><span class="c">${isOpen ? '▾' : '▸'}</span>${esc(b.title)}${b.unit ? ` <span class="u">${esc(b.unit)}</span>` : ''}</h3>
-      <span class="hint num">${items.length} ta${sel.size ? ` · tanlangan ${sel.size}` : ''}</span></button>
-    ${items.length ? `<div class="strip">${items.map(i => `<span style="width:${i.share || 0}%;background:${color(i)}" title="${esc(i.label)}: ${pct(i.share)}"></span>`).join('')}</div>` : `<div class="empty">Savdo yo'q</div>`}
+      <span class="hint num">${items.length} ta${sel.size ? ` · tanlangan ${sel.size}` : !isOpen && lead ? ` · ${esc(lead.label)} ${pct(lead.share)}` : ''}</span></button>
+    ${items.length ? `<div class="strip">${byVal.map(i => `<span style="width:${i.share || 0}%;background:${color(i)}" title="${esc(i.label)}: ${pct(i.share)}"></span>`).join('')}</div>` : `<div class="empty">Savdo yo'q</div>`}
     ${isOpen ? `<div class="arows">${rows}
     ${rest.length ? `<button class="more amore" data-d="${d}">Yana ${rest.length} ta (${pct(restShare)}) — ko'rsatish</button>` : ''}
     ${expanded && items.length > A_TOP + 1 ? `<button class="more amore" data-d="${d}">Qisqartirish</button>` : ''}</div>` : ''}
@@ -780,10 +849,10 @@ function renderAttrBlocks() {
   $('attrH').textContent = isMulti() ? "Kategoriya va brend bo'yicha" : "Xususiyatlar bo'yicha";
   const host = $('ablocks');
   host.innerHTML = ATTR.blocks.map(attrBlock).join('');
-  host.querySelectorAll('.ah').forEach(b => b.onclick = () => { const d = b.dataset.d; st.aOpen.has(d) ? st.aOpen.delete(d) : st.aOpen.add(d); renderAttrBlocks(); });
-  host.querySelectorAll('.arow.can').forEach(r => {
+  host.querySelectorAll('.ah').forEach(b => b.onclick = () => { const d = b.dataset.d; if (!st.aOpen) st.aOpen = new Set(); st.aOpen.has(d) ? st.aOpen.delete(d) : st.aOpen.add(d); renderAttrBlocks(); });
+  host.querySelectorAll('.it.can').forEach(r => {
     const go = () => { const n = findBySig(r.dataset.s); if (n) toggleNode(n); };
-    r.onclick = go; r.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
+    r.onclick = go; r.onkeydown = e => { if (e.target !== r) return; if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
   });
   host.querySelectorAll('.fbtn').forEach(b => b.onclick = e => {
     e.stopPropagation();
@@ -814,21 +883,21 @@ function skuCard(node) {
   const c = node.card;
   if (!c) return `<div class="skucard"><div class="empty">Yuklanmoqda…</div></div>`;
   if (c.error) return `<div class="skucard"><div class="errbox">${esc(c.error)}</div></div>`;
-  const C = c.sum.current, d = c.sum.delta || {}, hasCmp = !!c.sum.previous;
-  const kv = (l, v, p) => `<div class="kv"><span class="l">${l}</span><span class="v num">${v}</span>${p || ''}</div>`;
+  const C = c.sum.current, P = c.sum.previous, d = c.sum.delta || {}, hasCmp = !!P;
+  const kv = (l, v, y) => `<div class="kv"><span class="l">${l}</span><span class="v">${v}</span><span class="y">${y || '&nbsp;'}</span></div>`;
   return `<div class="skucard">
     ${c.prod ? `<div class="tags">${[`<span class="tag">${esc(c.prod.brand)}</span>`, c.prod.status ? `<span class="tag st">${esc(c.prod.status)}</span>` : '',
       ...(c.prod.attrs || []).map(a => `<span class="tag"><b>${esc(a.name)}:</b> ${esc(a.value)}</span>`)].join('')}</div>` : ''}
     <div class="kvs">
-      ${kv('Savdo', money(C.amount), hasCmp ? pill(d.amount) : '')}
-      ${kv('Dona', nf0.format(C.qty) + (C.bonus_qty ? ` <span class="hint">(bonus ${nf0.format(C.bonus_qty)})</span>` : ''), hasCmp ? pill(d.qty) : '')}
-      ${kv("O'rtacha narx", C.avg_price ? money(C.avg_price) : '—', hasCmp ? pill(d.avg_price) : '')}
-      ${kv('Front marja', pct(C.gross_pct), hasCmp ? pill(d.gross_pct_pp, true) : '')}
-      ${kv('Gross marja', pct(C.margin_pct), hasCmp ? pill(d.margin_pct_pp, true) : '')}
-      ${kv('Filiallar', nf0.format(C.branches))}
+      ${kv('Savdo', money(C.amount), hasCmp ? dTxt(d.amount) : '')}
+      ${kv('Gross marja', `<span class="${C.margin < 0 ? 'neg' : ''}">${money(C.margin)}</span>`, `${pct(C.margin_pct)}${hasCmp && d.margin_pct_pp != null ? ' · ' + ppTxt(d.margin_pct_pp) : ''}`)}
+      ${kv('Front marja', `<span class="${C.gross < 0 ? 'neg' : ''}">${money(C.gross)}</span>`, `${pct(C.gross_pct)}${hasCmp && d.gross_pct_pp != null ? ' · ' + ppTxt(d.gross_pct_pp) : ''}`)}
+      ${kv('Dona', nf0.format(C.qty), C.bonus_qty ? `bonus ${nf0.format(C.bonus_qty)}` : hasCmp ? dTxt(d.qty) : '')}
+      ${kv("O'rt. narx", C.avg_price ? money(C.avg_price) : '—', hasCmp ? dTxt(d.avg_price) : '')}
+      ${hasCmp ? kv(cap(CMP_SHORT[st.compare]), money(P.amount), `${nf0.format(P.qty)} dona`) : kv('Filiallar', nf0.format(C.branches), 'ta')}
     </div>
     ${sparkline(c.daily.series)}
-    <div class="lbl" style="margin-top:4px">📍 Qayerda sotilgan</div>
+    <div class="lbl" style="margin-top:2px">📍 Qayerda sotilgan · ${nf0.format(C.branches)} filial</div>
     ${c.childErr ? `<div class="errbox">${esc(c.childErr)}</div>` : ''}
   </div>`;
 }
@@ -861,14 +930,16 @@ function renderTopBody() {
     const rid = `s:${i.key}`;
     const node = ROOTS.get(rid) || newRoot(rid, 'loc', [{dim: 'sku', key: i.key}], {label: i.label, row: i});
     const sub = []; if (node.open && node.card && !node.card.error) subtreeRows(node, sub, mval(i.current), 1);
-    return `<button type="button" class="sku can ${node.open ? 'op' : ''}" aria-expanded="${!!node.open}" data-rid="${esc(rid)}">
-      <span class="rk num">${n + 1}</span><span class="nm"><span class="c">${node.loading ? '…' : node.open ? '▾' : '▸'}</span>${esc(i.label)}</span><span class="amt num">${mfmt(i.current)}</span>
-      <span class="br">${esc(i.sub || '')} · ${MQ() ? money(i.current.amount) : nf0.format(i.current.qty) + ' dona'}</span><span class="mt num ${i.current.margin_pct < 0 ? 'neg' : ''}">GM ${pct(i.current.margin_pct)}</span>
+    const C = i.current, hasCmp = !!cmpRange();
+    return `<button type="button" class="sk can ${node.open ? 'op' : ''}" aria-expanded="${!!node.open}" data-rid="${esc(rid)}">
+      <span class="r1"><span class="n"><span class="c">${node.loading ? '…' : node.open ? '▾' : '▸'}</span><span class="rk">${n + 1}</span>${esc(i.label)}</span><span class="v">${mnum(C)}</span></span>
+      <span class="m"><span>${esc(i.sub || '')}</span><span>${qtyOrAmt(C)}</span>${hasCmp ? dTxt(mdelta(i.delta)) : ''}
+        <span>gross <b class="${C.margin < 0 ? 'neg' : ''}">${money(C.margin)}</b> · ${pct(C.margin_pct)}</span><span>front ${pct(C.gross_pct)}</span></span>
     </button>${node.open ? skuCard(node) + (sub.length ? `<div class="tw sub">${sub.join('')}</div>` : '') : ''}`;
   }).join('') : `<div class="empty">Savdo yo'q.</div>`;
   // bosishni konteyner ushlaydi (delegatsiya) — qayta chizilganda ham ishonchli ishlaydi
   host.onclick = e => {
-    const r = e.target.closest('.sku.can'); if (!r || !host.contains(r)) return;
+    const r = e.target.closest('.sk.can'); if (!r || !host.contains(r)) return;
     const node = ROOTS.get(r.dataset.rid); if (!node) return;
     if (node.open) { node.open = false; renderTopBody(); } else openSku(node);
   };
@@ -888,12 +959,12 @@ function showError(e) {
   }
   const box = document.createElement('div');
   box.className = 'errbox'; box.textContent = 'Xato: ' + e.message;
-  $('kpis').replaceChildren(box);
+  $('errHost').replaceChildren(box);
 }
 async function load() {
   renderHeader();
   const F = filters(), seq = ++reqSeq.main;
-  const secs = ['kpis', 'chart', 'breakdown', 'ablocks', 'top'].map($);
+  const secs = ['kpis', 'chart', 'catList', 'breakdown', 'ablocks', 'top'].map($);
   secs.forEach(s => s.classList.add('loading'));
   try {
     const tasks = [api('summary', F), api('daily', F), api('attributes', F), api('breakdown', {...F, rows: 'sku', sort: st.metric, limit: 10})];
@@ -907,7 +978,8 @@ async function load() {
     const [sum, daily, attrs, top, bd] = await Promise.all(tasks);
     if (seq !== reqSeq.main) return;          // eskirgan javob
     DAILY = daily; ATTR = attrs; if (st.mode === 'pivot') BD = bd;
-    renderKpis(sum); renderChart(); renderBreakdown(); renderAttrBlocks(); renderTop(top);
+    $('errHost').innerHTML = '';
+    renderKpis(sum); renderChart(); renderCatList(); renderBreakdown(); renderAttrBlocks(); renderTop(top);
     renderHeader();
   } catch (e) {
     if (seq === reqSeq.main) showError(e);
@@ -934,8 +1006,21 @@ document.querySelectorAll('#chartMetric button').forEach(b => b.onclick = () => 
   document.querySelectorAll('#chartMetric button').forEach(x => x.setAttribute('aria-pressed', x === b));
   renderChart();
 });
-let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { renderChart(); if (st.shareView === 'dyn' && st.mode === 'tree') renderShare(); }, 150); });
+let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (TAB === 'Umumiy') renderChart(); if (st.shareView === 'dyn' && st.mode === 'tree') renderShare(); }, 150); });
 
+
+// ---------------------------------------------------------------- tablar: Umumiy / Qirqim / Tovarlar
+let TAB = 'Umumiy';
+function setTab(t) {
+  TAB = t;
+  ['Umumiy', 'Qirqim', 'Tovarlar'].forEach(x => { $('pane' + x).hidden = x !== t; });
+  document.querySelectorAll('#tabbar button').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === t));
+  window.scrollTo(0, 0);
+  if (t === 'Umumiy') renderChart();                 // yashirin paytda kenglik 0 bo'ladi — qayta chizamiz
+  if (t === 'Qirqim' && st.mode === 'tree' && st.shareView === 'dyn') renderShare();
+  try { tg && tg.HapticFeedback && tg.HapticFeedback.selectionChanged(); } catch (e) {}
+}
+document.querySelectorAll('#tabbar button').forEach(b => b.onclick = () => { if (TAB !== b.dataset.t) setTab(b.dataset.t); });
 
 // ---------------------------------------------------------------- bo'limlar: Tahlil / Yuklash
 let VIEW = 'analytics';
@@ -950,6 +1035,7 @@ function setView(v) {
   updMeta();
   $('viewAnalytics').hidden = v !== 'analytics';
   $('viewUpload').hidden = v !== 'upload';
+  $('tabbar').hidden = v !== 'analytics';
   if (v === 'upload') loadHistory();
   if (v === 'analytics' && NEED_REFRESH) { NEED_REFRESH = false; refreshMeta(); }
   syncBack();

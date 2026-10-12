@@ -7,8 +7,8 @@
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Manrope:wght@600;700;800&display=swap">
-<link rel="stylesheet" href="app.css?v=20261010a">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="app.css?v=20261012b">
 </head>
 <body>
 <div id="gate" hidden></div>
@@ -24,7 +24,7 @@
     </div>
     <div class="chiprow" id="topAnalytics">
       <button class="tchip" id="perBtn" aria-label="Davr">📅</button>
-      <button class="tchip" id="filBtn" aria-label="Filtr">⚙ Filtr</button>
+      <button class="tchip" id="filBtn" aria-label="Filtr">Filtr</button>
       <span class="mseg" id="metricSeg" role="group" aria-label="Ulush ko'rsatkichi">
         <button data-m="amount" aria-pressed="true">Savdo</button><button data-m="qty" aria-pressed="false">Dona</button></span>
       <span class="fchips" id="fchips" hidden></span>
@@ -46,36 +46,41 @@
   </section>
 
   <div id="viewAnalytics">
+  <div id="errHost"></div>
 
-  <section aria-labelledby="kpiH">
-    <div class="sh"><h2 id="kpiH">Ko'rsatkichlar</h2><span class="hint num" id="cmpHint"></span></div>
+  <!-- ============ 1. UMUMIY ============ -->
+  <div class="pane" id="paneUmumiy">
+    <div class="cmpline num" id="cmpHint"></div>
     <div class="kpis" id="kpis"></div>
-  </section>
 
-  <section aria-labelledby="dynH">
-    <div class="sh"><h2 id="dynH">Kunlik dinamika</h2>
-      <div class="seg" id="chartMetric" style="flex:0 0 auto">
-        <button data-m="amount" aria-pressed="true">Savdo</button>
-        <button data-m="margin">Gross marja</button>
-        <button data-m="qty">Dona</button>
+    <section class="card dyn" aria-labelledby="dynH">
+      <div class="sh"><h2 id="dynH">Kunlik dinamika</h2>
+        <div class="seg mini" id="chartMetric">
+          <button data-m="amount" aria-pressed="true">Savdo</button>
+          <button data-m="margin">Gross</button>
+          <button data-m="qty">Dona</button>
+        </div>
       </div>
-    </div>
-    <div class="chartcard">
       <div class="legend" id="legend"></div>
       <div class="chartwrap" id="chart"></div>
-    </div>
-  </section>
+    </section>
 
-  <section aria-labelledby="brH">
-    <div class="sh"><h2 id="brH">Qirqim</h2>
-      <div class="seg mini" id="brMode" style="flex:0 0 auto">
-        <button data-m="tree" aria-pressed="true">🌳 Daraxt</button>
-        <button data-m="pivot" aria-pressed="false">▦ Kesma</button>
-      </div></div>
+    <section aria-labelledby="listH">
+      <div class="sec"><h2 id="listH">Kategoriyalar</h2><span class="hint" id="listHint"></span></div>
+      <div class="cards" id="catList"></div>
+    </section>
+
+    <p class="foot">Front marja = savdo − tannarx.<span id="fxInfo"></span> Gross marja = front marja + qo'shimcha daromad (brend %). O'rtacha narx bonus donalarsiz hisoblanadi. Ulush — joriy filtrlar jamisiga nisbatan.</p>
+  </div>
+
+  <!-- ============ 2. QIRQIM ============ -->
+  <div class="pane" id="paneQirqim" hidden>
     <div class="ctl">
-      <span class="hint" id="brHint"></span>
-      <span id="pvCtl" hidden><label>Qatorlar <select id="rowsDim"></select></label> <label>Ustun <select id="colsDim"></select></label></span>
-      <label style="margin-left:auto">Saralash <select id="sortBy">
+      <div class="seg mini" id="brMode">
+        <button data-m="tree" aria-pressed="true">Daraxt</button>
+        <button data-m="pivot" aria-pressed="false">Kesma</button>
+      </div>
+      <label class="sortl">Saralash <select id="sortBy">
         <option value="amount">savdo</option>
         <option value="margin">gross marja</option>
         <option value="margin_pct">gross marja %</option>
@@ -84,29 +89,31 @@
         <option value="name">nomi</option>
       </select></label>
     </div>
-    <div id="shareHost"></div>
+    <div class="ctl" id="pvCtl" hidden><label>Qatorlar <select id="rowsDim"></select></label> <label>Ustun <select id="colsDim"></select></label></div>
+    <div class="hint" id="brHint"></div>
     <div id="breakdown"></div>
-  </section>
+    <div id="shareHost"></div>
+  </div>
 
-  <section aria-labelledby="attrH">
-    <div class="sh"><h2 id="attrH">Xususiyatlar bo'yicha</h2><span class="hint">qiymatni bosing — ichiga ochiladi</span></div>
+  <!-- ============ 3. TOVARLAR ============ -->
+  <div class="pane" id="paneTovarlar" hidden>
+    <div class="sec"><h2 id="attrH">Xususiyatlar bo'yicha</h2><span class="hint">blokni oching · qiymatni bosing — ichiga kiradi</span></div>
     <div class="ablocks" id="ablocks"></div>
-  </section>
-
-  <section aria-labelledby="topH">
     <div class="ablock topblock" id="topBlock">
       <button class="ah" id="topHead" aria-expanded="false"><h3 id="topH"><span class="c">▸</span>TOP-10 SKU</h3>
         <span class="hint num" id="topHint">joriy filtrlar bo'yicha</span></button>
       <div class="tlist" id="top" hidden></div>
     </div>
-  </section>
-
-  <p class="foot">Front marja = savdo − tannarx.<span id="fxInfo"></span> Gross marja = front marja + qo'shimcha daromad (brend %). O'rtacha narx bonus donalarsiz hisoblanadi. Ulush — joriy filtrlar jamisiga nisbatan.</p>
-</div>
-
+  </div>
+  </div>
 
 </div>
+<nav class="tabbar" id="tabbar" aria-label="Bo'limlar">
+  <button data-t="Umumiy" aria-pressed="true"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h4v7H4zM10 8h4v12h-4zM16 4h4v16h-4z" fill="currentColor"/></svg>Umumiy</button>
+  <button data-t="Qirqim" aria-pressed="false"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h6v6H5zM13 13h6v6h-6zM8 11v5h5" stroke="currentColor" stroke-width="2" fill="none"/></svg>Qirqim</button>
+  <button data-t="Tovarlar" aria-pressed="false"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l8-4 8 4v10l-8 4-8-4zM4 7l8 4 8-4M12 11v10" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>Tovarlar</button>
+</nav>
 <div id="sheetHost"></div>
-<script src="app.js?v=20261010a"></script>
+<script src="app.js?v=20261012b"></script>
 </body>
 </html>
