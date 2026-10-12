@@ -72,6 +72,7 @@ const st = {
   rows: 'region', cols: 'attr:0', sort: 'amount',
   chartMetric: 'amount', shareView: 'struct', pvMode: 'amount', metric: 'amount',
   aExpand: {}, aOpen: null, topOpen: false, showAll: false,
+  topN: 10, topSort: 'm',   // TOP SKU: 10 | 20 | 50; saralash: m (dona/summa — tanlangan ko'rsatkich) | amount | margin | delta
 };
 const NAV = [];          // kategoriyaga kirish tarixi: «‹ Orqaga» uchun {cat, f, y}
 const labels = {};       // "dim|key" -> nom (chip va breadcrumb uchun)
@@ -968,28 +969,66 @@ async function openSku(node) {
   } catch (e) { node.card = {error: (e && e.message) || String(e)}; }
   node.loading = false; renderTopBody();
 }
+// TOP SKU — ixcham ro'yxat (A variant): nom (brend yarim qalin) · o'ngda dona/summa + o'zgarish;
+// ostida summa (yoki dona) · gross summa · gross % · front %. TOP 10/20/50 va saralash.
+const TOP_SORTS = () => [['m', MQ() ? 'Dona' : 'Summa'], [MQ() ? 'amount' : 'qty', MQ() ? 'Summa' : 'Dona'], ['margin', 'Gross'], ['delta', "O'zg."]];
+function topApiSort() { return st.topSort === 'm' || st.topSort === 'delta' ? st.metric : st.topSort; }
+async function loadTop() {
+  const F = filters(), seq = reqSeq.main;
+  $('top').classList.add('loading');
+  try {
+    const t = await api('breakdown', {...F, rows: 'sku', sort: topApiSort(), limit: st.topN});
+    if (seq !== reqSeq.main) return;
+    renderTop(t);
+  } catch (e) { showError(e); }
+  finally { $('top').classList.remove('loading'); }
+}
+function skuName(label, brand, strip) {
+  let rest = String(label || '');
+  if (strip && rest.toLowerCase().startsWith(strip)) rest = rest.slice(strip.length).trimStart();
+  const b = String(brand || '').trim();
+  if (b && rest.toLowerCase().startsWith(b.toLowerCase())) return `<b>${esc(rest.slice(0, b.length))}</b>${esc(rest.slice(b.length))}`;
+  if (b && !rest.toLowerCase().includes(b.toLowerCase())) return `<b>${esc(b)}</b> ${esc(rest)}`;
+  return esc(rest);
+}
 function renderTopBody() {
   const t = TOP; if (!t) return;
-  const host = $('top'), head = $('topHead');
-  const sumTop = t.rows.reduce((s, i) => s + mval(i.current), 0), tot = t.total ? mval(t.total) : 0;
-  $('topHint').textContent = t.rows.length ? `${t.rows.length} ta · ${MQ() ? nf0.format(sumTop) + ' dona' : money(sumTop)}${tot ? ' · ' + pct(sumTop / tot * 100) : ''}` : "savdo yo'q";
-  head.querySelector('.c').textContent = st.topOpen ? '▾' : '▸';
+  const host = $('top'), head = $('topHead'), tools = $('topTools');
+  let rows = t.rows.slice();
+  if (st.topSort === 'delta') rows.sort((a, b) => (mdelta(b.delta) ?? -1e9) - (mdelta(a.delta) ?? -1e9));
+  const sumTop = rows.reduce((s, i) => s + mval(i.current), 0), tot = t.total ? mval(t.total) : 0;
+  $('topH').innerHTML = `<span class="c">${st.topOpen ? '▾' : '▸'}</span>TOP SKU`;
+  $('topHint').textContent = rows.length ? `${rows.length} ta · ${MQ() ? nf0.format(sumTop) + ' dona' : money(sumTop)}${tot ? ' · ' + pct(sumTop / tot * 100) : ''}` : "savdo yo'q";
   head.setAttribute('aria-expanded', st.topOpen);
   $('topBlock').classList.toggle('open', st.topOpen);
   head.onclick = () => { st.topOpen = !st.topOpen; renderTopBody(); };
-  host.hidden = !st.topOpen;
+  host.hidden = tools.hidden = !st.topOpen;
   if (!st.topOpen) { host.innerHTML = ''; return; }
-  host.innerHTML = t.rows.length ? t.rows.map((i, n) => {
+  tools.innerHTML = `<span class="tseg">${[10, 20, 50].map(n => `<button data-n="${n}" aria-pressed="${st.topN === n}">TOP ${n}</button>`).join('')}</span>
+    <span class="tsort"><span class="lbl2">Saralash:</span>${TOP_SORTS().map(([k, l]) => `<button data-s="${k}" aria-pressed="${st.topSort === k}">${l}${st.topSort === k ? ' ▼' : ''}</button>`).join('')}</span>`;
+  tools.querySelectorAll('[data-n]').forEach(b => b.onclick = () => { st.topN = +b.dataset.n; loadTop(); });
+  tools.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { st.topSort = b.dataset.s; if (st.topSort === 'delta') renderTopBody(); else loadTop(); });
+  // bitta kategoriyada nomlarning umumiy birinchi so'zi (masalan «Кондиционер») olib tashlanadi
+  let strip = '';
+  if (!isMulti() && rows.length > 1) {
+    const w = rows.map(i => (String(i.label || '').split(/\s+/)[0] || '').toLowerCase());
+    if (w[0].length > 2 && w.every(x => x === w[0])) strip = w[0];
+  }
+  const hasCmp = !!cmpRange();
+  host.innerHTML = rows.length ? rows.map((i, n) => {
     const rid = `s:${i.key}`;
     const node = ROOTS.get(rid) || newRoot(rid, 'loc', [{dim: 'sku', key: i.key}], {label: i.label, row: i});
     const sub = []; if (node.open && node.card && !node.card.error) subtreeRows(node, sub, mval(i.current), 1);
-    const C = i.current, hasCmp = !!cmpRange();
-    return `<button type="button" class="sk can ${node.open ? 'op' : ''}" aria-expanded="${!!node.open}" data-rid="${esc(rid)}">
-      <span class="r1"><span class="n"><span class="c">${node.loading ? '…' : node.open ? '▾' : '▸'}</span><span class="rk">${n + 1}</span>${esc(i.label)}</span><span class="v">${mnum(C)}</span></span>
-      <span class="m"><span>${esc(i.sub || '')}</span><span>${qtyOrAmt(C)}</span>${hasCmp ? dTxt(mdelta(i.delta)) : ''}
-        <span>gross <b class="${C.margin < 0 ? 'neg' : ''}">${money(C.margin)}</b> · ${pct(C.margin_pct)}</span><span>front ${pct(C.gross_pct)}</span></span>
+    const C = i.current;
+    return `<button type="button" class="sk can ${node.open ? 'op' : ''}" aria-expanded="${!!node.open}" data-rid="${esc(rid)}" title="${esc(i.label)}">
+      <span class="rk">${node.loading ? '…' : n + 1}</span>
+      <span class="mid"><span class="nm">${skuName(i.label, i.sub, strip)}</span>
+        <span class="sub">${MQ() ? money(C.amount) : nf0.format(C.qty || 0) + ' dona'} · gross <b class="${C.margin < 0 ? 'neg' : ''}">${money(C.margin)}</b> · ${pct(C.margin_pct)} · front <span class="${C.gross < 0 ? 'neg' : ''}">${pct(C.gross_pct)}</span></span></span>
+      <span class="rt"><span class="v">${mnum(C)}</span>${hasCmp ? `<span class="dd">${dTxt(mdelta(i.delta))}</span>` : ''}</span>
     </button>${node.open ? skuCard(node) + (sub.length ? `<div class="tw sub">${sub.join('')}</div>` : '') : ''}`;
-  }).join('') : `<div class="empty">Savdo yo'q.</div>`;
+  }).join('') + (st.topN < 50 && t.total_rows > rows.length ? `<button type="button" class="more" id="topMore">TOP ${st.topN === 10 ? 20 : 50} ni ko'rsatish ▾</button>` : '')
+    : `<div class="empty">Savdo yo'q.</div>`;
+  const mo = $('topMore'); if (mo) mo.onclick = e => { e.stopPropagation(); st.topN = st.topN === 10 ? 20 : 50; loadTop(); };
   // bosishni konteyner ushlaydi (delegatsiya) — qayta chizilganda ham ishonchli ishlaydi
   host.onclick = e => {
     const r = e.target.closest('.sk.can'); if (!r || !host.contains(r)) return;
@@ -1070,7 +1109,7 @@ async function loadTab(t) {
     const secs = ['ablocks', 'top'].map($); secs.forEach(s => s.classList.add('loading'));
     if (!$('ablocks').firstChild) $('ablocks').innerHTML = `<div class="empty">Yuklanmoqda…</div>`;
     try {
-      const [attrs, top] = await Promise.all([api('attributes', F), api('breakdown', {...F, rows: 'sku', sort: st.metric, limit: 10})]);
+      const [attrs, top] = await Promise.all([api('attributes', F), api('breakdown', {...F, rows: 'sku', sort: topApiSort(), limit: st.topN})]);
       if (seq !== reqSeq.main) return;
       ATTR = attrs; renderAttrBlocks(); renderTop(top);
     } catch (e) { if (seq === reqSeq.main) { STALE[t] = true; showError(e); } }
