@@ -88,13 +88,17 @@ const mdelta = d => (d ? (MQ() ? d.qty : d.amount) : null);
 // Kompaniya jamisidagi ulush (maxraj — company_daily, «К»siz; faqat joy filtrlari)
 const LOC_WORD = {region: 'hududda', cluster: 'klasterda', branch: 'filialda'};
 function compShare(curK, prevK, comp) {
-  if (!comp || !comp.c_amount) return null;
-  const key = MQ() ? 'qty' : 'amount', ck = MQ() ? 'c_qty' : 'c_amount', pk = MQ() ? 'p_qty' : 'p_amount';
-  const s = comp[ck] ? (curK[key] || 0) / comp[ck] * 100 : null;
-  const ps = prevK && comp[pk] ? (prevK[key] || 0) / comp[pk] * 100 : null;
-  const g = comp.c_gross > 0 ? (curK.gross || 0) / comp.c_gross * 100 : null;
-  const pg = prevK && comp.p_gross > 0 ? (prevK.gross || 0) / comp.p_gross * 100 : null;
-  return {s, pp: s != null && ps != null ? s - ps : null, g, gpp: g != null && pg != null ? g - pg : null};
+  // Ulush = bizning savdo / set jami («К»siz) — tepadagi filtr davri bo'yicha, ikkala tomon bir xil kunlar.
+  // Set jami (company_daily) yo'q kunlarda jami = bizning savdo deb olinadi (jami bizning savdodan kam bo'lmaydi),
+  // ya'ni maxraj = kompaniya jami (bor kunlar) + bizning savdo (kompaniya jami yo'q kunlar).
+  comp = comp || {};
+  const key = MQ() ? 'qty' : 'amount';
+  const unc = (k, f) => Math.max(0, (k[f] || 0) - (k['cov_' + f] != null ? k['cov_' + f] : (k[f] || 0)));
+  const sh = (k, f, cv) => { if (!k) return null; const den = (cv || 0) + unc(k, f); return den > 0 ? (k[f] || 0) / den * 100 : null; };
+  const s = sh(curK, key, comp['c_' + key]), ps = sh(prevK, key, comp['p_' + key]);
+  const g = sh(curK, 'gross', comp.c_gross), pg = sh(prevK, 'gross', comp.p_gross);
+  return {s, pp: s != null && ps != null ? s - ps : null, g, gpp: g != null && pg != null ? g - pg : null,
+          den: (comp['c_' + key] || 0) + unc(curK, key)};
 }
 function locScopeWord() {
   const ids = ['region', 'cluster', 'branch'].filter(d => st.f[d] && st.f[d].size);
@@ -346,27 +350,22 @@ async function openFilterSheet() {
 
 // ---------------------------------------------------------------- KPI
 function companyCard(s) {
-  const comp = s.company, C = s.current, Pv = s.previous;
+  const comp = s.company || {}, C = s.current, Pv = s.previous;
   const locs = ['region', 'cluster', 'branch'].filter(d => st.f[d] && st.f[d].size);
   const one = locs.length === 1 && st.f[locs[0]].size === 1 ? locs[0] : null;
-  const place = !locs.length ? 'Kompaniya' : one ? (labels[one + '|' + [...st.f[one]][0]] || 'Tanlangan joy') : 'Tanlangan joylar';
-  const title = `${esc(place)} savdosidagi ulush («К»siz)`;
-  if (!comp || !comp.c_amount) return `<div class="kpi wide comp"><span class="l">${title}</span>
-    <span class="p">Kompaniya jami savdosi bu davr uchun hali yo'q — savdo faylini qayta yuklang.</span></div>`;
-  const ours = {amount: C.amount, qty: C.qty, gross: C.gross}, prev = Pv ? {amount: Pv.amount, qty: Pv.qty, gross: Pv.gross} : null;
-  // kompaniya ma'lumoti bizning savdo kunlaridan kam bo'lsa — solishtirish/ulush to'liq emas
-  const partial = s.days && comp.c_days < s.days.c;
-  const pcomp = Pv && comp.p_days >= (s.days ? s.days.p : 0) ? comp : {...comp, p_amount: 0, p_qty: 0, p_gross: 0};
-  const cs = compShare(ours, prev, pcomp);
+  const place = !locs.length ? 'Set' : one ? (labels[one + '|' + [...st.f[one]][0]] || 'Tanlangan joy') : 'Tanlangan joylar';
+  const title = `${esc(place)} jami savdosidagi ulush («К»siz)`;
+  const cs = compShare(C, Pv, comp);
   const unit = MQ() ? v => `${nf0.format(v)} dona` : money;
+  const days = s.days ? s.days.c : 0, cd = comp.c_days || 0, miss = Math.max(0, days - cd);
   return `<div class="kpi wide comp">
     <span class="l">${title}</span>
     <div class="cv"><div><span class="v">${pct(cs.s)}</span> ${Pv && cs.pp != null ? pill(cs.pp, true) : ''}
-        <div class="p">${MQ() ? 'donada' : 'savdoda'}: ${unit(MQ() ? C.qty : C.amount)} / ${unit(MQ() ? comp.c_qty : comp.c_amount)}</div></div>
+        <div class="p">${MQ() ? 'donada' : 'savdoda'}: ${unit(MQ() ? C.qty : C.amount)} / ${unit(cs.den)}</div></div>
       <div style="text-align:right"><span class="l">front marjada</span>
         <div class="v" style="font-size:17px">${pct(cs.g)} ${Pv && cs.gpp != null ? pill(cs.gpp, true) : ''}</div></div></div>
     <div class="cbar"><i style="width:${Math.min(100, cs.s || 0)}%"></i></div>
-    ${partial ? `<span class="hint">⚠ kompaniya ma'lumoti ${comp.c_days}/${s.days.c} kun uchun bor</span>` : ''}
+    ${miss ? `<span class="hint">⚠ ${days} kundan ${miss} kunida set jami yuklanmagan — o'sha kunlarda jami = bizning savdo deb olindi.</span>` : ''}
   </div>`;
 }
 let SUM = null;
@@ -623,7 +622,7 @@ function renderBreakdown() {
 function rowHtml(node, rootAmount, indBase = 1) {
   const r = node.row, C = r.current, dd = r.delta || {}, hasCmp = !!cmpRange(), can = !!node.childDim;
   const ind = Math.min(Math.max(node.depth - indBase, 0), 4) * 12;
-  const cs = LOC_WORD[node.dim] && r.company ? compShare(C, r.previous, r.company) : null;
+  const cs = LOC_WORD[node.dim] ? compShare(C, r.previous, r.company) : null;
   const third = cs
     ? cell(`${cap(LOC_WORD[node.dim])} ulush`, pct(cs.s), `${hasCmp && cs.pp != null ? ppTxt(cs.pp) + ' · ' : ''}front ${pct(cs.g)}`)
     : cell("O'rt. narx", C.avg_price ? money(C.avg_price) : '—', hasCmp ? dTxt(dd.avg_price) : `${nf0.format(C.branches || 0)} filial`);
@@ -653,8 +652,9 @@ function wireTree(host) {
 }
 function sumPrev(rows) {
   if (!rows || !rows.length || !rows[0].previous) return null;
-  return rows.reduce((a, r) => ({amount: a.amount + (r.previous.amount || 0), qty: a.qty + (r.previous.qty || 0),
-                                 gross: a.gross + (r.previous.gross || 0)}), {amount: 0, qty: 0, gross: 0});
+  const ks = ['amount', 'qty', 'gross', 'cov_amount', 'cov_qty', 'cov_gross'];
+  return rows.reduce((a, r) => { ks.forEach(k => { a[k] += r.previous[k] || 0; }); return a; },
+                     Object.fromEntries(ks.map(k => [k, 0])));
 }
 function renderTree() {
   const host = $('breakdown');
@@ -662,7 +662,7 @@ function renderTree() {
   const T = TREE.total, rootAmt = T ? mval(T) : 0;
   if (!TREE.childDim || !T) { host.innerHTML = `<div class="list"><div class="empty">Tanlangan filtrlar bo'yicha savdo yo'q.</div></div>`; return; }
   const d = (SUM && SUM.delta) || {}, hasCmp = !!cmpRange();
-  const cs = TREE.company ? compShare(T, sumPrev(TREE.raw), TREE.company) : null;
+  const cs = compShare(T, sumPrev(TREE.raw), TREE.company);
   const tc = (k, x, y) => `<span><span class="k">${k}</span><span class="x">${x}</span><span class="y">${y || '&nbsp;'}</span></span>`;
   const out = [`<button class="tot" data-s="${esc(nsig(TREE))}" aria-expanded="${!!TREE.open}">
       <span class="r1"><span class="l">Jami ${MQ() ? 'dona' : 'savdo'}</span>${hasCmp ? pill(mdelta(d)) : ''}</span>

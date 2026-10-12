@@ -65,3 +65,7 @@ class Kpi(BaseModel):
     avg_price: float | None = None   # savdo / sotilgan dona (bonussiz)
     skus: int = 0
     branches: int = 0
+    # kompaniya jami bor kunlardagi savdo — kompaniyadagi ulush surati (maxraj bilan bir xil kunlar)
+    cov_amount: float = 0
+    cov_qty: float = 0
+    cov_gross: float = 0

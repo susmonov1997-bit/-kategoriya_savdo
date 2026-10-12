@@ -326,7 +326,8 @@ async def breakdown(req: BreakdownRequest, request: Request, user: User = Depend
         items.append({"key": r["key"], "label": r["label"], "sub": r["sub"], "sort": r["sort"], "current": cur,
                       "previous": prev, "delta": delta(cur, prev), "company": comp_rows.get(r["key"])})
     total_cur = Kpi(**{k: sum(getattr(i["current"], k) for i in items)
-                       for k in ("amount", "qty", "bonus_qty", "gross", "income", "margin")})
+                       for k in ("amount", "qty", "bonus_qty", "gross", "income", "margin",
+                                 "cov_amount", "cov_qty", "cov_gross")})
     total_cur.gross_pct = round(total_cur.gross / total_cur.amount * 100, 2) if total_cur.amount else None
     total_cur.margin_pct = round(total_cur.margin / total_cur.amount * 100, 2) if total_cur.amount else None
     sb = req.share_by

@@ -178,6 +178,8 @@ WITH pd AS (
 ), x AS (
     SELECT e.sale_date, e.is_bonus, e.qty, e.amount, e.gross_margin, e.supplier_income, e.margin,
            e.branch_id, b.region_id, b.cluster_id, pd.*,
+           -- kompaniya jami (company_daily) bor kunmi: ulush faqat shu kunlar bo'yicha hisoblanadi
+           EXISTS (SELECT 1 FROM company_daily cd WHERE cd.sale_date = e.sale_date) AS cov,
            CASE WHEN e.sale_date BETWEEN {c1} AND {c2} THEN 'c' ELSE 'p' END AS per
     FROM sales_enriched e
     JOIN pd USING (product_id)
@@ -218,6 +220,9 @@ def metrics_sql(per: str) -> str:
             f"sum(x.gross_margin) FILTER (WHERE {w}) AS {per}_gross, "
             f"sum(x.supplier_income) FILTER (WHERE {w}) AS {per}_income, "
             f"sum(x.margin) FILTER (WHERE {w}) AS {per}_margin, "
+            f"sum(x.amount) FILTER (WHERE {w} AND x.cov) AS {per}_cov_amount, "
+            f"sum(x.qty) FILTER (WHERE {w} AND x.cov) AS {per}_cov_qty, "
+            f"sum(x.gross_margin) FILTER (WHERE {w} AND x.cov) AS {per}_cov_gross, "
             f"count(DISTINCT x.product_id) FILTER (WHERE {w}) AS {per}_skus, "
             f"count(DISTINCT x.branch_id) FILTER (WHERE {w}) AS {per}_branches")
 
@@ -232,6 +237,7 @@ def kpi_from(row: asyncpg.Record | dict, per: str) -> Kpi:
         margin_pct=round(g("margin") / amount * 100, 2) if amount else None,
         avg_price=round(amount / sold) if sold else None,
         skus=int(row[f"{per}_skus"] or 0), branches=int(row[f"{per}_branches"] or 0),
+        cov_amount=g("cov_amount"), cov_qty=g("cov_qty"), cov_gross=g("cov_gross"),
     )
 
 
