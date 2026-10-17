@@ -12,6 +12,7 @@ Endpointlar (hammasi Authorization: tma <initData> talab qiladi):
   GET  /api/product/{id} SKU kartasi (xususiyatlar)
   POST /api/attributes  xususiyatlar bloklari: har bir xususiyat va brend bo'yicha barcha qiymatlar, ulush va pp
   GET  /api/plan?year=  yillik reja (oy × kategoriya) va fakt (oy × kategoriya): savdo va gross marja
+  POST /api/stock/*     qoldiq: signals, map, detail, overview, by (api_stock.py)
 """
 from __future__ import annotations
 
@@ -671,6 +672,11 @@ async def product_card(product_id: int, request: Request, user: User = Depends(c
 BASE_DIR = Path(__file__).resolve().parent
 WEBAPP_FILES = {"": ("index.html", "text/html"), "index.html": ("index.html", "text/html"),
                 "app.css": ("app.css", "text/css"), "app.js": ("app.js", "application/javascript")}
+
+
+# Qoldiq API (api_stock.py importda shu moduldagi scope_ctx va cached dan foydalanadi)
+from api_stock import router as stock_router  # noqa: E402
+app.include_router(stock_router)
 
 
 @app.get("/", include_in_schema=False)

@@ -432,7 +432,7 @@ function listCard(i, o) {
       <span>${o.grpShare != null ? 'jamida' : 'ulush'} <b>${pct(i.share)}</b>${hasCmp ? ' ' + ppTxt(i.share_pp) : ''}</span>${hasCmp ? dTxt(mdelta(i.delta)) : ''}
       ${cs && cs.s != null ? `<span class="setsh">set jamida <b>${pct(cs.s)}</b>${hasCmp && cs.pp != null ? ' ' + ppPlain(cs.pp) : ''}</span>` : ''}</span>
     <span class="m"><span>gross <b class="${C.margin < 0 ? 'neg' : ''}">${money(C.margin)}</b> · ${pct(C.margin_pct)}</span>
-      <span>front <b class="${C.gross < 0 ? 'neg' : ''}">${money(C.gross)}</b> · ${pct(C.gross_pct)}</span><span>${qtyOrAmt(C)}</span></span></button>`;
+      <span>front <b class="${C.gross < 0 ? 'neg' : ''}">${money(C.gross)}</b> · ${pct(C.gross_pct)}</span><span>${qtyOrAmt(C)}</span></span>${o.stock || ''}</button>`;
 }
 function goCategory(c) {
   NAV.push({cat: st.cat, f: Object.fromEntries(Object.entries(st.f).map(([d, v]) => [d, new Set(v)])), y: window.scrollY});
@@ -453,7 +453,7 @@ function renderCatList() {
     const shown = LIST_ALL ? items : items.slice(0, 8);
     const max = Math.max(...items.map(i => i.share || 0), 1);
     host.innerHTML = shown.map(i => listCard(i, {cls: sel.has(i.key) ? 'op' : '', attr: `data-k="${esc(i.key)}"`, sel: sel.has(i.key),
-                                                 bar: (i.share || 0) / max * 100})).join('')
+                                                 bar: (i.share || 0) / max * 100, stock: stockLine(STK.list && STK.list[i.key])})).join('')
       + (items.length > 8 ? `<button class="more" id="listMore">${LIST_ALL ? 'Qisqartirish' : `Hammasi (${items.length} ta)`}</button>` : '');
     host.querySelectorAll('.li[data-k]').forEach(el => el.onclick = () => {
       const k = el.dataset.k, set = new Set(st.f.brand || []); set.has(k) ? set.delete(k) : set.add(k);
@@ -485,7 +485,7 @@ function renderCatList() {
     for (const i of rows) {
       const s1 = gCur ? mval(i.current) / gCur * 100 : null, s0 = hasCmp && gPrev && i.previous ? mval(i.previous) / gPrev * 100 : null;
       out.push(listCard(i, {cls: 'sub', attr: `data-k="${esc(i.key)}"`, grpShare: s1, grpPP: s1 != null && s0 != null ? s1 - s0 : null,
-                            bar: mval(i.current) / gmax * 100}));
+                            bar: mval(i.current) / gmax * 100, stock: stockLine(STK.list && STK.list[i.key])}));
     }
   }
   host.innerHTML = out.join('');
@@ -610,6 +610,7 @@ async function fetchChildren(node) {
     return {root: node.root, order: node.order, path, dim: node.childDim, key: r.key, label: r.label, sub: r.sub, row: r,
             depth: node.depth + 1, childDim: childDimFor(path, node.order), children: null, open: false, showAll: false};
   });
+  stockForNode(node);                        // «📦 qoldiq» qatori — fonda keladi
   return res;
 }
 async function buildTree() {
@@ -688,6 +689,7 @@ function rowHtml(node, rootAmount, indBase = 1) {
     <span class="m"><span>ulush <b>${pct(r.share)}</b>${hasCmp ? ' ' + ppTxt(r.share_pp) : ''}</span>${hasCmp ? pill(mdelta(dd)) : ''}<span>${qtyOrAmt(C)}</span></span>
     <span class="bar"><i style="width:${Math.min(100, r.share || 0)}%"></i></span>
     <span class="mx">${cell('Gross marja', `<span class="${C.margin < 0 ? 'neg' : ''}">${money(C.margin)}</span>`, `${pct(C.margin_pct)}${hasCmp && dd.margin_pct_pp != null ? ' · ' + ppTxt(dd.margin_pct_pp) : ''}`)}${cell('Front marja', `<span class="${C.gross < 0 ? 'neg' : ''}">${money(C.gross)}</span>`, `${pct(C.gross_pct)}${hasCmp && dd.gross_pct_pp != null ? ' · ' + ppTxt(dd.gross_pct_pp) : ''}`)}${third}</span>
+    ${stockLine(node.stock, node.dim === 'sku')}
   </button>`;
 }
 function subtreeRows(node, out, rootAmt, indBase = 1) {
@@ -724,6 +726,7 @@ function renderTree() {
       <span class="g">${tc('Gross marja', money(T.margin), `${pct(T.margin_pct)}${hasCmp && d.margin_pct_pp != null ? ' · ' + ppPlain(d.margin_pct_pp) : ''}`)}${tc('Front marja', money(T.gross), `${pct(T.gross_pct)}${hasCmp && d.gross_pct_pp != null ? ' · ' + ppPlain(d.gross_pct_pp) : ''}`)}${cs
         ? tc(cap(locScopeWord()), pct(cs.s), `${hasCmp && cs.pp != null ? ppPlain(cs.pp) + ' · ' : ''}front ${pct(cs.g)}`)
         : tc(MQ() ? 'Savdo' : 'Dona', MQ() ? money(T.amount) : nf0.format(T.qty), T.avg_price ? `o'rt. ${money(T.avg_price)}` : '')}</span>
+      ${stockLine(TREE.stock)}
       <span class="ft">${TREE.open ? '▾' : '▸'} ${esc(dimName(TREE.childDim))} bo'yicha ${TREE.open ? 'yopish' : 'ochish'}${MQ() ? '' : ` · ${nf0.format(T.qty)} dona`}</span></button>`];
   subtreeRows(TREE, out, rootAmt, 1);
   host.innerHTML = `<div class="tw">${out.join('')}</div>`;
@@ -905,7 +908,7 @@ function renderAttrBlocks() {
 
 // ---------------------------------------------------------------- TOP-10 SKU (bosilsa: karta + joylar bo'yicha daraxt)
 let TOP = null;
-function renderTop(t) { TOP = t; renderTopBody(); }
+function renderTop(t) { TOP = t; STK.top = null; renderTopBody(); stockForTop(t.rows); }
 function sparkline(series) {
   const vals = series.map(p => p.amount), n = vals.length;
   if (n < 2) return '';
@@ -1007,7 +1010,8 @@ function renderTopBody() {
     return `<button type="button" class="sk can ${node.open ? 'op' : ''}" aria-expanded="${!!node.open}" data-rid="${esc(rid)}" title="${esc(i.label)}">
       <span class="rk">${node.loading ? '…' : n + 1}</span>
       <span class="mid"><span class="nm">${skuName(i.label, i.sub, strip)}</span>
-        <span class="sub">${MQ() ? money(C.amount) : nf0.format(C.qty || 0) + ' dona'} · gross <b class="${C.margin < 0 ? 'neg' : ''}">${money(C.margin)}</b> · ${pct(C.margin_pct)} · front <span class="${C.gross < 0 ? 'neg' : ''}">${pct(C.gross_pct)}</span></span></span>
+        <span class="sub">${MQ() ? money(C.amount) : nf0.format(C.qty || 0) + ' dona'} · gross <b class="${C.margin < 0 ? 'neg' : ''}">${money(C.margin)}</b> · ${pct(C.margin_pct)} · front <span class="${C.gross < 0 ? 'neg' : ''}">${pct(C.gross_pct)}</span></span>
+        ${stockLine(STK.top && STK.top[i.key], true)}</span>
       <span class="rt"><span class="v">${mnum(C)}</span>${hasCmp ? `<span class="dd">${dTxt(mdelta(i.delta))}</span>` : ''}</span>
     </button>${node.open ? skuCard(node) + (sub.length ? `<div class="tw sub">${sub.join('')}</div>` : '') : ''}`;
   }).join('') + (st.topN < 50 && t.total_rows > rows.length ? `<button type="button" class="more" id="topMore">TOP ${st.topN === 10 ? 20 : 50} ni ko'rsatish ▾</button>` : '')
@@ -1039,11 +1043,11 @@ function showError(e) {
 }
 // Tablar bo'yicha yuklash: Umumiy (KPI, grafik, kategoriyalar) har doim; Qirqim va Tovarlar — faqat ochilganda.
 // Filtr/davr o'zgarsa ikkalasi "eskirgan" deb belgilanadi va ochilganda qayta olinadi.
-const STALE = {Qirqim: true, Tovarlar: true};
+const STALE = {Qirqim: true, Tovarlar: true, Qoldiq: true};
 let LIST = null;
 async function load() {
   renderHeader();
-  STALE.Qirqim = STALE.Tovarlar = true;
+  STALE.Qirqim = STALE.Tovarlar = STALE.Qoldiq = true;
   const F = filters(), seq = ++reqSeq.main;
   const secs = ['kpis', 'chart', 'catList'].map($);
   secs.forEach(s => s.classList.add('loading'));
@@ -1057,6 +1061,7 @@ async function load() {
     $('errHost').innerHTML = '';
     DAILY = daily; LIST = {dim: listDim, rows: list.rows};
     renderKpis(sum); renderChart(); renderCatList();
+    stockForList(LF, listDim);                 // kartalardagi «📦 qoldiq» qatori (fonda)
     if (TREE && st.mode === 'tree' && !STALE.Qirqim) renderTree();   // Jami kartasidagi o'zgarish % (SUM)
     renderHeader();
   } catch (e) {
@@ -1089,6 +1094,8 @@ async function loadTab(t) {
       renderBreakdown();
     } catch (e) { if (seq === reqSeq.main) { STALE[t] = true; showError(e); } }
     finally { host.classList.remove('loading'); }
+  } else if (t === 'Qoldiq') {
+    loadStockTab();
   } else if (t === 'Tovarlar') {
     const secs = ['ablocks', 'top'].map($); secs.forEach(s => s.classList.add('loading'));
     if (!$('ablocks').firstChild) $('ablocks').innerHTML = `<div class="empty">Yuklanmoqda…</div>`;
@@ -1118,7 +1125,8 @@ function syncBack() {
     if (prev) nb.textContent = `‹ ${prev.name}`;
   }
   if (!(tg && tg.BackButton)) return;
-  (sheetOpen() || VIEW === 'upload' || (NAV.length && VIEW === 'analytics')) ? tg.BackButton.show() : tg.BackButton.hide();
+  const qd = typeof QS !== 'undefined' && QS.detail && TAB === 'Qoldiq';
+  (sheetOpen() || VIEW === 'upload' || qd || (NAV.length && VIEW === 'analytics')) ? tg.BackButton.show() : tg.BackButton.hide();
 }
 function navBack() {
   const p = NAV.pop(); if (!p) return;
@@ -1127,7 +1135,8 @@ function navBack() {
 }
 $('navBack').onclick = navBack;
 if (tg && tg.BackButton) tg.BackButton.onClick(() => {
-  if (sheetOpen()) closeSheet(); else if (VIEW === 'upload') setView('analytics'); else if (NAV.length) navBack(); });
+  if (sheetOpen()) closeSheet(); else if (VIEW === 'upload') setView('analytics');
+  else if (TAB === 'Qoldiq' && QS.detail) closeDetail(); else if (NAV.length) navBack(); });
 document.querySelectorAll('#chartMetric button').forEach(b => b.onclick = () => {
   st.chartMetric = b.dataset.m;
   document.querySelectorAll('#chartMetric button').forEach(x => x.setAttribute('aria-pressed', x === b));
@@ -1293,6 +1302,7 @@ function renderPlan() {
   const note = `<p class="foot">Davr rejasi = oylik reja × o'tgan kunlar / oy kunlari (ma'lumot ${dm(d.data_to)} gacha). Bajarilish = fakt / davr rejasi.
     Prognoz — hozirgi o'rtacha kunlik sur'at bilan. Reja oy × kategoriya bo'yicha, shuning uchun hudud/brend filtrlari bu yerda qo'llanmaydi.</p>`;
   host.innerHTML = head + gcards + chart + table + note;
+  stockPlanCard(host);                       // qoldiq rejaga yetadimi (joriy oy, savdo)
   host.querySelectorAll('button[data-cid]').forEach(b => b.onclick = () => {
     const c = META.categories.find(x => String(x.id) === b.dataset.cid); if (!c) return;
     goCategory(c); setTab('Umumiy');
@@ -1317,7 +1327,7 @@ async function loadPlan(year) {
 let TAB = 'Umumiy';
 function setTab(t) {
   TAB = t;
-  ['Umumiy', 'Qirqim', 'Tovarlar', 'Reja'].forEach(x => { $('pane' + x).hidden = x !== t; });
+  ['Umumiy', 'Qirqim', 'Tovarlar', 'Qoldiq', 'Reja'].forEach(x => { $('pane' + x).hidden = x !== t; });
   const rj = t === 'Reja';                            // reja — kategoriya/davr/filtrga bog'liq emas
   $('catBtn').hidden = rj; $('topAnalytics').hidden = rj; $('upTitle').hidden = !rj;
   if (rj) { $('upTitle').textContent = 'Reja bajarilishi'; $('tmeta').textContent = META.data_to ? `ma'lumot ${dm(META.data_to)} gacha` : ''; }
@@ -1485,5 +1495,312 @@ async function init() {
   [st.from, st.to] = presetRange(st.preset);
   load();
 }
+// ============================================================ QOLDIQ
+// «Qoldiq» tabi (⚠ Signallar · ▦ Xarita · 📦 Qoldiq) va boshqa tablardagi «📦 qoldiq» qatorlari.
+
+const QS = {view: 'sig', level: null, loc: 'all', limit: 30, rows: 'w', wid: null, mapCat: null,
+            detail: null, sig: null, map: null, ov: null, seq: 0, scrollY: 0};
+const STK = {list: null, top: null};
+const LV = [{n: 'Tugadi', s: '< 3 kun', i: '🔴'}, {n: 'Tugayapti', s: '< 7 kun', i: '🟠'}, {n: 'Kamaymoqda', s: 'tez tushyapti', i: '🟡'}];
+const STOCK_DIMS = {region: 1, cluster: 1, branch: 1, brand: 1, sku: 1, category: 1};
+
+const dTxtK = d => (d == null ? 'sotilmayapti' : `${d >= 100 ? nf0.format(d) : nf0.format(Math.round(d))} kunga`);
+const dCls = d => (d == null ? 'hi' : d < 3 ? 'lo' : d < 7 ? 'or' : d < 15 ? 'ye' : d > 90 ? 'hi' : 'ok');
+const dPill = d => `<span class="qp ${dCls(d)}">${dTxtK(d)}</span>`;
+const lvPill = (lv, d) => `<span class="qp l${lv}">${d == null ? '—' : nf0.format(Math.round(d))} kun · ${LV[lv].n.toLowerCase()}</span>`;
+
+// ---------------------------------------------------------------- boshqa tablardagi qator
+function stockLine(x, sku) {
+  if (!x) return '';
+  const val = sku ? `<b>${nf0.format(x.stock)}</b> dona` : `<b>${money(x.value)}</b>`;
+  const oos = x.oos ? (sku ? `<span>${nf0.format(x.oos)} filialda yo'q</span>` : `<span>OOS <b>${nf0.format(x.oos)}</b></span>`) : '';
+  return `<span class="qline"><span>📦 qoldiq ${val}</span>${dPill(x.days)}${oos}</span>`;
+}
+async function stockForList(F, dim) {
+  const seq = reqSeq.main;
+  try {
+    const r = await api('stock/by', {...F, dim});
+    if (seq !== reqSeq.main) return;
+    STK.list = r.items || {}; renderCatList();
+  } catch (e) { STK.list = null; }
+}
+async function stockForNode(node) {
+  if (!STOCK_DIMS[node.childDim] || !node.children) return;
+  try {
+    const r = await api('stock/by', {...pathFilters(node.path), dim: node.childDim});
+    const it = r.items || {};
+    node.children.forEach(ch => { ch.stock = it[ch.key] || null; });
+    if (node.depth === 0 && node.root === 'm') {
+      const a = await api('stock/by', {...pathFilters([]), dim: 'all'});
+      node.stock = (a.items || {}).all || null;
+    }
+    rerender(node.root);
+  } catch (e) { /* qoldiq yo'q — jim */ }
+}
+async function stockForTop(rows) {
+  if (!rows || !rows.length) { STK.top = null; return; }
+  try {
+    const r = await api('stock/by', {...filters(), product_ids: rows.map(i => Number(i.key)), dim: 'sku'});
+    STK.top = r.items || {}; renderTopBody();
+  } catch (e) { STK.top = null; }
+}
+async function stockPlanCard(host) {
+  if (PL.mode !== 'month' || PL.metric !== 'amount' || !PL.data || !PL.data.data_to) return;
+  const d = PL.data, m = PL.month;
+  if (+d.data_to.slice(0, 4) !== d.year || +d.data_to.slice(5, 7) - 1 !== m) return;   // faqat joriy oy
+  let r;
+  try { r = await api('stock/by', {scope: 'a:', date_from: addDays(d.data_to, -29), date_to: d.data_to, compare: 'none', dim: 'category'}); }
+  catch (e) { return; }
+  const it = r.items || {};
+  if (!Object.keys(it).length || PL.data !== d || PL.month !== m || !host.isConnected) return;
+  let need = 0, have = 0; const short = [];
+  for (const c of d.cats.filter(x => x.in_db)) {
+    const full = c.plan_amount[m]; if (full == null) continue;
+    const rest = Math.max(0, full - (c.fact_amount[m] || 0)), s = it[String(c.id)];
+    const sell = s ? s.sell : 0;
+    need += rest; have += sell;
+    if (rest > 0 && sell < rest) short.push({name: c.name, gap: rest - sell});
+  }
+  if (!need) return;
+  short.sort((a, b) => b.gap - a.gap);
+  const gap = need - have;
+  const card = document.createElement('div');
+  card.className = 'card qplan';
+  card.innerHTML = `<div class="sh"><span class="label">📦 Qoldiq rejani bajarishga yetadimi?</span><span class="hint">${dm(r.snap && (r.snap.b || r.snap.w))} holati</span></div>
+    <div class="m2">Oy oxirigacha kerakli savdo — <b>${money(need)}</b> · filial + ombor qoldig'i (sotish narxida) — <b>${money(have)}</b></div>
+    <div class="m2">${gap > 0 ? `<span class="qp lo">${money(gap)} yetmaydi</span>` : `<span class="qp ok">yetadi · zaxira ${money(-gap)}</span>`}
+      ${short.length ? `<span class="hint">yetmaydi: ${short.slice(0, 4).map(x => esc(x.name)).join(', ')}${short.length > 4 ? ` +${short.length - 4}` : ''}</span>` : ''}</div>`;
+  host.querySelector('.qplan')?.remove();
+  host.insertBefore(card, host.children[1] || null);
+}
+
+// ---------------------------------------------------------------- Qoldiq tabi
+function stockFilters() { return {...filters()}; }
+function snapNote(s) {
+  if (!s || (!s.b && !s.w)) return '';
+  const parts = [];
+  if (s.b) parts.push(`filial ${dm(s.b)}`);
+  if (s.w) parts.push(`ombor ${dm(s.w)}`);
+  return `qoldiq: ${parts.join(' · ')} holati · savdo — 30 kunlik o'rtacha`;
+}
+function noStock() {
+  return `<div class="card"><div class="empty">Qoldiq hali yuklanmagan.<br>${META.can_upload
+    ? "«📥» bo'limidan filial qoldig'i (Filial, Tovar Id, Qoldiq) va ombor qoldig'i (ID, Омбор, Мижоз учун қолдиқ) fayllarini yuklang — sana fayl nomida bo'lsin (…_17.10.2026.xlsx)."
+    : "Administrator qoldiq fayllarini yuklashini kuting."}</div></div>`;
+}
+async function loadStockTab() {
+  STALE.Qoldiq = false;
+  QS.sig = QS.map = QS.ov = null;
+  renderStock();
+}
+function renderStock() {
+  const host = $('qBody');
+  document.querySelectorAll('#qSeg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === QS.view && !QS.detail));
+  $('qSeg').hidden = !!QS.detail;
+  if (QS.detail) return renderDetail();
+  if (QS.view === 'sig') return renderSignals(host);
+  if (QS.view === 'map') return renderMap(host);
+  return renderOverview(host);
+}
+function counters(d, sel) {
+  return `<div class="qsum">${[0, 1, 2].map(k => `<button class="l${k} ${sel === k ? 'on' : ''}" data-lv="${k}">
+    <span>${LV[k].i} ${LV[k].n}</span><b>${nf0.format(d.counts[k] || 0)}</b><span>${k === 2 && d.new && d.new[2] ? `${d.new[2]} tasi yangi` : LV[k].s}</span></button>`).join('')}</div>`;
+}
+function sigCard(x) {
+  const ic = x.t === 'w' ? '🏬' : '🏪';
+  const lines = [];
+  if (x.t === 'w') {
+    lines.push(`omborda <b>${nf0.format(x.stock)}</b>`);
+    lines.push(`filiallarda ${x.br_days == null ? nf0.format(x.br_stock) : dTxtK(x.br_days)}`);
+  } else lines.push(`qoldiq <b>${nf0.format(x.stock)}</b> dona`);
+  if (x.prev != null && x.level === 2) lines.push(`o'tgan hafta ${nf0.format(Math.round(x.prev))} kun`);
+  if (x.oos) lines.push(`${nf0.format(x.oos)} filial×SKU OOS`);
+  return `<button class="al l${x.level}" data-t="${x.t}" data-id="${x.id}" data-c="${x.cat_id}" data-b="${esc(x.brand)}">
+    <span class="p">${ic} <b>${esc(x.name)}</b>${x.sub ? ` · ${esc(x.sub)}` : ''} · ${esc(x.cat || '')}${x.new ? '<span class="nw2">yangi</span>' : ''}</span>
+    <span class="w"><b>${esc(x.brand)}</b>${lvPill(x.level, x.days)}</span>
+    <span class="k">${lines.map(l => `<span>${l}</span>`).join('')}<span><b>≈ ${money(x.risk)}</b>/kun xavf</span></span></button>`;
+}
+async function renderSignals(host, more) {
+  const seq = ++QS.seq;
+  if (!QS.sig || more) {
+    if (!more) host.innerHTML = `<div class="empty">Yuklanmoqda…</div>`;
+    try {
+      const d = await api('stock/signals', {...stockFilters(), loc: QS.loc, level: QS.level, limit: QS.limit});
+      if (seq !== QS.seq) return;
+      QS.sig = d;
+    } catch (e) { host.innerHTML = `<div class="errbox">${esc(e.message)}</div>`; return; }
+  }
+  const d = QS.sig;
+  if (!d.snap || (!d.snap.b && !d.snap.w)) { host.innerHTML = noStock(); return; }
+  const chips = [['all', 'Hammasi'], ['w', '🏬 Omborlar'], ['b', '🏪 Filiallar']];
+  host.innerHTML = `<div class="hint">${snapNote(d.snap)}${d.has_prev ? '' : " · «kamaymoqda» uchun kamida bir hafta oldingi qoldiq ham kerak"}</div>
+    ${counters(d, QS.level)}
+    <div class="qchips">${chips.map(([k, l]) => `<button data-loc="${k}" aria-pressed="${QS.loc === k}">${l}</button>`).join('')}</div>
+    ${d.items.length ? d.items.map(sigCard).join('') : `<div class="card"><div class="empty">${QS.level == null ? "Yetishmovchilik signali yo'q 👍" : "Bu darajada signal yo'q"}</div></div>`}
+    ${d.total > d.items.length ? `<button class="more" id="qMore">Yana ${nf0.format(d.total - d.items.length)} ta signal ▾</button>` : ''}
+    <button class="btn ghost" id="qToMap">▦ Xaritada ko'rish</button>`;
+  host.querySelectorAll('[data-lv]').forEach(b => b.onclick = () => { const k = +b.dataset.lv; QS.level = QS.level === k ? null : k; QS.limit = 30; QS.sig = null; renderSignals(host); });
+  host.querySelectorAll('[data-loc]').forEach(b => b.onclick = () => { QS.loc = b.dataset.loc; QS.limit = 30; QS.sig = null; renderSignals(host); });
+  const mo = $('qMore'); if (mo) mo.onclick = () => { QS.limit += 30; renderSignals(host, true); };
+  $('qToMap').onclick = () => { QS.view = 'map'; renderStock(); };
+  host.querySelectorAll('.al[data-t]').forEach(b => b.onclick = () => openDetail({
+    loc_type: b.dataset.t, loc_id: +b.dataset.id, map_category: +b.dataset.c, brand: b.dataset.b}));
+}
+const hmCls = v => (v == null ? 'h4' : v < 0 ? 'h5' : v < 3 ? 'h0' : v < 7 ? 'h1' : v < 15 ? 'h2' : 'h3');
+const hmTxt = v => (v == null ? '—' : v < 0 ? '∞' : nf0.format(Math.round(v)));
+async function renderMap(host) {
+  const seq = ++QS.seq;
+  if (!QS.map) {
+    host.innerHTML = `<div class="empty">Yuklanmoqda…</div>`;
+    try {
+      const d = await api('stock/map', {...stockFilters(), rows: QS.rows, wid: QS.wid, map_category: QS.mapCat});
+      if (seq !== QS.seq) return;
+      QS.map = d; QS.mapCat = d.category;
+    } catch (e) { host.innerHTML = `<div class="errbox">${esc(e.message)}</div>`; return; }
+  }
+  const d = QS.map;
+  if (!d.snap || (!d.snap.b && !d.snap.w)) { host.innerHTML = noStock(); return; }
+  const rk = [['w', 'Omborlar'], ['region', 'Hududlar'], ['b', 'Filiallar']];
+  const cats = d.categories.length > 1 ? `<label class="sortl">Kategoriya <select id="qCat">${d.categories.map(c =>
+    `<option value="${c.id}" ${c.id === d.category ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>` : `<b>${esc(d.category_name || '')}</b>`;
+  const head = `<tr><th></th>${d.brands.map(b => `<th title="${esc(b)}">${esc(b)}</th>`).join('')}</tr>`;
+  const rows = d.rows.map(r => `<tr><td class="n">${d.rows_kind === 'w' ? `<button class="lnk" data-wid="${r.id}">${esc((r.name || '').replace(/ омбори$/, ''))} ›</button>` : esc(r.name)}</td>
+    ${d.brands.map(b => `<td class="${hmCls(r.cells[b])}" data-r="${r.id}" data-b="${esc(b)}">${hmTxt(r.cells[b])}</td>`).join('')}</tr>`).join('');
+  const tot = `<tr class="tot2"><td class="n"><b>Jami</b></td>${d.brands.map(b => `<td class="${hmCls(d.total.cells[b])}">${hmTxt(d.total.cells[b])}</td>`).join('')}</tr>`;
+  host.innerHTML = `<div class="hint">${snapNote(d.snap)}</div>
+    <div class="qchips">${rk.map(([k, l]) => `<button data-rows="${k}" aria-pressed="${QS.rows === k && !(k === 'b' && QS.wid)}">${l}</button>`).join('')}</div>
+    <div class="ctl">${cats}</div>
+    ${QS.wid ? `<div class="bc2"><button class="tchip back" id="qWidBack">‹ Omborlar</button><span>${esc(d.wh_name || '')} filiallari</span></div>` : ''}
+    ${d.rows.length && d.brands.length ? `<div class="card hmw"><table class="hm">${head}${rows}${tot}</table></div>` : `<div class="card"><div class="empty">Bu kategoriyada qoldiq yo'q</div></div>`}
+    <div class="lg"><span><i class="h0"></i>&lt;3 kun</span><span><i class="h1"></i>3–7</span><span><i class="h2"></i>8–14</span><span><i class="h3"></i>me'yorda</span><span><i class="h5"></i>sotilmaydi</span></div>
+    <p class="foot">Katakda — necha kunga yetadi (qoldiq ÷ 30 kunlik o'rtacha savdo). Ombor qatorida — ombor qoldig'i ÷ u ta'minlaydigan filiallar savdosi. Ombor nomini bossangiz — filiallari; katakni bossangiz — SKU'lar.</p>`;
+  host.querySelectorAll('[data-rows]').forEach(b => b.onclick = () => { QS.rows = b.dataset.rows; QS.wid = null; QS.map = null; renderMap(host); });
+  const qc = $('qCat'); if (qc) qc.onchange = () => { QS.mapCat = +qc.value; QS.map = null; renderMap(host); };
+  host.querySelectorAll('[data-wid]').forEach(b => b.onclick = () => { QS.rows = 'b'; QS.wid = +b.dataset.wid; QS.map = null; renderMap(host); });
+  const wb = $('qWidBack'); if (wb) wb.onclick = () => { QS.rows = 'w'; QS.wid = null; QS.map = null; renderMap(host); };
+  const lt = {w: 'w', region: 'region', b: 'b'}[d.rows_kind];
+  host.querySelectorAll('td[data-r]').forEach(td => td.onclick = () => openCellSheet(
+    {loc_type: lt, loc_id: +td.dataset.r, map_category: d.category, brand: td.dataset.b},
+    `${esc(d.rows.find(r => String(r.id) === td.dataset.r)?.name || '')} × ${esc(td.dataset.b)}`));
+}
+function skuRows(items, locType) {
+  return items.map(x => {
+    const lv = x.days == null ? null : x.days < 3 ? 0 : x.days < 7 ? 1 : x.days < 15 ? 2 : null;
+    const alt = x.other && x.other.length ? `<span>boshqa omborda: ${x.other.map(o => `${esc(o.name.replace(' омбори', ''))} ${nf0.format(o.qty)}`).join(', ')}</span>` : '';
+    return `<div class="al ${lv == null ? 'l9' : 'l' + lv}"><span class="w"><b>${esc(x.name)}</b>${dPill(x.days)}</span>
+      <span class="k"><span>${locType === 'w' ? 'omborda' : 'qoldiq'} <b>${nf0.format(x.stock)}</b></span>${locType === 'w' ? `<span>filiallarda ${nf0.format(x.br_stock)}</span>` : (x.wh_stock ? `<span>omborida ${nf0.format(x.wh_stock)}</span>` : '')}
+      ${x.oos ? `<span>${locType === 'b' ? 'tugagan' : `${nf0.format(x.oos)} filialda yo'q`}</span>` : ''}${x.risk ? `<span><b>${money(x.risk)}</b>/kun</span>` : ''}${alt}</span></div>`;
+  }).join('');
+}
+async function openCellSheet(q, title) {
+  const host = openSheetBox(title, `<div class="empty">Yuklanmoqda…</div>`,
+    `<button class="btn primary" id="qFull">To'liq tafsilot →</button>`);
+  host.querySelector('#qFull').onclick = () => { closeSheet(); openDetail(q); };
+  try {
+    const d = await api('stock/detail', {...stockFilters(), ...q});
+    const b = host.querySelector('.sbody'); if (!b) return;
+    const t = d.total;
+    b.innerHTML = `<div class="hint">${q.loc_type === 'w' ? `omborda <b>${nf0.format(t.wh_stock)}</b> · filiallarda ${nf0.format(t.br_stock)}` : `qoldiq <b>${nf0.format(t.br_stock)}</b>`} · ${nf1.format(t.sales_day || 0)} dona/kun · ${dTxtK(t.days)}</div>
+      ${d.items.length ? skuRows(d.items.slice(0, 15), q.loc_type) : `<div class="empty">SKU yo'q</div>`}`;
+  } catch (e) { const b = host.querySelector('.sbody'); if (b) b.innerHTML = `<div class="errbox">${esc(e.message)}</div>`; }
+}
+function histChart(h) {
+  if (!h || h.length < 2) return `<div class="hint">Grafik uchun kamida 2 ta qoldiq sanasi kerak.</div>`;
+  const W = 320, H = 90, P = 6, vals = h.map(x => x.days == null ? null : Math.min(x.days, 60));
+  const mx = Math.max(15, ...vals.filter(v => v != null));
+  const x = i => P + i * (W - 2 * P) / (h.length - 1), y = v => H - 16 - (v / mx) * (H - 26);
+  const pts = vals.map((v, i) => v == null ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`).filter(Boolean).join(' ');
+  const y7 = y(7);
+  return `<svg viewBox="0 0 ${W} ${H}" class="qhist" role="img" aria-label="Qoldiq necha kunga yetishi dinamikasi">
+    <rect x="0" y="${y7.toFixed(1)}" width="${W}" height="${(H - 16 - y7).toFixed(1)}" fill="var(--bad-soft)"/>
+    <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+    ${vals.map((v, i) => v == null ? '' : `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3" fill="var(--accent)"/>`).join('')}
+    ${h.map((p, i) => (i === 0 || i === h.length - 1 || h.length <= 6) ? `<text x="${x(i).toFixed(1)}" y="${H - 3}" font-size="10" text-anchor="${i === 0 ? 'start' : i === h.length - 1 ? 'end' : 'middle'}" fill="var(--muted)">${dm(p.date)} · ${p.days == null ? '∞' : nf0.format(Math.round(p.days))}</text>` : '').join('')}
+  </svg>`;
+}
+function openDetail(q) {
+  QS.scrollY = window.scrollY;
+  QS.detail = {q, data: null};
+  renderStock(); syncBack(); window.scrollTo(0, 0);
+}
+function closeDetail() {
+  QS.detail = null; renderStock(); syncBack();
+  requestAnimationFrame(() => window.scrollTo(0, QS.scrollY || 0));
+}
+async function renderDetail() {
+  const host = $('qBody'), D_ = QS.detail;
+  if (!D_.data) {
+    host.innerHTML = `<button class="tchip back" id="qBack">‹ Orqaga</button><div class="empty">Yuklanmoqda…</div>`;
+    $('qBack').onclick = closeDetail;
+    try { D_.data = await api('stock/detail', {...stockFilters(), ...D_.q}); }
+    catch (e) { host.innerHTML = `<button class="tchip back" id="qBack">‹ Orqaga</button><div class="errbox">${esc(e.message)}</div>`; $('qBack').onclick = closeDetail; return; }
+    if (QS.detail !== D_) return;
+  }
+  const d = D_.data, t = d.total, isW = d.loc_type === 'w';
+  const lv = d.level != null ? `<span class="pl">${LV[d.level].i} ${LV[d.level].n.toLowerCase()}</span>` : '';
+  const prev = d.history.length > 1 ? d.history[d.history.length - 2] : null;
+  const gc = (k, x, y) => `<div><small>${k}</small><b>${x}</b><small>${y || '&nbsp;'}</small></div>`;
+  const start = (() => {   // signal qachon boshlangan: kunlar 15 dan pastga tushgan birinchi sana
+    const h = d.history; let s = null;
+    for (let i = h.length - 1; i >= 0; i--) { if (h[i].days != null && h[i].days < 15) s = h[i].date; else break; }
+    return s && s !== h[0].date ? s : null;
+  })();
+  const alts = {};
+  d.items.forEach(x => (x.other || []).forEach(o => { alts[o.name] = (alts[o.name] || 0) + o.qty; }));
+  const altList = Object.entries(alts).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const short = d.items.filter(x => x.days != null && x.days < 7);
+  host.innerHTML = `<button class="tchip back" id="qBack">‹ Orqaga</button>
+    <div class="qdh"><h2>${esc(d.name)}${d.brand ? ` · ${esc(d.brand)}` : ''}</h2><div class="hint">${esc(d.category || '')} · ${snapNote(d.snap)}</div></div>
+    <div class="qtot"><div class="r1"><span>${isW ? `Ombor${d.branches ? ` + uning ${d.branches} filiali` : ''}` : d.loc_type === 'b' ? 'Filial' : 'Hudud filiallari'}</span>${lv}</div>
+      <div class="big">${dTxtK(t.days)}${isW ? ' omborda' : ''}</div>
+      <div class="g3">${isW ? gc('Ombor', `${nf0.format(t.wh_stock)} dona`, prev ? `oldin ${nf0.format(prev.stock)}` : '')
+        + gc('Filiallar', `${nf0.format(t.br_stock)} dona`, dTxtK(t.br_days))
+        : gc('Qoldiq', `${nf0.format(t.br_stock)} dona`, prev ? `oldin ${nf0.format(prev.stock)}` : '')
+          + gc('Omborida', `${nf0.format(t.wh_stock)} dona`, '')}
+        ${gc('Savdo', `${nf1.format(t.sales_day || 0)} dona/kun`, `≈ ${money(t.risk)}/kun`)}</div></div>
+    <div class="sec"><h2>Qoldiq qanday kamaydi</h2><span class="hint">necha kunga yetadi</span></div>
+    <div class="card">${histChart(d.history)}${start ? `<div class="hint">🟡 ${dm(start)} dan 15 kundan pastga tushgan</div>` : ''}</div>
+    <div class="sec"><h2>SKU'lar</h2><span class="hint">${d.items.length} ta · kam qolgani tepada</span></div>
+    ${d.items.length ? skuRows(d.items, d.loc_type) : `<div class="card"><div class="empty">SKU yo'q</div></div>`}
+    ${short.length ? `<div class="card"><b>Nima qilish mumkin</b><div class="m2">${altList.length
+      ? altList.map(([n, q]) => `• ${esc(n)}da shu SKU'lardan ${nf0.format(q)} dona bor → ko'chirish`).join('<br>')
+      : "• Boshqa omborlarda ham yo'q → xarid buyurtmasi kerak"}</div></div>` : ''}`;
+  $('qBack').onclick = closeDetail;
+}
+async function renderOverview(host) {
+  const seq = ++QS.seq;
+  if (!QS.ov) {
+    host.innerHTML = `<div class="empty">Yuklanmoqda…</div>`;
+    try {
+      const d = await api('stock/overview', stockFilters());
+      if (seq !== QS.seq) return;
+      QS.ov = d;
+    } catch (e) { host.innerHTML = `<div class="errbox">${esc(e.message)}</div>`; return; }
+  }
+  const d = QS.ov, t = d.total;
+  if (!d.snap || (!d.snap.b && !d.snap.w)) { host.innerHTML = noStock(); return; }
+  const gc = (k, x, y) => `<div><small>${k}</small><b>${x}</b><small>${y || '&nbsp;'}</small></div>`;
+  const bar = days => `<span class="dbar"><i style="left:${Math.min(100, (days == null ? 100 : days / 60 * 100)).toFixed(0)}%"></i></span>`;
+  host.innerHTML = `<div class="hint">${snapNote(d.snap)}</div>
+    <div class="qtot"><div class="r1"><span>Jami qoldiq</span><span class="pl">${dTxtK(t.days)}</span></div>
+      <div class="big">${money(t.br_value + t.wh_value)}</div>
+      <div class="g3">${gc('Filiallar', money(t.br_value), `${nf0.format(t.br_stock)} dona · tannarx`)}${gc('Omborlar', money(t.wh_value), `${nf0.format(t.wh_stock)} dona · A narx×kurs`)}${gc('OOS', nf0.format(t.oos), 'filial×SKU')}</div></div>
+    ${counters({counts: d.counts}, null)}
+    <div class="sec"><h2>Omborlar</h2><span class="hint">o'z filiallari savdosiga</span></div>
+    ${d.warehouses.map(w => `<button class="li can qw" data-w="${w.id}"><span class="r1"><span class="n">🏬 ${esc(w.name)}</span><span class="v">${money(w.value)}</span></span>
+      <span class="m">${dPill(w.days)}<span>omborda <b>${nf0.format(w.stock)}</b> dona</span><span>filiallarda ${dTxtK(w.br_days)}</span><span>OOS ${nf0.format(w.oos)}</span></span>
+      <span class="m"><span>${esc(w.regions.join(', '))}</span></span>${bar(w.days)}</button>`).join('')}
+    <div class="sec"><h2>Hududlar</h2><span class="hint">filial qoldig'i · kam qolgani tepada</span></div>
+    ${d.regions.map(r => `<button class="li can qr" data-r="${r.id}"><span class="r1"><span class="n">${esc(r.name)}</span><span class="v">${money(r.value)}</span></span>
+      <span class="m">${dPill(r.days)}<span><b>${nf0.format(r.stock)}</b> dona</span><span>${r.branches} filial</span><span>OOS ${nf0.format(r.oos)}</span></span>${bar(r.days)}</button>`).join('')}
+    <p class="foot">Filial qoldig'i — tannarxda (Kirim So'm), ombor qoldig'i — «A сектор» narxi × kurs (${nf0.format(d.rate || 0)}). Necha kunga yetadi — qoldiq ÷ 30 kunlik o'rtacha savdo.</p>`;
+  host.querySelectorAll('.qw').forEach(b => b.onclick = () => openDetail({loc_type: 'w', loc_id: +b.dataset.w}));
+  host.querySelectorAll('.qr').forEach(b => b.onclick = () => openDetail({loc_type: 'region', loc_id: +b.dataset.r}));
+}
+document.querySelectorAll('#qSeg button').forEach(b => b.onclick = () => {
+  if (QS.view === b.dataset.v && !QS.detail) return;
+  QS.view = b.dataset.v; QS.detail = null; renderStock(); syncBack();
+});
+
 init();
 })();
