@@ -232,6 +232,8 @@ async def base_data(con, f: Filters, cats: list[int], attrs: dict) -> dict:
         "regions": {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM regions")},
         "cats": {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM categories WHERE id = ANY($1::int[])", cats)},
     }
+    out["links"] = {"total": len(out["meta"]["branches"]),
+                    "unlinked": sum(1 for b in out["meta"]["branches"].values() if not b["warehouse_id"])}
     if sn["b"]:
         out["b"] = [tuple(r) for r in await _branch_rows(con, f, cats, attrs, sn["b"], _end(sn["b"], ls))]
         if sn["pb"]:
@@ -323,7 +325,7 @@ async def signals(req: StockReq, request: Request, user: User = Depends(current_
         x["risk"], x["sales_day"] = round(x["risk"]), _r(x["sales_day"], 2)
         x["accel"] = _r(x.get("accel"), 2)
     return {"snap": base["snap"], "counts": counts, "risk": risk, "new": new, "total": len(items), "items": page,
-            "has_prev": bool(base["pb"] or base["pw"])}
+            "has_prev": bool(base["pb"] or base["pw"]), "links": base.get("links")}
 
 
 # ---------------------------------------------------------------------------
@@ -448,7 +450,7 @@ async def overview(req: StockReq, request: Request, user: User = Depends(current
                            "regions": sorted({meta["regions"].get(br[b]["region_id"]) for b in b_["br"] if b in br})})
     q_all = tb["q"]
     lsum = (await _lists(request, user, req)).get("summary")
-    return {"snap": base["snap"], "rate": rate, "counts": counts, "lists": lsum,
+    return {"snap": base["snap"], "rate": rate, "counts": counts, "lists": lsum, "links": base.get("links"),
             "total": {"br_stock": tb["sq"], "br_value": tb["sv"], "wh_stock": tw["sq"], "wh_value": tw["sv"] * rate,
                       "days": _r(_days(tb["sq"] + tw["sq"], q_all)), "br_days": _r(_days(tb["sq"], q_all)),
                       "wh_days": _r(_days(tw["sq"], q_all)), "oos": tb["oos"], "sales_day": tb["a"] / WINDOW},
@@ -535,6 +537,19 @@ HAVING coalesce(sum(j.sq), 0) > 0 OR coalesce(sum(j.q), 0) > 0 OR coalesce(max(w
                               "level": _level(d, _accel(r["q"], r["q7"])),
                               "other": [{"name": whn.get(o["wid"]), "qty": o["qty"]} for o in other[:3]]})
             items.sort(key=lambda x: (x["days"] if x["days"] is not None else 1e9, -x["risk"]))
+            # kunlik savdo (30 kun) — sur'at grafigi uchun (bitta qoldiq sanasi bilan ham ishlaydi)
+            s3 = _SQL(f, cats, attrs)
+            w3 = s3.ctes()
+            if wid and req.loc_type == "w":
+                w3 += f", bw AS (SELECT * FROM bb WHERE warehouse_id = {s3.p(wid)})"
+            else:
+                w3 += ", bw AS (SELECT * FROM bb)"
+            E3 = s3.p(_end(sn["b"] or sn["w"], ls) or req.date_to)
+            daily = [{"date": r["d"].isoformat(), "qty": r["q"]} for r in await con.fetch(f"""
+WITH {w3}
+SELECT e.sale_date d, sum(e.qty)::float8 q FROM sales_fact e JOIN bw USING (branch_id) JOIN pd USING (product_id)
+WHERE e.sale_date BETWEEN {E3}::date - {WINDOW - 1} AND {E3} GROUP BY 1 ORDER BY 1""", *s3.params)]
+            links = await con.fetchrow("SELECT count(*) total, count(*) FILTER (WHERE warehouse_id IS NULL) unlinked FROM branches")
             # tarix: har bir qoldiq sanasi bo'yicha kunga yetadi
             tbl = "stock_wh" if req.loc_type == "w" else "stock_branch"
             dates = [r[0] for r in await con.fetch(
@@ -582,7 +597,8 @@ SELECT {stock_sql}::float8 sq,
                               "br_days": _r(_days(tot["bq"], tot["q"])), "sales_day": _r(tot["q"] / WINDOW, 2),
                               "sales_day7": _r(tot["q7"] / 7, 2),
                               "risk": round(tot["a"] / WINDOW), "oos": tot["oos"]},
-                    "history": hist, "items": items[:60]}
+                    "history": hist, "daily": daily, "sales_to": ls.isoformat() if ls else None,
+                    "links": dict(links), "items": items[:60]}
     payload = req.model_dump(mode="json", include=set(Filters.model_fields) | {"loc_type", "loc_id", "brand", "map_category"})
     return await _M().cached(request, user, "stock_detail", payload, run)
 

@@ -1634,7 +1634,7 @@ async function renderSignals(host, more) {
   const d = QS.sig;
   if (!d.snap || (!d.snap.b && !d.snap.w)) { host.innerHTML = noStock(); return; }
   const chips = [['all', 'Hammasi'], ['w', '🏬 Omborlar'], ['b', '🏪 Filiallar']];
-  host.innerHTML = `<div class="hint">${snapNote(d.snap)}</div>
+  host.innerHTML = `${linkWarn(d.links)}<div class="hint">${snapNote(d.snap)}</div>
     ${counters(d, QS.level)}
     <div class="qchips">${chips.map(([k, l]) => `<button data-loc="${k}" aria-pressed="${QS.loc === k}">${l}</button>`).join('')}</div>
     ${d.items.length ? d.items.map(sigCard).join('') : `<div class="card"><div class="empty">${QS.level == null ? "Yetishmovchilik signali yo'q 👍" : "Bu darajada signal yo'q"}</div></div>`}
@@ -1706,19 +1706,33 @@ async function openCellSheet(q, title) {
       ${d.items.length ? skuRows(d.items.slice(0, 15), q.loc_type) : `<div class="empty">SKU yo'q</div>`}`;
   } catch (e) { const b = host.querySelector('.sbody'); if (b) b.innerHTML = `<div class="errbox">${esc(e.message)}</div>`; }
 }
-function histChart(h) {
-  if (!h || h.length < 2) return `<div class="hint">Grafik uchun kamida 2 ta qoldiq sanasi kerak.</div>`;
-  const W = 320, H = 90, P = 6, vals = h.map(x => x.days == null ? null : Math.min(x.days, 60));
-  const mx = Math.max(15, ...vals.filter(v => v != null));
-  const x = i => P + i * (W - 2 * P) / (h.length - 1), y = v => H - 16 - (v / mx) * (H - 26);
-  const pts = vals.map((v, i) => v == null ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`).filter(Boolean).join(' ');
-  const y7 = y(7);
-  return `<svg viewBox="0 0 ${W} ${H}" class="qhist" role="img" aria-label="Qoldiq necha kunga yetishi dinamikasi">
-    <rect x="0" y="${y7.toFixed(1)}" width="${W}" height="${(H - 16 - y7).toFixed(1)}" fill="var(--bad-soft)"/>
-    <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
-    ${vals.map((v, i) => v == null ? '' : `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3" fill="var(--accent)"/>`).join('')}
-    ${h.map((p, i) => (i === 0 || i === h.length - 1 || h.length <= 6) ? `<text x="${x(i).toFixed(1)}" y="${H - 3}" font-size="10" text-anchor="${i === 0 ? 'start' : i === h.length - 1 ? 'end' : 'middle'}" fill="var(--muted)">${dm(p.date)} · ${p.days == null ? '∞' : nf0.format(Math.round(p.days))}</text>` : '').join('')}
-  </svg>`;
+function linkWarn(l) {
+  if (!l || !l.unlinked) return '';
+  return `<div class="card qwarn">⚠ <b>${nf0.format(l.unlinked)} ta filial</b> (${nf0.format(l.total)} tadan) omborga bog'lanmagan — ombor signallari va «ombordan yuborish» shu filiallarsiz hisoblanadi.
+    ${META.can_upload ? "Filial spravochnigini <b>«Омбор»</b> ustuni bilan yuklang (Территория · Филиал · Кластер · Омбор)." : "Administrator filial spravochnigini «Омбор» ustuni bilan yuklashi kerak."}</div>`;
+}
+function salesChart(d) {
+  const t = d.total, end = d.sales_to || (d.snap && (d.snap.b || d.snap.w));
+  if (!end) return '';
+  const by = {}; (d.daily || []).forEach(x => { by[x.date] = x.qty; });
+  const days = []; for (let i = 29; i >= 0; i--) { const k = addDays(end, -i); days.push({date: k, q: by[k] || 0}); }
+  const a30 = days.reduce((s_, x) => s_ + x.q, 0) / 30, a7 = days.slice(-7).reduce((s_, x) => s_ + x.q, 0) / 7;
+  if (!a30) return `<div class="hint">Oxirgi 30 kunda savdo yo'q.</div>`;
+  const W = 320, H = 96, B = 14, mx = Math.max(...days.map(x => x.q), a7, 1), bw = W / 30;
+  const y = v => H - B - v / mx * (H - B - 6);
+  const bars = days.map((x, i) => `<rect x="${(i * bw + 1).toFixed(1)}" y="${y(x.q).toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${(H - B - y(x.q)).toFixed(1)}" rx="1.5" fill="${i >= 23 ? 'var(--accent)' : 'var(--line)'}"/>`).join('');
+  const lines = `<line x1="0" x2="${W}" y1="${y(a30).toFixed(1)}" y2="${y(a30).toFixed(1)}" stroke="var(--muted)" stroke-dasharray="4 3"/>
+    <line x1="${(23 * bw).toFixed(1)}" x2="${W}" y1="${y(a7).toFixed(1)}" y2="${y(a7).toFixed(1)}" stroke="var(--accent)" stroke-width="2.5"/>`;
+  const lbl = [0, 14, 29].map(i => `<text x="${(i * bw + bw / 2).toFixed(1)}" y="${H - 2}" font-size="10" text-anchor="${i === 0 ? 'start' : i === 29 ? 'end' : 'middle'}" fill="var(--muted)">${dm(days[i].date)}</text>`).join('');
+  const snap = d.snap && (d.loc_type === 'w' ? d.snap.w : d.snap.b) || end;
+  const runOut = t.days == null ? '' : t.days < 0.5 ? '<b>tugagan</b>' : `≈ <b>${dm(addDays(snap, Math.floor(t.days)))}</b> gacha yetadi`;
+  const ch = a30 ? Math.round((a7 / a30 - 1) * 100) : 0;
+  const prev = d.history && d.history.length > 1 ? d.history[d.history.length - 2] : null;
+  return `<svg viewBox="0 0 ${W} ${H}" class="qhist" role="img" aria-label="Kunlik savdo, 30 kun">${bars}${lines}${lbl}</svg>
+    <div class="lg"><span><i style="background:var(--muted);height:2px;width:14px"></i>30 kunlik o'rtacha ${nf1.format(a30)}/kun</span>
+      <span><i style="background:var(--accent);height:3px;width:14px"></i>oxirgi 7 kun ${nf1.format(a7)}/kun${Math.abs(ch) >= 5 ? ` (${ch > 0 ? '▲' : '▼'} ${nf0.format(Math.abs(ch))}%)` : ''}</span></div>
+    ${runOut ? `<div class="m2">📦 Qoldiq shu sur'atda ${runOut}</div>` : ''}
+    ${prev ? `<div class="m2">Bir hafta oldin (${dm(prev.date)}): ${nf0.format(prev.stock)} dona · ${dTxtK(prev.days)}</div>` : ''}`;
 }
 function openDetail(q) {
   QS.scrollY = window.scrollY;
@@ -1753,16 +1767,17 @@ async function renderDetail() {
   const altList = Object.entries(alts).sort((a, b) => b[1] - a[1]).slice(0, 3);
   const short = d.items.filter(x => x.days != null && x.days < 7);
   host.innerHTML = `<button class="tchip back" id="qBack">‹ Orqaga</button>
-    <div class="qdh"><h2>${esc(d.name)}${d.brand ? ` · ${esc(d.brand)}` : ''}</h2><div class="hint">${esc(d.category || '')} · ${snapNote(d.snap)}</div></div>
+    <div class="qdh"><h2>${esc(d.name)}${d.brand ? ` · ${esc(d.brand)}` : ''}</h2><div class="hint">${d.category ? esc(d.category) + ' · ' : ''}${snapNote(d.snap)}</div></div>
     <div class="qtot"><div class="r1"><span>${isW ? `Ombor${d.branches ? ` + uning ${d.branches} filiali` : ''}` : d.loc_type === 'b' ? 'Filial' : 'Hudud filiallari'}</span>${lv}</div>
-      <div class="big">${dTxtK(t.days)}${isW ? ' omborda' : ''}</div>
+      <div class="big">${t.days == null ? "Savdo yo'q" : dTxtK(t.days) + (isW ? ' omborda' : '')}</div>
       <div class="g3">${isW ? gc('Ombor', `${nf0.format(t.wh_stock)} dona`, prev ? `oldin ${nf0.format(prev.stock)}` : '')
         + gc('Filiallar', `${nf0.format(t.br_stock)} dona`, dTxtK(t.br_days))
         : gc('Qoldiq', `${nf0.format(t.br_stock)} dona`, prev ? `oldin ${nf0.format(prev.stock)}` : '')
           + gc('Omborida', `${nf0.format(t.wh_stock)} dona`, '')}
         ${gc('Savdo', `${nf1.format(t.sales_day || 0)} dona/kun`, d.accel && Math.abs(d.accel - 1) >= 0.1 ? `7 kunda ${d.accel > 1 ? '▲' : '▼'} ${nf0.format(Math.abs(Math.round((d.accel - 1) * 100)))}% · ≈ ${money(t.risk)}/kun` : `≈ ${money(t.risk)}/kun`)}</div></div>
-    <div class="sec"><h2>Qoldiq qanday kamaydi</h2><span class="hint">necha kunga yetadi</span></div>
-    <div class="card">${histChart(d.history)}${start ? `<div class="hint">🟡 ${dm(start)} dan 15 kundan pastga tushgan</div>` : ''}</div>
+    ${isW ? linkWarn(d.links) : ''}
+    <div class="sec"><h2>Savdo sur'ati</h2><span class="hint">kunlik dona · 30 kun</span></div>
+    <div class="card">${salesChart(d)}${start ? `<div class="hint">🟡 ${dm(start)} dan 15 kundan pastga tushgan</div>` : ''}</div>
     <div class="sec"><h2>SKU'lar</h2><span class="hint">${d.items.length} ta · kam qolgani tepada</span></div>
     ${d.items.length ? skuRows(d.items, d.loc_type) : `<div class="card"><div class="empty">SKU yo'q</div></div>`}
     ${short.length ? `<div class="card"><b>Nima qilish mumkin</b><div class="m2">${altList.length
@@ -1784,7 +1799,7 @@ async function renderOverview(host) {
   if (!d.snap || (!d.snap.b && !d.snap.w)) { host.innerHTML = noStock(); return; }
   const gc = (k, x, y) => `<div><small>${k}</small><b>${x}</b><small>${y || '&nbsp;'}</small></div>`;
   const bar = days => `<span class="dbar"><i style="left:${Math.min(100, (days == null ? 100 : days / 60 * 100)).toFixed(0)}%"></i></span>`;
-  host.innerHTML = `<div class="hint">${snapNote(d.snap)}</div>
+  host.innerHTML = `${linkWarn(d.links)}<div class="hint">${snapNote(d.snap)}</div>
     <div class="qtot"><div class="r1"><span>Jami qoldiq</span><span class="pl">${dTxtK(t.days)}</span></div>
       <div class="big">${money(t.br_value + t.wh_value)}</div>
       <div class="g3">${gc('Filiallar', money(t.br_value), `${nf0.format(t.br_stock)} dona · tannarx`)}${gc('Omborlar', money(t.wh_value), `${nf0.format(t.wh_stock)} dona · A narx×kurs`)}${gc('OOS', nf0.format(t.oos), 'filial×SKU')}</div></div>
