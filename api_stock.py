@@ -59,6 +59,8 @@ class StockReq(Filters):
     loc_id: int | None = None
     brand: str | None = None
     dim: str = "category"
+    norm_days: Literal[7, 15, 30, 60, 90] = 30     # ombordan yuborish: me'yor — necha kunlik savdo
+    trig_days: Literal[3, 7, 15, 30] = 7           # ro'yxatga kirish: filialda shundan kamga yetsa
 
 
 # ---------------------------------------------------------------------------
@@ -668,12 +670,12 @@ FROM agg {'LEFT JOIN wst ON wst.k = agg.k' if not loc_dim else ''}""", *s.params
 
 # ---------------------------------------------------------------------------
 # Ro'yxatlar: 🚚 ombordan yuborish · 📈 ortiqcha · 💤 harakatsiz
-#   Me'yor (yuborish uchun) = 2 oylik savdo = 2 × 30 kunlik savdo (Sanjarbek tanlovi, «savdo × 2»).
+#   Me'yor (yuborish uchun) = N kunlik savdo = 30 kunlik o'rtacha kunlik savdo × N (N tanlanadi, sukut 30).
 #   Yuborish: filialda < 7 kunga yetadigan SKU (30 va 7 kunlik sur'atdan kami), uning omborida bor → me'yor − bor (ombordagidan oshmaydi;
 #   bir omborning qoldig'i eng kam qolgan filiallarga birinchi taqsimlanadi).
 #   Ortiqcha / harakatsiz — «zona» (ombor + uning filiallari) × SKU: > 90 kunga yetadi / 60 kunda sotuv yo'q.
-NORM_MONTHS = 2
-SEND_DAYS = 7
+NORM_DAYS = 30          # sukut (Mini App'da 7 · 15 · 30 · 60 · 90 tanlanadi; bot xulosasi — doim 30)
+SEND_DAYS = 7           # sukut (3 · 7 · 15 · 30)
 OVER_DAYS = 90
 IDLE_DAYS = 60
 
@@ -717,7 +719,8 @@ WHERE s.snap_date = {DW} AND s.qty > 0 AND s.warehouse_id IN (SELECT warehouse_i
     return br_rows, wh_rows, prod
 
 
-def build_lists(br_rows, wh_rows, prod: dict, meta: dict, rate: float) -> dict:
+def build_lists(br_rows, wh_rows, prod: dict, meta: dict, rate: float,
+                norm_days: int = NORM_DAYS, trig_days: int = SEND_DAYS) -> dict:
     br, whn = meta["branches"], meta["wh"]
     avail: dict[tuple, float] = {(r["warehouse_id"], r["product_id"]): r["wq"] for r in wh_rows}
     # --- ombordan yuborish
@@ -727,13 +730,13 @@ def build_lists(br_rows, wh_rows, prod: dict, meta: dict, rate: float) -> dict:
         if q30 <= 0:
             continue
         days = _days_eff(sq, q30, r["q7"])
-        if days >= SEND_DAYS:
+        if days >= trig_days:
             continue
         bi = br.get(r["branch_id"], {})
         wid = bi.get("warehouse_id")
         if not wid or avail.get((wid, r["product_id"]), 0) <= 0:
             continue
-        norm = math.ceil(NORM_MONTHS * q30)
+        norm = math.ceil(q30 / WINDOW * norm_days - 1e-9)
         need = norm - sq
         if need >= 1:
             cand.append((days, -need, r, wid, norm, need))
@@ -754,7 +757,7 @@ def build_lists(br_rows, wh_rows, prod: dict, meta: dict, rate: float) -> dict:
         g["items"].append({"branch": bi.get("name"), "region": bi.get("region"), "pid": r["product_id"],
                            "name": p.get("name"), "brand": p.get("brand"), "cat": p.get("cat"),
                            "have": r["sq"], "norm": norm, "send": send, "wh": avail[(wid, r["product_id"])],
-                           "days": round(days, 1), "risk": round(r["a30"] / WINDOW), "sd": round(q30 / WINDOW, 2)})
+                           "days": round(days, 1), "risk": round(r["a30"] / WINDOW), "sd": round(r["q30"] / WINDOW, 2)})
     send_groups = sorted(groups.values(), key=lambda g: -g["qty"])
     # --- zona (ombor + filiallari) × SKU
     zone: dict[tuple, dict] = {}
@@ -796,11 +799,12 @@ def build_lists(br_rows, wh_rows, prod: dict, meta: dict, rate: float) -> dict:
                              "warehouses": len(send_groups)},
                     "over": {"positions": len(over), "value": sum(x["value"] for x in over), "qty": sum(x["stock"] for x in over)},
                     "idle": {"positions": len(idle), "value": sum(x["value"] for x in idle), "qty": sum(x["stock"] for x in idle)}},
-        "norm": f"{NORM_MONTHS} oylik savdo", "send_days": SEND_DAYS, "over_days": OVER_DAYS, "idle_days": IDLE_DAYS,
+        "norm": f"{norm_days} kunlik savdo", "norm_days": norm_days, "send_days": trig_days, "over_days": OVER_DAYS, "idle_days": IDLE_DAYS,
     }
 
 
-async def lists_data(con, f: Filters, cats: list[int], attrs: dict) -> dict:
+async def lists_data(con, f: Filters, cats: list[int], attrs: dict,
+                     norm_days: int = NORM_DAYS, trig_days: int = SEND_DAYS) -> dict:
     sn = await snapshots(con, f.date_to)
     if not sn["b"] and not sn["w"]:
         return {"snap": None}
@@ -812,18 +816,21 @@ async def lists_data(con, f: Filters, cats: list[int], attrs: dict) -> dict:
     rate = float(await con.fetchval("SELECT rate FROM fx_periods WHERE $1 >= valid_from AND $1 < valid_to",
                                     sn["w"] or sn["b"]) or 0)
     br_rows, wh_rows, prod = await _sku_level(con, f, cats, attrs, sn)
-    out = build_lists(br_rows, wh_rows, prod, meta, rate)
+    out = build_lists(br_rows, wh_rows, prod, meta, rate, norm_days, trig_days)
     out["snap"] = {k: (v.isoformat() if v else None) for k, v in sn.items()}
     out["rate"] = rate
     return out
 
 
-async def _lists(request: Request, user: User, f: Filters) -> dict:
+async def _lists(request: Request, user: User, f: StockReq) -> dict:
+    nd, td = f.norm_days, f.trig_days
+
     async def run():
         async with request.app.state.pool.acquire() as con:
             cats, attrs = await _ctx(con, f, user)
-            return await lists_data(con, f, cats, attrs)
-    return await _M().cached(request, user, "stock_lists", f.model_dump(mode="json", include=set(Filters.model_fields)), run)
+            return await lists_data(con, f, cats, attrs, nd, td)
+    payload = {**f.model_dump(mode="json", include=set(Filters.model_fields)), "nd": nd, "td": td}
+    return await _M().cached(request, user, "stock_lists", payload, run)
 
 
 class ListReq(StockReq):
@@ -835,7 +842,7 @@ async def stock_lists(req: ListReq, request: Request, user: User = Depends(curre
     d = await _lists(request, user, req)
     if not d.get("snap"):
         return {"snap": None, "summary": None, "items": [], "groups": [], "total": 0}
-    base = {k: d[k] for k in ("snap", "summary", "norm", "send_days", "over_days", "idle_days", "rate")}
+    base = {k: d[k] for k in ("snap", "summary", "norm", "norm_days", "send_days", "over_days", "idle_days", "rate")}
     if req.kind == "send":
         return {**base, "groups": [{**g, "items": g["items"][:req.limit]} for g in d["send"]], "total": len(d["send"])}
     items = d[req.kind]
@@ -886,7 +893,7 @@ def build_xlsx(base: dict, lists: dict, sku_rows: list, prod: dict) -> bytes:
         if r["q30"] <= 0:
             continue
         d = _days_eff(r["sq"], r["q30"], r["q7"])
-        if d >= SEND_DAYS:
+        if d >= LV_DAYS[1]:
             continue
         p, bi = prod.get(r["product_id"], {}), br.get(r["branch_id"], {})
         rows.append([LV_NAMES[0] if d < LV_DAYS[0] else LV_NAMES[1], bi.get("name"), bi.get("region"),
@@ -915,14 +922,15 @@ def build_xlsx(base: dict, lists: dict, sku_rows: list, prod: dict) -> bytes:
     return buf.getvalue()
 
 
-async def export_bytes(con, f: Filters, cats: list[int], attrs: dict) -> tuple[bytes, str] | None:
+async def export_bytes(con, f: Filters, cats: list[int], attrs: dict,
+                       norm_days: int = NORM_DAYS, trig_days: int = SEND_DAYS) -> tuple[bytes, str] | None:
     base = await base_data(con, f, cats, attrs)
     sn = await snapshots(con, f.date_to)
     if not sn["b"] and not sn["w"]:
         return None
     br_rows, wh_rows, prod = await _sku_level(con, f, cats, attrs, sn)
     meta = {"branches": base["meta"]["branches"], "wh": base["meta"]["wh"]}
-    lists = build_lists(br_rows, wh_rows, prod, meta, base["rate"])
+    lists = build_lists(br_rows, wh_rows, prod, meta, base["rate"], norm_days, trig_days)
     d = sn["b"] or sn["w"]
     return build_xlsx(base, lists, br_rows, prod), f"Qoldiq_signallari_{d.strftime('%d.%m.%Y')}.xlsx"
 
@@ -935,7 +943,7 @@ async def stock_export(req: StockReq, request: Request, user: User = Depends(cur
     from aiogram.types import BufferedInputFile
     async with request.app.state.pool.acquire() as con:
         cats, attrs = await _ctx(con, req, user)
-        res = await export_bytes(con, req, cats, attrs)
+        res = await export_bytes(con, req, cats, attrs, req.norm_days, req.trig_days)
     if res is None:
         raise HTTPException(404, "Qoldiq hali yuklanmagan")
     data, fname = res

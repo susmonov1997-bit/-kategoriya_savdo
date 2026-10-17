@@ -1576,6 +1576,12 @@ async function stockPlanCard(host) {
 
 // ---------------------------------------------------------------- Qoldiq tabi
 function stockFilters() { return {...filters()}; }
+// ombordan yuborish: me'yor (necha kunlik savdo) va ro'yxatga kirish chegarasi — telefon xotirasida
+const NORM_OPTS = [7, 15, 30, 60, 90], TRIG_OPTS = [3, 7, 15, 30];
+(() => { try { const v = JSON.parse(localStorage.getItem('stockNorm') || '{}');
+  QS.nd = NORM_OPTS.includes(v.nd) ? v.nd : 30; QS.td = TRIG_OPTS.includes(v.td) ? v.td : 7; } catch (e) { QS.nd = 30; QS.td = 7; } })();
+const stockNorm = () => ({norm_days: QS.nd, trig_days: QS.td});
+function saveNorm() { try { localStorage.setItem('stockNorm', JSON.stringify({nd: QS.nd, td: QS.td})); } catch (e) {} }
 function snapNote(s) {
   if (!s || (!s.b && !s.w)) return '';
   const parts = [];
@@ -1793,7 +1799,7 @@ async function renderOverview(host) {
   if (!QS.ov) {
     host.innerHTML = `<div class="empty">Yuklanmoqda…</div>`;
     try {
-      const d = await api('stock/overview', stockFilters());
+      const d = await api('stock/overview', {...stockFilters(), ...stockNorm()});
       if (seq !== QS.seq) return;
       QS.ov = d;
     } catch (e) { host.innerHTML = `<div class="errbox">${esc(e.message)}</div>`; return; }
@@ -1831,7 +1837,7 @@ function listCards(l) {
 async function stockExport(btn) {
   const t = btn.textContent; btn.disabled = true; btn.textContent = 'Tayyorlanmoqda…';
   try {
-    await api('stock/export', stockFilters());
+    await api('stock/export', {...stockFilters(), ...stockNorm()});
     btn.textContent = '✅ Botga yuborildi';
     try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred('success'); } catch (e) {}
   } catch (e) { btn.textContent = '❌ ' + e.message; }
@@ -1843,7 +1849,7 @@ async function renderListView(host, D_) {
   if (!D_.data || D_.kind !== q.list) {
     host.innerHTML = `<button class="tchip back" id="qBack">‹ Orqaga</button><div class="empty">Yuklanmoqda…</div>`;
     $('qBack').onclick = closeDetail;
-    try { D_.data = await api('stock/lists', {...stockFilters(), kind: q.list, limit: q.list === 'send' ? 300 : 300}); D_.kind = q.list; }
+    try { D_.data = await api('stock/lists', {...stockFilters(), ...stockNorm(), kind: q.list, limit: 300}); D_.kind = q.list; }
     catch (e) { host.innerHTML = `<button class="tchip back" id="qBack">‹ Orqaga</button><div class="errbox">${esc(e.message)}</div>`; $('qBack').onclick = closeDetail; return; }
     if (QS.detail !== D_) return;
   }
@@ -1872,7 +1878,7 @@ async function renderListView(host, D_) {
       const more = open && g.items.length > n ? `<button class="more" data-more="${esc(g.id)}">Yana ${nf0.format(g.items.length - n)} ta ▾</button>` : '';
       return `<button class="whh" data-open="${esc(g.id)}"><b>${open ? '▾' : '▸'} ${(D_.by || 'w') === 'b' ? '🏪' : '🏬'} ${esc(g.name)}</b><span>${nf0.format(g.positions)} poz · ${nf0.format(g.qty)} dona</span></button>${items}${more}`;
     }).join('') : `<div class="card"><div class="empty">Yuboriladigan tovar yo'q — filiallarda yetarli yoki omborda ham yo'q 👍</div></div>`;
-    body += `<p class="foot">Filialda ${d.send_days} kundan kamga yetadigan SKU, uning omborida bor. Me'yor — ${esc(d.norm)} (30 kunlik savdo × 2). Yuboriladi = me'yor − bor, ombordagidan oshmaydi; ombor qoldig'i eng kam qolgan filiallarga birinchi taqsimlanadi.</p>`;
+    body += `<p class="foot">Filialda ${d.send_days} kundan kamga yetadigan SKU, uning omborida bor. Me'yor — ${esc(d.norm)} (30 kunlik o'rtacha kunlik savdo × ${d.norm_days}). Yuboriladi = me'yor − bor, ombordagidan oshmaydi; ombor qoldig'i eng kam qolgan filiallarga birinchi taqsimlanadi.</p>`;
   } else {
     const n = D_.show.list || 30, items = d.items || [];
     body = items.length ? items.slice(0, n).map(x => `<div class="li"><span class="r1"><span class="n">${esc(x.name)}</span><span class="v">${MQ() ? nf0.format(x.stock) + ' dona' : money(x.value)}</span></span>
@@ -1888,10 +1894,19 @@ async function renderListView(host, D_) {
     : `${nf0.format(d.summary.idle.positions)} poz · ${MQ() ? nf0.format(d.summary.idle.qty || 0) + ' dona' : money(d.summary.idle.value)}`;
   host.innerHTML = `<button class="tchip back" id="qBack">‹ Orqaga</button>
     <div class="qdh"><h2>${LIST_T[q.list]}</h2><div class="hint">${tot} · ${snapNote(d.snap)}</div></div>
+    ${q.list === 'send' ? `<div class="card nrm">
+      <div class="nt"><b>Me'yor — necha kunlik savdo</b><span>${QS.nd} kun${QS.nd >= 30 ? ` ≈ ${nf1.format(QS.nd / 30)} oy` : ''}</span></div>
+      <div class="nch">${NORM_OPTS.map(k => `<button data-nd="${k}" aria-pressed="${QS.nd === k}">${k}</button>`).join('')}</div>
+      <div class="nt" style="margin-top:8px"><b>Ro'yxatga kirish — filialda kamga yetsa</b><span>&lt; ${QS.td} kun</span></div>
+      <div class="nch">${TRIG_OPTS.map(k => `<button data-td="${k}" aria-pressed="${QS.td === k}">${k}</button>`).join('')}</div>
+      <div class="hint">Filialda ${QS.td} kundan kamga yetadigan SKU'ga ${QS.nd} kunlik savdoga yetadigan qoldiq yuboriladi. Ro'yxat, jami va Excel shu bo'yicha.</div></div>` : ''}
     <div class="seg big">${segs}</div>${body}
     <button class="btn ghost" id="qXl">⬇ Excel</button>`;
   $('qBack').onclick = closeDetail;
   $('qXl').onclick = e => stockExport(e.currentTarget);
+  const renorm = () => { saveNorm(); D_.data = null; D_.open = new Set(); D_.show = {}; QS.ov = null; renderListView(host, D_); };
+  host.querySelectorAll('[data-nd]').forEach(b => b.onclick = () => { if (QS.nd === +b.dataset.nd) return; QS.nd = +b.dataset.nd; renorm(); });
+  host.querySelectorAll('[data-td]').forEach(b => b.onclick = () => { if (QS.td === +b.dataset.td) return; QS.td = +b.dataset.td; renorm(); });
   host.querySelectorAll('[data-g]').forEach(b => b.onclick = () => { D_.by = b.dataset.g; D_.open = new Set(); D_.show = {}; renderListView(host, D_); });
   host.querySelectorAll('[data-k]').forEach(b => b.onclick = () => { if (q.list === b.dataset.k) return; q.list = b.dataset.k; D_.show = {}; renderListView(host, D_); });
   host.querySelectorAll('[data-open]').forEach(b => b.onclick = () => { const k = b.dataset.open; D_.open.has(k) ? D_.open.delete(k) : D_.open.add(k); renderListView(host, D_); });
