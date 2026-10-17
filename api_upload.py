@@ -28,6 +28,7 @@ from api_auth import User, current_user
 from loaders_common import LoaderError
 from loaders_dispatch import KIND_NAMES, detect_kind, load_any_ex
 from notify import broadcast_upload
+from bot_stock import prompt_new
 from export_missing import build_missing_xlsx, has_missing, missing_caption, report_of, send_missing
 
 log = logging.getLogger(__name__)
@@ -127,6 +128,8 @@ async def _load(pool, job: dict) -> None:
         await _notify(job["user_id"], text)
         await broadcast_upload(pool, kind, text, upload_id, job["user_id"], job.get("user_name", ""),
                                "miniapp", job["file_name"])
+        if kind in ("sales", "stock_branch", "stock_wh", "branches", "products"):
+            await prompt_new(pool)       # yangi filial / tanilmagan ombor bo'limi — adminlarga tugmali so'rov
         if kind == "sales":
             async with pool.acquire() as con:
                 rep = await report_of(con, upload_id)

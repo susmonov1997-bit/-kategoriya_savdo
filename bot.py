@@ -23,6 +23,8 @@ from db import create_pool, migrate
 from fact import ensure_fact
 from loaders_common import LoaderError
 from loaders_dispatch import load_any, load_any_ex
+import bot_stock
+from bot_stock import prompt_new
 from notify import broadcast_upload, get_setting, is_muted, period_text, send_users_update, set_setting
 from export_missing import build_missing_xlsx, file_name as missing_file_name, has_missing, missing_caption, report_of
 
@@ -54,6 +56,7 @@ WELCOME_UPLOAD = (
     "\n\nYuklash: Excel faylni shu yerga tashlang (20 MB gacha) yoki Mini App → <b>📥 Yuklash</b> (100 MB gacha):\n"
     "• <b>Kunlik savdo</b> (Chiqim tovarlar …xlsx)\n"
     "• <b>Tovar spravochnigi</b> · <b>Filial spravochnigi</b> · <b>Qo'shimcha daromad %</b>\n"
+    "• <b>Filial qoldig'i</b> · <b>Ombor qoldig'i</b> (sana fayl nomida: …_17.10.2026.xlsx)\n"
     "Fayl turi avtomatik aniqlanadi.")
 
 
@@ -69,6 +72,7 @@ async def start(m: Message, pool: asyncpg.Pool) -> None:
         if acc.is_admin:
             text += "\n/users — foydalanuvchilar va kirish so'rovlari"
             text += "\n/xabar — yuklashdan keyingi xabarlarni o'chirish/yoqish"
+            text += "\n/yangi — yangi filial va ombor bo'limlarini to'ldirish"
         await m.answer(text, reply_markup=_app_kb())
         return
     if acc.status == "pending":
@@ -416,6 +420,9 @@ async def on_document(m: Message, bot: Bot, pool: asyncpg.Pool) -> None:
         # adminlarga to'liq hisobot, savdo bo'lsa — hammaga "yangilandi" xabari (fonda)
         asyncio.create_task(broadcast_upload(pool, kind, text, upload_id, m.from_user.id,
                                              m.from_user.full_name, "bot", doc.file_name, bot))
+        if kind in ("sales", "stock_branch", "stock_wh", "branches", "products"):
+            # spravochnikda yo'q filial / tanilmagan ombor bo'limi — adminlarga tugmali so'rov
+            asyncio.create_task(prompt_new(pool, bot))
     if kind == "sales" and upload_id:
         # spravochnikda yo'q SKU/filiallar — to'ldirish uchun tayyor Excel shablon
         try:
@@ -438,6 +445,7 @@ async def run_bot(pool: asyncpg.Pool) -> None:
     if _DP is None:                  # router faqat bir marta ulanadi (qayta urinishlarda ham)
         _DP = Dispatcher()
         _DP.include_router(router)
+        _DP.include_router(bot_stock.router)
     dp = _DP
     dp["pool"] = pool
     bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))

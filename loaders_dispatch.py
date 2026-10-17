@@ -13,6 +13,7 @@ import loaders_owners as owners
 import loaders_plan as plan
 import loaders_products as products
 import loaders_sales as sales
+import loaders_stock as stock
 from fact import ensure_fact
 from pending import format_resolved, resolve_pending
 from loaders_common import LoaderError, read_headers
@@ -21,7 +22,7 @@ log = logging.getLogger(__name__)
 
 KIND_NAMES = {"products": "Tovar spravochnigi", "branches": "Filial spravochnigi", "sales": "Savdo fayli",
               "bonus": "Qo'shimcha daromad %", "owners": "Mas'ullar ro'yxati",
-              "plan": "Savdo rejasi"}
+              "plan": "Savdo rejasi", "stock_branch": "Filial qoldig'i", "stock_wh": "Ombor qoldig'i"}
 
 
 def detect_kind(data: bytes) -> str | None:
@@ -30,6 +31,10 @@ def detect_kind(data: bytes) -> str | None:
     except Exception:  # noqa: BLE001
         return None
     for h in rows:
+        if stock.is_wh_stock_file(h):
+            return "stock_wh"
+        if stock.is_branch_stock_file(h):
+            return "stock_branch"
         if sales.is_sales_file(h):
             return "sales"
         if products.is_products_file(list(h)):
@@ -80,6 +85,12 @@ async def _load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int
     if kind == "sales":
         r = await sales.load_sales(pool, data, file_name, tg_user_id)
         return kind, sales.format_report(r), r.upload_id
+    if kind == "stock_branch":
+        r = await stock.load_branch_stock(pool, data, file_name, tg_user_id)
+        return kind, stock.format_report(r), r.upload_id
+    if kind == "stock_wh":
+        r = await stock.load_wh_stock(pool, data, file_name, tg_user_id)
+        return kind, stock.format_report(r), r.upload_id
     if kind == "owners":
         r = await owners.load_owners(pool, data, file_name, tg_user_id)
         return kind, owners.format_report(r), r.upload_id
@@ -93,7 +104,9 @@ async def _load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int
         "Fayl turi aniqlanmadi. Kutilgan sarlavhalar:\n"
         "• Savdo: Филиал, Категория, Товар ИД, Сана, Сони, Жами(Кирим нархи), Жами(Чиқим нархи)\n"
         "• Tovar spravochnigi: Категория, Товар Ид, Товар номи, Бренд + xususiyat ustunlari (Turi, Balandlik (sm), Rang…)\n"
-        "• Filial spravochnigi: Территория, Филиал, Кластер\n"
+        "• Filial spravochnigi: Территория, Филиал, Кластер (+ Омбор)\n"
+        "• Filial qoldig'i: Filial, Tovar Id, Qoldiq (sana — fayl nomida: …_17.10.2026.xlsx)\n"
+        "• Ombor qoldig'i: ID, Омбор, Мижоз учун қолдиқ (sana — fayl nomida)\n"
         "• Qo'shimcha daromad: Категория, Бренд, Қўшимча даромад %\n"
         "• Mas'ullar ro'yxati: Группа, Категория, Жавобгар КМ\n"
         "• Savdo rejasi: Гурух, Категория, январь … декабрь (sarlavha ustida yil)")
