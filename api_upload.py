@@ -130,6 +130,9 @@ async def _load(pool, job: dict) -> None:
                                "miniapp", job["file_name"])
         if kind in ("sales", "stock_branch", "stock_wh", "branches", "products"):
             await prompt_new(pool)       # yangi filial / tanilmagan ombor bo'limi — adminlarga tugmali so'rov
+        if kind in ("stock_branch", "stock_wh"):
+            from stock_notify import schedule_summary
+            schedule_summary(pool)
         if kind == "sales":
             async with pool.acquire() as con:
                 rep = await report_of(con, upload_id)
@@ -267,8 +270,9 @@ async def uploads_history(request: Request, limit: int = 30, user: User = Depend
     rows = await request.app.state.pool.fetch(
         """SELECT id, kind, file_name, tg_user_id, status, rows_total, rows_loaded, started_at, finished_at,
                   report->'dates' AS dates, report->>'text' AS text, report->>'error' AS error,
-                  COALESCE(jsonb_array_length(report->'unknown_skus'), 0)
-                  + COALESCE(jsonb_array_length(report->'unknown_branches'), 0) AS missing
+                  CASE WHEN jsonb_typeof(report->'unknown_skus') = 'array' THEN jsonb_array_length(report->'unknown_skus') ELSE 0 END
+                  + CASE WHEN jsonb_typeof(report->'unknown_branches') = 'array' THEN jsonb_array_length(report->'unknown_branches') ELSE 0 END
+                  AS missing
            FROM uploads ORDER BY id DESC LIMIT $1""", min(max(limit, 1), 100))
     out = []
     for r in rows:

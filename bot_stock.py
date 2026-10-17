@@ -322,3 +322,109 @@ async def wa_cb(c: CallbackQuery, pool: asyncpg.Pool) -> None:
         + (f"\n📦 Kutayotgan qoldiq ulandi: {st['stock_rows']} qator · {_n(st['stock_qty'])} dona"
            if st["stock_rows"] else ""))
     await c.answer("Saqlandi")
+
+
+# ---------------------------------------------------------------------------
+# /qoldiq <model yoki ID> — tovar qayerda qancha bor
+async def sku_card(pool: asyncpg.Pool, pid: int) -> str:
+    async with pool.acquire() as con:
+        p = await con.fetchrow("SELECT p.product_id, p.name, p.brand, c.name cat FROM products p "
+                               "JOIN categories c ON c.id = p.category_id WHERE p.product_id = $1", pid)
+        if p is None:
+            return "Tovar topilmadi."
+        db = await con.fetchval("SELECT max(snap_date) FROM stock_branch")
+        dw = await con.fetchval("SELECT max(snap_date) FROM stock_wh")
+        end = await con.fetchval("SELECT max(sale_date) FROM sales_fact") or db or dw
+        br = await con.fetch(
+            """WITH st AS (SELECT branch_id, qty FROM stock_branch WHERE snap_date = $2 AND product_id = $1),
+                    sl AS (SELECT branch_id, sum(qty) q FROM sales_fact WHERE product_id = $1
+                           AND sale_date BETWEEN $3::date - 29 AND $3 GROUP BY 1),
+                    cov AS (SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = $2)
+               SELECT b.name, COALESCE(st.qty, 0)::float8 sq, COALESCE(sl.q, 0)::float8 q,
+                      (b.id IN (SELECT branch_id FROM cov)) cov
+               FROM branches b LEFT JOIN st ON st.branch_id = b.id LEFT JOIN sl ON sl.branch_id = b.id
+               WHERE st.qty IS NOT NULL OR sl.q IS NOT NULL""", pid, db, end) if end else []
+        wh = await con.fetch("SELECT w.name, sum(s.qty)::float8 q FROM stock_wh s JOIN warehouses w ON w.id = s.warehouse_id "
+                             "WHERE s.snap_date = $2 AND s.product_id = $1 AND s.qty > 0 GROUP BY 1 ORDER BY 2 DESC",
+                             pid, dw) if dw else []
+    bq = sum(r["sq"] for r in br)
+    q30 = sum(r["q"] for r in br)
+    nb = sum(1 for r in br if r["sq"] > 0)
+    wq = sum(r["q"] for r in wh)
+    days = f" · {_n(bq / (q30 / 30))} kunga" if q30 > 0 else ""
+    out = [f"<b>{esc(p['name'])}</b>", f"{esc(p['cat'])} · {esc(p['brand'])} · ID <code>{p['product_id']}</code>"]
+    if db:
+        out.append(f"Filiallarda: <b>{_n(bq)}</b> dona · {nb} filial{days}")
+    if dw:
+        out.append(f"Omborlarda: <b>{_n(wq)}</b>" + (" (" + ", ".join(f"{esc(r['name'].replace(' омбори', ''))} {_n(r['q'])}"
+                                                                       for r in wh[:5]) + ")" if wh else ""))
+    gone = [r["name"] for r in sorted(br, key=lambda r: -r["q"]) if r["cov"] and r["sq"] <= 0 and r["q"] > 0]
+    if gone:
+        out.append("Tugagan: " + ", ".join(esc(x.replace(" filiali", "")) for x in gone[:5])
+                   + (f" … +{len(gone) - 5}" if len(gone) > 5 else ""))
+    most = sorted((r for r in br if r["sq"] > 0), key=lambda r: -r["sq"])[:4]
+    if most:
+        out.append("Eng ko'p: " + ", ".join(f"{esc(r['name'].replace(' filiali', ''))} — {_n(r['sq'])}" for r in most))
+    if not db and not dw:
+        out.append("Qoldiq hali yuklanmagan.")
+    st = []
+    if db:
+        st.append(f"filial {db.strftime('%d.%m')}")
+    if dw:
+        st.append(f"ombor {dw.strftime('%d.%m')}")
+    out.append(f"<i>{' · '.join(st)} holati · savdo 30 kun: {_n(q30)} dona · {_n(q30 / 30, 1)} dona/kun</i>")
+    return "\n".join(out)
+
+
+@router.message(Command("qoldiq"))
+async def qoldiq_cmd(m: Message, pool: asyncpg.Pool) -> None:
+    if not (await get_access(pool, m.from_user.id)).can_view:
+        return
+    q = (m.text or "").split(maxsplit=1)[1:] or [""]
+    q = q[0].strip()
+    if not q:
+        await m.answer("Masalan: <code>/qoldiq ART-12</code>, <code>/qoldiq inverter 12</code> yoki <code>/qoldiq 457268</code> (Tovar ID)")
+        return
+    if q.isdigit():
+        rows = await pool.fetch("SELECT product_id, name FROM products WHERE product_id = $1", int(q))
+    else:
+        words = [w for w in q.split() if w][:6]
+        rows = await pool.fetch(
+            """SELECT p.product_id, p.name FROM products p
+               LEFT JOIN (SELECT product_id, sum(qty) q FROM sales_fact
+                          WHERE sale_date > (SELECT max(sale_date) FROM sales_fact) - 30 GROUP BY 1) s USING (product_id)
+               WHERE p.name ILIKE ALL ($1::text[])
+               ORDER BY s.q DESC NULLS LAST, p.name LIMIT 9""", [f"%{w}%" for w in words])
+    if not rows:
+        await m.answer(f"«{esc(q)}» bo'yicha tovar topilmadi.")
+        return
+    if len(rows) == 1:
+        await m.answer(await sku_card(pool, rows[0]["product_id"]))
+        return
+    kb = _kb([[Btn(text=r["name"][:60], callback_data=f"qs:{r['product_id']}")] for r in rows[:8]])
+    more = " (birinchi 8 tasi — aniqroq yozing)" if len(rows) > 8 else ""
+    await m.answer(f"{len(rows) if len(rows) <= 8 else '8+'} ta topildi{more} — tanlang:", reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("qs:"))
+async def qoldiq_pick(c: CallbackQuery, pool: asyncpg.Pool) -> None:
+    if not (await get_access(pool, c.from_user.id)).can_view:
+        await c.answer("Ruxsat yo'q", show_alert=True)
+        return
+    await c.message.answer(await sku_card(pool, int(c.data.split(":")[1])))
+    await c.answer()
+
+
+@router.callback_query(F.data == "stk:xl")
+async def stock_excel_cb(c: CallbackQuery, pool: asyncpg.Pool, bot: Bot) -> None:
+    if not (await get_access(pool, c.from_user.id)).can_view:
+        await c.answer("Ruxsat yo'q", show_alert=True)
+        return
+    await c.answer("Tayyorlanmoqda…")
+    from stock_notify import send_excel
+    try:
+        if not await send_excel(pool, bot, c.from_user.id):
+            await c.message.answer("Qoldiq hali yuklanmagan.")
+    except Exception:  # noqa: BLE001
+        log.exception("Qoldiq Excel'i yuborilmadi")
+        await c.message.answer("❌ Excel'ni tayyorlab bo'lmadi.")

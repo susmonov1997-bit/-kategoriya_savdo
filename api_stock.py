@@ -20,18 +20,24 @@ Endpointlar (Filters + qo'shimcha maydonlar):
 from __future__ import annotations
 
 import json
+import math
 from datetime import date, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import Field
 
-import api_main as M
 from api_auth import User, current_user
 from api_queries import _attr_cols
 from api_schemas import Filters
 
 router = APIRouter(prefix="/api/stock")
+
+
+def _M():
+    """api_main — kech import (aylanma importdan qochish: bot api_stock ni api_main'dan oldin ham import qiladi)."""
+    import api_main
+    return api_main
 
 WINDOW = 30            # kunlik o'rtacha savdo oynasi
 LV_DAYS = (3, 7, 15)   # daraja chegaralari (kun)
@@ -123,7 +129,7 @@ pd0 AS (
 
 
 async def _ctx(con, f: Filters, user: User):
-    cats, attrs, _ = await M.scope_ctx(con, f, user)
+    cats, attrs, _ = await _M().scope_ctx(con, f, user)
     return cats, attrs
 
 
@@ -191,38 +197,43 @@ def _level(days: float | None, prev: float | None) -> int | None:
     return None
 
 
+async def base_data(con, f: Filters, cats: list[int], attrs: dict) -> dict:
+    """Joriy va oldingi qoldiq bo'yicha asosiy jadvallar (API va bot uchun umumiy)."""
+    sn = await snapshots(con, f.date_to)
+    ls = sn["sales_to"]
+    out = {"snap": {k: (v.isoformat() if v else None) for k, v in sn.items()}, "b": [], "w": [], "pb": {}, "pw": {},
+           "rate": 0.0}
+    out["meta"] = {
+        "branches": {r["id"]: dict(r) for r in await con.fetch(
+            """SELECT b.id, b.name, b.region_id, b.cluster_id, b.warehouse_id, rg.name region
+               FROM branches b JOIN regions rg ON rg.id = b.region_id""")},
+        "wh": {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM warehouses")},
+        "regions": {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM regions")},
+        "cats": {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM categories WHERE id = ANY($1::int[])", cats)},
+    }
+    if sn["b"]:
+        out["b"] = [tuple(r) for r in await _branch_rows(con, f, cats, attrs, sn["b"], _end(sn["b"], ls))]
+        if sn["pb"]:
+            out["pb"] = {(r[0], r[1], r[2]): _days(r[3], r[5])
+                         for r in await _branch_rows(con, f, cats, attrs, sn["pb"], _end(sn["pb"], ls))}
+    if sn["w"]:
+        out["w"] = [tuple(r) for r in await _wh_rows(con, f, cats, attrs, sn["w"], _end(sn["w"], ls))]
+        if sn["pw"]:
+            out["pw"] = {(r[0], r[1], r[2]): _days(r[3], r[5])
+                         for r in await _wh_rows(con, f, cats, attrs, sn["pw"], _end(sn["pw"], ls))}
+    if sn["w"] or sn["b"]:
+        out["rate"] = float(await con.fetchval(
+            "SELECT rate FROM fx_periods WHERE $1 >= valid_from AND $1 < valid_to", sn["w"] or sn["b"]) or 0)
+    return out
+
+
 async def _base(request: Request, user: User, f: Filters) -> dict:
-    """Joriy va oldingi qoldiq bo'yicha asosiy jadvallar (keshlanadi)."""
+    """base_data — foydalanuvchi doirasida, keshlanadi."""
     async def run():
-        pool = request.app.state.pool
-        async with pool.acquire() as con:
+        async with request.app.state.pool.acquire() as con:
             cats, attrs = await _ctx(con, f, user)
-            sn = await snapshots(con, f.date_to)
-            ls = sn["sales_to"]
-            out = {"snap": {k: (v.isoformat() if v else None) for k, v in sn.items()}, "b": [], "w": [], "pb": {}, "pw": {}}
-            meta = {
-                "branches": {r["id"]: dict(r) for r in await con.fetch(
-                    """SELECT b.id, b.name, b.region_id, b.cluster_id, b.warehouse_id, rg.name region
-                       FROM branches b JOIN regions rg ON rg.id = b.region_id""")},
-                "wh": {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM warehouses")},
-                "regions": {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM regions")},
-                "cats": {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM categories WHERE id = ANY($1::int[])", cats)},
-            }
-            out["meta"] = meta
-            if sn["b"]:
-                out["b"] = [tuple(r) for r in await _branch_rows(con, f, cats, attrs, sn["b"], _end(sn["b"], ls))]
-                if sn["pb"]:
-                    out["pb"] = {(r[0], r[1], r[2]): _days(r[3], r[5])
-                                 for r in await _branch_rows(con, f, cats, attrs, sn["pb"], _end(sn["pb"], ls))}
-            if sn["w"]:
-                out["w"] = [tuple(r) for r in await _wh_rows(con, f, cats, attrs, sn["w"], _end(sn["w"], ls))]
-                if sn["pw"]:
-                    out["pw"] = {(r[0], r[1], r[2]): _days(r[3], r[5])
-                                 for r in await _wh_rows(con, f, cats, attrs, sn["pw"], _end(sn["pw"], ls))}
-                out["rate"] = float(await con.fetchval(
-                    "SELECT rate FROM fx_periods WHERE $1 >= valid_from AND $1 < valid_to", sn["w"]) or 0)
-            return out
-    return await M.cached(request, user, "stock_base", f.model_dump(mode="json", include=set(Filters.model_fields)), run)
+            return await base_data(con, f, cats, attrs)
+    return await _M().cached(request, user, "stock_base", f.model_dump(mode="json", include=set(Filters.model_fields)), run)
 
 
 def _signals(base: dict, loc: str) -> list[dict]:
@@ -406,7 +417,8 @@ async def overview(req: StockReq, request: Request, user: User = Depends(current
                            "branches": len(b_["br"]), "oos": b_["oos"],
                            "regions": sorted({meta["regions"].get(br[b]["region_id"]) for b in b_["br"] if b in br})})
     q_all = tb["q"]
-    return {"snap": base["snap"], "rate": rate, "counts": counts,
+    lsum = (await _lists(request, user, req)).get("summary")
+    return {"snap": base["snap"], "rate": rate, "counts": counts, "lists": lsum,
             "total": {"br_stock": tb["sq"], "br_value": tb["sv"], "wh_stock": tw["sq"], "wh_value": tw["sv"] * rate,
                       "days": _r(_days(tb["sq"] + tw["sq"], q_all)), "br_days": _r(_days(tb["sq"], q_all)),
                       "wh_days": _r(_days(tw["sq"], q_all)), "oos": tb["oos"], "sales_day": tb["a"] / WINDOW},
@@ -535,7 +547,7 @@ SELECT {stock_sql}::float8 sq,
                               "risk": round(tot["a"] / WINDOW), "oos": tot["oos"]},
                     "history": hist, "items": items[:60]}
     payload = req.model_dump(mode="json", include=set(Filters.model_fields) | {"loc_type", "loc_id", "brand", "map_category"})
-    return await M.cached(request, user, "stock_detail", payload, run)
+    return await _M().cached(request, user, "stock_detail", payload, run)
 
 
 # ---------------------------------------------------------------------------
@@ -597,4 +609,286 @@ FROM agg {'LEFT JOIN wst ON wst.k = agg.k' if not loc_dim else ''}""", *s.params
                                  else 3 if d is not None and d > 90 else 2 if d is not None and d < LV_DAYS[2] else 4}
             return {"snap": {k: (v.isoformat() if v else None) for k, v in sn.items()}, "items": items}
     payload = req.model_dump(mode="json", include=set(Filters.model_fields) | {"dim"})
-    return await M.cached(request, user, "stock_by", payload, run)
+    return await _M().cached(request, user, "stock_by", payload, run)
+
+
+# ---------------------------------------------------------------------------
+# Ro'yxatlar: 🚚 ombordan yuborish · 📈 ortiqcha · 💤 harakatsiz
+#   Me'yor (yuborish uchun) = 2 oylik savdo = 2 × 30 kunlik savdo (Sanjarbek tanlovi, «savdo × 2»).
+#   Yuborish: filialda < 7 kunga yetadigan SKU, uning omborida bor → me'yor − bor (ombordagidan oshmaydi;
+#   bir omborning qoldig'i eng kam qolgan filiallarga birinchi taqsimlanadi).
+#   Ortiqcha / harakatsiz — «zona» (ombor + uning filiallari) × SKU: > 90 kunga yetadi / 60 kunda sotuv yo'q.
+NORM_MONTHS = 2
+SEND_DAYS = 7
+OVER_DAYS = 90
+IDLE_DAYS = 60
+
+
+async def _sku_level(con, f: Filters, cats: list[int], attrs: dict, sn: dict):
+    """Filial × SKU (qoldiq, tannarx, 30/60 kunlik savdo) va ombor × SKU qoldig'i; SKU ma'lumotlari."""
+    ls = sn["sales_to"]
+    br_rows, wh_rows = [], []
+    s = _SQL(f, cats, attrs)
+    w = s.ctes()
+    if sn["b"]:
+        D, E = s.p(sn["b"]), s.p(_end(sn["b"], ls))
+        br_rows = await con.fetch(f"""
+WITH {w},
+cov AS (SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = {D}),
+st AS (SELECT s.branch_id, s.product_id, s.qty, s.cost_uzs FROM stock_branch s JOIN bb USING (branch_id)
+       JOIN pd USING (product_id) WHERE s.snap_date = {D}),
+sl AS (SELECT e.branch_id, e.product_id,
+              sum(e.qty) FILTER (WHERE e.sale_date > {E}::date - {WINDOW}) q30,
+              sum(e.amount) FILTER (WHERE e.sale_date > {E}::date - {WINDOW}) a30, sum(e.qty) q60
+       FROM sales_fact e JOIN bb USING (branch_id) JOIN pd USING (product_id) JOIN cov USING (branch_id)
+       WHERE e.sale_date BETWEEN {E}::date - {IDLE_DAYS - 1} AND {E} GROUP BY 1, 2)
+SELECT branch_id, product_id, COALESCE(st.qty, 0)::float8 sq, COALESCE(st.cost_uzs, 0)::float8 sv,
+       COALESCE(sl.q30, 0)::float8 q30, COALESCE(sl.a30, 0)::float8 a30, COALESCE(sl.q60, 0)::float8 q60
+FROM st FULL JOIN sl USING (branch_id, product_id)""", *s.params)
+    if sn["w"]:
+        s2 = _SQL(f, cats, attrs)
+        w2 = s2.ctes()
+        DW = s2.p(sn["w"])
+        wh_rows = await con.fetch(f"""
+WITH {w2}
+SELECT s.warehouse_id, s.product_id, s.qty::float8 wq, COALESCE(s.value_usd, 0)::float8 wv
+FROM stock_wh s JOIN pd USING (product_id)
+WHERE s.snap_date = {DW} AND s.qty > 0 AND s.warehouse_id IN (SELECT warehouse_id FROM bb)""", *s2.params)
+    pids = list({r["product_id"] for r in br_rows} | {r["product_id"] for r in wh_rows})
+    prod = {r["product_id"]: dict(r) for r in await con.fetch(
+        """SELECT p.product_id, p.name, p.brand, c.name cat FROM products p JOIN categories c ON c.id = p.category_id
+           WHERE p.product_id = ANY($1::bigint[])""", pids)}
+    return br_rows, wh_rows, prod
+
+
+def build_lists(br_rows, wh_rows, prod: dict, meta: dict, rate: float) -> dict:
+    br, whn = meta["branches"], meta["wh"]
+    avail: dict[tuple, float] = {(r["warehouse_id"], r["product_id"]): r["wq"] for r in wh_rows}
+    # --- ombordan yuborish
+    cand = []
+    for r in br_rows:
+        q30, sq = r["q30"], r["sq"]
+        if q30 <= 0:
+            continue
+        days = sq / (q30 / WINDOW)
+        if days >= SEND_DAYS:
+            continue
+        bi = br.get(r["branch_id"], {})
+        wid = bi.get("warehouse_id")
+        if not wid or avail.get((wid, r["product_id"]), 0) <= 0:
+            continue
+        norm = math.ceil(NORM_MONTHS * q30)
+        need = norm - sq
+        if need >= 1:
+            cand.append((days, -need, r, wid, norm, need))
+    cand.sort(key=lambda x: (x[0], x[1]))
+    groups: dict[int, dict] = {}
+    left = dict(avail)
+    for days, _, r, wid, norm, need in cand:
+        have = left.get((wid, r["product_id"]), 0)
+        send = int(min(need, have))
+        if send < 1:
+            continue
+        left[(wid, r["product_id"])] = have - send
+        p = prod.get(r["product_id"], {})
+        bi = br.get(r["branch_id"], {})
+        g = groups.setdefault(wid, {"id": wid, "name": whn.get(wid), "positions": 0, "qty": 0, "items": []})
+        g["positions"] += 1
+        g["qty"] += send
+        g["items"].append({"branch": bi.get("name"), "region": bi.get("region"), "pid": r["product_id"],
+                           "name": p.get("name"), "brand": p.get("brand"), "cat": p.get("cat"),
+                           "have": r["sq"], "norm": norm, "send": send, "wh": avail[(wid, r["product_id"])],
+                           "days": round(days, 1), "risk": round(r["a30"] / WINDOW)})
+    send_groups = sorted(groups.values(), key=lambda g: -g["qty"])
+    # --- zona (ombor + filiallari) × SKU
+    zone: dict[tuple, dict] = {}
+    for r in br_rows:
+        wid = br.get(r["branch_id"], {}).get("warehouse_id")
+        z = zone.setdefault((wid, r["product_id"]), {"bq": 0.0, "bv": 0.0, "q30": 0.0, "q60": 0.0, "wq": 0.0, "wv": 0.0, "top": []})
+        z["bq"] += r["sq"]
+        z["bv"] += r["sv"]
+        z["q30"] += r["q30"]
+        z["q60"] += r["q60"]
+        if r["sq"] > 0:
+            z["top"].append((r["sq"], br.get(r["branch_id"], {}).get("name")))
+    for r in wh_rows:
+        z = zone.setdefault((r["warehouse_id"], r["product_id"]), {"bq": 0.0, "bv": 0.0, "q30": 0.0, "q60": 0.0, "wq": 0.0, "wv": 0.0, "top": []})
+        z["wq"] += r["wq"]
+        z["wv"] += r["wv"] * rate
+    over, idle = [], []
+    for (wid, pid), z in zone.items():
+        stock = z["bq"] + z["wq"]
+        if stock <= 0:
+            continue
+        p = prod.get(pid, {})
+        top = sorted(z["top"], key=lambda x: -x[0])
+        item = {"pid": pid, "name": p.get("name"), "brand": p.get("brand"), "cat": p.get("cat"),
+                "zone": whn.get(wid) if wid else "ombori ko'rsatilmagan", "wid": wid,
+                "stock": stock, "br_stock": z["bq"], "wh_stock": z["wq"], "branches": len(top),
+                "value": z["bv"] + z["wv"], "top": [{"name": n, "qty": q} for q, n in top[:4]]}
+        if z["q60"] <= 0:
+            idle.append(item)
+        elif z["q30"] > 0:
+            d = stock / (z["q30"] / WINDOW)
+            if d > OVER_DAYS:
+                over.append({**item, "days": round(d)})
+    over.sort(key=lambda x: -x["value"])
+    idle.sort(key=lambda x: -x["value"])
+    return {
+        "send": send_groups, "over": over, "idle": idle,
+        "summary": {"send": {"positions": sum(g["positions"] for g in send_groups), "qty": sum(g["qty"] for g in send_groups),
+                             "warehouses": len(send_groups)},
+                    "over": {"positions": len(over), "value": sum(x["value"] for x in over)},
+                    "idle": {"positions": len(idle), "value": sum(x["value"] for x in idle)}},
+        "norm": f"{NORM_MONTHS} oylik savdo", "send_days": SEND_DAYS, "over_days": OVER_DAYS, "idle_days": IDLE_DAYS,
+    }
+
+
+async def lists_data(con, f: Filters, cats: list[int], attrs: dict) -> dict:
+    sn = await snapshots(con, f.date_to)
+    if not sn["b"] and not sn["w"]:
+        return {"snap": None}
+    meta = {
+        "branches": {r["id"]: dict(r) for r in await con.fetch(
+            """SELECT b.id, b.name, b.warehouse_id, rg.name region FROM branches b JOIN regions rg ON rg.id = b.region_id""")},
+        "wh": {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM warehouses")},
+    }
+    rate = float(await con.fetchval("SELECT rate FROM fx_periods WHERE $1 >= valid_from AND $1 < valid_to",
+                                    sn["w"] or sn["b"]) or 0)
+    br_rows, wh_rows, prod = await _sku_level(con, f, cats, attrs, sn)
+    out = build_lists(br_rows, wh_rows, prod, meta, rate)
+    out["snap"] = {k: (v.isoformat() if v else None) for k, v in sn.items()}
+    out["rate"] = rate
+    return out
+
+
+async def _lists(request: Request, user: User, f: Filters) -> dict:
+    async def run():
+        async with request.app.state.pool.acquire() as con:
+            cats, attrs = await _ctx(con, f, user)
+            return await lists_data(con, f, cats, attrs)
+    return await _M().cached(request, user, "stock_lists", f.model_dump(mode="json", include=set(Filters.model_fields)), run)
+
+
+class ListReq(StockReq):
+    kind: Literal["send", "over", "idle"] = "send"
+
+
+@router.post("/lists")
+async def stock_lists(req: ListReq, request: Request, user: User = Depends(current_user)):
+    d = await _lists(request, user, req)
+    if not d.get("snap"):
+        return {"snap": None, "summary": None, "items": [], "groups": [], "total": 0}
+    base = {k: d[k] for k in ("snap", "summary", "norm", "send_days", "over_days", "idle_days", "rate")}
+    if req.kind == "send":
+        return {**base, "groups": [{**g, "items": g["items"][:req.limit]} for g in d["send"]], "total": len(d["send"])}
+    items = d[req.kind]
+    return {**base, "items": items[req.offset:req.offset + req.limit], "total": len(items)}
+
+
+# ---------------------------------------------------------------------------
+# Excel: signallar, SKU'lar (filial × SKU, < 7 kun), ombordan yuborish, ortiqcha, harakatsiz → botga
+LV_NAMES = ["Tugadi", "Tugayapti", "Kamaymoqda"]
+
+
+def build_xlsx(base: dict, lists: dict, sku_rows: list, prod: dict) -> bytes:
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+    wb = Workbook()
+    head_fill, head_font = PatternFill("solid", fgColor="1F6E43"), Font(bold=True, color="FFFFFF")
+    fills = [PatternFill("solid", fgColor=c) for c in ("FCE8E8", "FFE7D6", "FFF3D6")]
+
+    def sheet(ws, headers, rows, widths, lv_col=None):
+        ws.append(headers)
+        for c in ws[1]:
+            c.fill, c.font, c.alignment = head_fill, head_font, Alignment(vertical="center", wrap_text=True)
+        for r in rows:
+            ws.append(r)
+            if lv_col is not None and isinstance(r[lv_col], str) and r[lv_col] in LV_NAMES:
+                for c in ws[ws.max_row]:
+                    c.fill = fills[LV_NAMES.index(r[lv_col])]
+        for i, w_ in enumerate(widths, 1):
+            ws.column_dimensions[get_column_letter(i)].width = w_
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+
+    sig = sorted(_signals(base, "all"), key=lambda x: (x["level"], -x["risk"]))
+    ws = wb.active
+    ws.title = "Signallar"
+    sheet(ws, ["Daraja", "Joy turi", "Joy", "Hudud", "Kategoriya", "Brend", "Qoldiq, dona", "Kunga yetadi",
+               "O'tgan hafta, kun", "Filiallarda, dona", "OOS (filial×SKU)", "Savdo, dona/kun", "Xavf, so'm/kun", "Yangi"],
+          [[LV_NAMES[x["level"]], "Ombor" if x["t"] == "w" else "Filial", x["name"], x.get("sub") or "", x["cat"], x["brand"],
+            round(x["stock"]), _r(x["days"]), _r(x["prev"]), round(x["br_stock"]) if x["t"] == "w" else None, x["oos"],
+            _r(x["sales_day"], 2), round(x["risk"]), "ha" if x["new"] else ""] for x in sig],
+          [12, 9, 28, 18, 18, 14, 11, 11, 12, 12, 12, 12, 14, 7], lv_col=0)
+    br = base["meta"]["branches"]
+    rows = []
+    for r in sku_rows:
+        if r["q30"] <= 0:
+            continue
+        d = r["sq"] / (r["q30"] / WINDOW)
+        if d >= SEND_DAYS:
+            continue
+        p, bi = prod.get(r["product_id"], {}), br.get(r["branch_id"], {})
+        rows.append([LV_NAMES[0] if d < LV_DAYS[0] else LV_NAMES[1], bi.get("name"), bi.get("region"),
+                     base["meta"]["wh"].get(bi.get("warehouse_id"), ""), p.get("cat"), p.get("brand"), r["product_id"],
+                     p.get("name"), round(r["sq"]), round(d, 1), round(r["q30"] / WINDOW, 2), round(r["a30"] / WINDOW)])
+    rows.sort(key=lambda x: (x[9], -x[11]))
+    sheet(wb.create_sheet("SKU'lar"), ["Daraja", "Filial", "Hudud", "Ombor", "Kategoriya", "Brend", "Tovar ID", "Tovar",
+                                       "Qoldiq", "Kunga yetadi", "Savdo, dona/kun", "Xavf, so'm/kun"],
+          rows, [11, 26, 18, 18, 16, 12, 10, 40, 8, 10, 12, 13], lv_col=0)
+    sheet(wb.create_sheet("Ombordan yuborish"), ["Ombor", "Filial", "Hudud", "Kategoriya", "Brend", "Tovar ID", "Tovar",
+                                                 "Filialda", f"Me'yor ({lists['norm']})", "Yuborish", "Omborda", "Kunga yetadi"],
+          [[g["name"], x["branch"], x["region"], x["cat"], x["brand"], x["pid"], x["name"], round(x["have"]), x["norm"],
+            x["send"], round(x["wh"]), x["days"]] for g in lists["send"] for x in g["items"]],
+          [18, 26, 18, 16, 12, 10, 40, 9, 14, 10, 10, 11])
+    for key, title, extra in (("over", "Ortiqcha", "Kunga yetadi"), ("idle", "Harakatsiz", None)):
+        hdr = ["Zona (ombor + filiallari)", "Kategoriya", "Brend", "Tovar ID", "Tovar", "Jami qoldiq", "Filiallarda",
+               "Omborda", "Filiallar soni", "Qiymati, so'm", "Eng ko'p"] + ([extra] if extra else [])
+        sheet(wb.create_sheet(title), hdr,
+              [[x["zone"], x["cat"], x["brand"], x["pid"], x["name"], round(x["stock"]), round(x["br_stock"]), round(x["wh_stock"]),
+                x["branches"], round(x["value"]), ", ".join(f"{t['name']} — {round(t['qty'])}" for t in x["top"])]
+               + ([x["days"]] if extra else []) for x in lists[key]],
+              [22, 16, 12, 10, 40, 10, 10, 10, 10, 15, 40] + ([11] if extra else []))
+    import io
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+async def export_bytes(con, f: Filters, cats: list[int], attrs: dict) -> tuple[bytes, str] | None:
+    base = await base_data(con, f, cats, attrs)
+    sn = await snapshots(con, f.date_to)
+    if not sn["b"] and not sn["w"]:
+        return None
+    br_rows, wh_rows, prod = await _sku_level(con, f, cats, attrs, sn)
+    meta = {"branches": base["meta"]["branches"], "wh": base["meta"]["wh"]}
+    lists = build_lists(br_rows, wh_rows, prod, meta, base["rate"])
+    d = sn["b"] or sn["w"]
+    return build_xlsx(base, lists, br_rows, prod), f"Qoldiq_signallari_{d.strftime('%d.%m.%Y')}.xlsx"
+
+
+@router.post("/export")
+async def stock_export(req: StockReq, request: Request, user: User = Depends(current_user)):
+    """Excel faylni botga (foydalanuvchining chatiga) yuboradi."""
+    import config
+    from aiogram import Bot
+    from aiogram.types import BufferedInputFile
+    async with request.app.state.pool.acquire() as con:
+        cats, attrs = await _ctx(con, req, user)
+        res = await export_bytes(con, req, cats, attrs)
+    if res is None:
+        raise HTTPException(404, "Qoldiq hali yuklanmagan")
+    data, fname = res
+    if not config.BOT_TOKEN:
+        raise HTTPException(503, "Bot sozlanmagan")
+    bot = Bot(config.BOT_TOKEN)
+    try:
+        await bot.send_document(user.id, BufferedInputFile(data, filename=fname),
+                                caption="📦 Qoldiq: signallar, SKU'lar, ombordan yuborish, ortiqcha, harakatsiz")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(503, f"Botga yuborib bo'lmadi — botga /start bosilganini tekshiring ({e})")
+    finally:
+        await bot.session.close()
+    return {"ok": True}

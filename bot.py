@@ -25,6 +25,7 @@ from loaders_common import LoaderError
 from loaders_dispatch import load_any, load_any_ex
 import bot_stock
 from bot_stock import prompt_new
+from stock_notify import schedule_summary
 from notify import broadcast_upload, get_setting, is_muted, period_text, send_users_update, set_setting
 from export_missing import build_missing_xlsx, file_name as missing_file_name, has_missing, missing_caption, report_of
 
@@ -69,6 +70,7 @@ async def start(m: Message, pool: asyncpg.Pool) -> None:
             text += WELCOME_UPLOAD
         text += "\n\n/status — bazadagi ma'lumotlar holati\n/attrs — kategoriyalar va xususiyatlar"
         text += "\n/kurs — dollar kursi (front marja uchun)"
+        text += "\n/qoldiq ART-12 — tovar qayerda qancha bor"
         if acc.is_admin:
             text += "\n/users — foydalanuvchilar va kirish so'rovlari"
             text += "\n/xabar — yuklashdan keyingi xabarlarni o'chirish/yoqish"
@@ -423,6 +425,8 @@ async def on_document(m: Message, bot: Bot, pool: asyncpg.Pool) -> None:
         if kind in ("sales", "stock_branch", "stock_wh", "branches", "products"):
             # spravochnikda yo'q filial / tanilmagan ombor bo'limi — adminlarga tugmali so'rov
             asyncio.create_task(prompt_new(pool, bot))
+        if kind in ("stock_branch", "stock_wh"):
+            schedule_summary(pool)       # qoldiq xulosasi — oxirgi qoldiq yuklashidan ~2,5 daqiqa keyin bitta
     if kind == "sales" and upload_id:
         # spravochnikda yo'q SKU/filiallar — to'ldirish uchun tayyor Excel shablon
         try:
