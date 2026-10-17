@@ -1501,7 +1501,7 @@ async function init() {
 const QS = {view: 'sig', level: null, loc: 'all', limit: 30, rows: 'w', wid: null, mapCat: null,
             detail: null, sig: null, map: null, ov: null, seq: 0, scrollY: 0};
 const STK = {list: null, top: null};
-const LV = [{n: 'Tugadi', s: '< 3 kun', i: '🔴'}, {n: 'Tugayapti', s: '< 7 kun', i: '🟠'}, {n: 'Kamaymoqda', s: 'tez tushyapti', i: '🟡'}];
+const LV = [{n: 'Tugadi', s: '< 3 kun', i: '🔴'}, {n: 'Tugayapti', s: '< 7 kun', i: '🟠'}, {n: 'Kamaymoqda', s: 'savdo tezlashgan', i: '🟡'}];
 const STOCK_DIMS = {region: 1, cluster: 1, branch: 1, brand: 1, sku: 1, category: 1};
 
 const dTxtK = d => (d == null ? 'sotilmayapti' : `${d >= 100 ? nf0.format(d) : nf0.format(Math.round(d))} kunga`);
@@ -1581,7 +1581,7 @@ function snapNote(s) {
   const parts = [];
   if (s.b) parts.push(`filial ${dm(s.b)}`);
   if (s.w) parts.push(`ombor ${dm(s.w)}`);
-  return `qoldiq: ${parts.join(' · ')} holati · savdo — 30 kunlik o'rtacha`;
+  return `qoldiq: ${parts.join(' · ')} holati · savdo — 30 va 7 kunlik sur'at`;
 }
 function noStock() {
   return `<div class="card"><div class="empty">Qoldiq hali yuklanmagan.<br>${META.can_upload
@@ -1613,7 +1613,8 @@ function sigCard(x) {
     lines.push(`omborda <b>${nf0.format(x.stock)}</b>`);
     lines.push(`filiallarda ${x.br_days == null ? nf0.format(x.br_stock) : dTxtK(x.br_days)}`);
   } else lines.push(`qoldiq <b>${nf0.format(x.stock)}</b> dona`);
-  if (x.prev != null && x.level === 2) lines.push(`o'tgan hafta ${nf0.format(Math.round(x.prev))} kun`);
+  if (x.accel && x.accel > 1) lines.push(`savdo ▲ ${nf0.format(Math.round((x.accel - 1) * 100))}% (7 kun)`);
+  if (x.prev != null) lines.push(`o'tgan hafta ${nf0.format(Math.round(x.prev))} kun`);
   if (x.oos) lines.push(`${nf0.format(x.oos)} filial×SKU OOS`);
   return `<button class="al l${x.level}" data-t="${x.t}" data-id="${x.id}" data-c="${x.cat_id}" data-b="${esc(x.brand)}">
     <span class="p">${ic} <b>${esc(x.name)}</b>${x.sub ? ` · ${esc(x.sub)}` : ''} · ${esc(x.cat || '')}${x.new ? '<span class="nw2">yangi</span>' : ''}</span>
@@ -1633,7 +1634,7 @@ async function renderSignals(host, more) {
   const d = QS.sig;
   if (!d.snap || (!d.snap.b && !d.snap.w)) { host.innerHTML = noStock(); return; }
   const chips = [['all', 'Hammasi'], ['w', '🏬 Omborlar'], ['b', '🏪 Filiallar']];
-  host.innerHTML = `<div class="hint">${snapNote(d.snap)}${d.has_prev ? '' : " · «kamaymoqda» uchun kamida bir hafta oldingi qoldiq ham kerak"}</div>
+  host.innerHTML = `<div class="hint">${snapNote(d.snap)}</div>
     ${counters(d, QS.level)}
     <div class="qchips">${chips.map(([k, l]) => `<button data-loc="${k}" aria-pressed="${QS.loc === k}">${l}</button>`).join('')}</div>
     ${d.items.length ? d.items.map(sigCard).join('') : `<div class="card"><div class="empty">${QS.level == null ? "Yetishmovchilik signali yo'q 👍" : "Bu darajada signal yo'q"}</div></div>`}
@@ -1674,7 +1675,7 @@ async function renderMap(host) {
     ${QS.wid ? `<div class="bc2"><button class="tchip back" id="qWidBack">‹ Omborlar</button><span>${esc(d.wh_name || '')} filiallari</span></div>` : ''}
     ${d.rows.length && d.brands.length ? `<div class="card hmw"><table class="hm">${head}${rows}${tot}</table></div>` : `<div class="card"><div class="empty">Bu kategoriyada qoldiq yo'q</div></div>`}
     <div class="lg"><span><i class="h0"></i>&lt;3 kun</span><span><i class="h1"></i>3–7</span><span><i class="h2"></i>8–14</span><span><i class="h3"></i>me'yorda</span><span><i class="h5"></i>sotilmaydi</span></div>
-    <p class="foot">Katakda — necha kunga yetadi (qoldiq ÷ 30 kunlik o'rtacha savdo). Ombor qatorida — ombor qoldig'i ÷ u ta'minlaydigan filiallar savdosi. Ombor nomini bossangiz — filiallari; katakni bossangiz — SKU'lar.</p>`;
+    <p class="foot">Katakda — necha kunga yetadi: qoldiq ÷ kunlik savdo (30 kunlik va oxirgi 7 kunlik sur'atdan qaysi biri tez bo'lsa). Ombor qatorida — ombor qoldig'i ÷ u ta'minlaydigan filiallar savdosi. Ombor nomini bossangiz — filiallari; katakni bossangiz — SKU'lar.</p>`;
   host.querySelectorAll('[data-rows]').forEach(b => b.onclick = () => { QS.rows = b.dataset.rows; QS.wid = null; QS.map = null; renderMap(host); });
   const qc = $('qCat'); if (qc) qc.onchange = () => { QS.mapCat = +qc.value; QS.map = null; renderMap(host); };
   host.querySelectorAll('[data-wid]').forEach(b => b.onclick = () => { QS.rows = 'b'; QS.wid = +b.dataset.wid; QS.map = null; renderMap(host); });
@@ -1759,7 +1760,7 @@ async function renderDetail() {
         + gc('Filiallar', `${nf0.format(t.br_stock)} dona`, dTxtK(t.br_days))
         : gc('Qoldiq', `${nf0.format(t.br_stock)} dona`, prev ? `oldin ${nf0.format(prev.stock)}` : '')
           + gc('Omborida', `${nf0.format(t.wh_stock)} dona`, '')}
-        ${gc('Savdo', `${nf1.format(t.sales_day || 0)} dona/kun`, `≈ ${money(t.risk)}/kun`)}</div></div>
+        ${gc('Savdo', `${nf1.format(t.sales_day || 0)} dona/kun`, d.accel && Math.abs(d.accel - 1) >= 0.1 ? `7 kunda ${d.accel > 1 ? '▲' : '▼'} ${nf0.format(Math.abs(Math.round((d.accel - 1) * 100)))}% · ≈ ${money(t.risk)}/kun` : `≈ ${money(t.risk)}/kun`)}</div></div>
     <div class="sec"><h2>Qoldiq qanday kamaydi</h2><span class="hint">necha kunga yetadi</span></div>
     <div class="card">${histChart(d.history)}${start ? `<div class="hint">🟡 ${dm(start)} dan 15 kundan pastga tushgan</div>` : ''}</div>
     <div class="sec"><h2>SKU'lar</h2><span class="hint">${d.items.length} ta · kam qolgani tepada</span></div>

@@ -7,7 +7,9 @@ Asosiy qoida: qoldiq — holat. Filtr davrining oxirgi sanasidan oldingi (yoki o
 Yetishmovchilik darajasi (joy × kategoriya × brend):
   0 🔴 tugadi     — < 3 kunga (0 ham)
   1 🟠 tugayapti  — < 7 kunga
-  2 🟡 kamaymoqda — < 15 kunga va ~bir hafta oldingi qoldiqqa nisbatan ≥ 30% kamaygan
+  2 🟡 kamaymoqda — < 15 kunga va oxirgi 7 kunlik savdo 30 kunlik o'rtachadan ≥ 30% yuqori (savdo tezlashgan)
+«Necha kunga yetadi» (signal, xarita, tafsilot) — 30 kunlik va 7 kunlik sur'atdan qaysi biri kam bo'lsa.
+Oldingi qoldiq (~bir hafta oldin) faqat «yangi» belgisi va «o'tgan hafta» ko'rsatkichi uchun (bo'lmasa ham ishlaydi).
 Xavf (so'm/kun) = shu joy × kategoriya × brendning kunlik o'rtacha savdosi.
 
 Endpointlar (Filters + qo'shimcha maydonlar):
@@ -41,7 +43,8 @@ def _M():
 
 WINDOW = 30            # kunlik o'rtacha savdo oynasi
 LV_DAYS = (3, 7, 15)   # daraja chegaralari (kun)
-DROP = 0.7             # «kamaymoqda»: kunlar soni oldingi qoldiqning 70% idan kam
+ACCEL = 1.3            # «kamaymoqda»: oxirgi 7 kunlik savdo 30 kunlikdan ≥ 30% yuqori
+MIN_Q7 = 3             # 7 kunda kamida shuncha dona sotilgan bo'lsa — sur'at hisobga olinadi (tasodifiy sotuv emas)
 
 
 class StockReq(Filters):
@@ -145,14 +148,15 @@ WITH {w},
 cov AS (SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = {D}),
 st AS (SELECT s.branch_id, s.product_id, s.qty, s.cost_uzs FROM stock_branch s
        JOIN bb USING (branch_id) JOIN pd USING (product_id) WHERE s.snap_date = {D}),
-sl AS (SELECT e.branch_id, e.product_id, sum(e.qty) q, sum(e.amount) a FROM sales_fact e
+sl AS (SELECT e.branch_id, e.product_id, sum(e.qty) q, sum(e.amount) a,
+              sum(e.qty) FILTER (WHERE e.sale_date > {E}::date - 7) q7 FROM sales_fact e
        JOIN bb USING (branch_id) JOIN pd USING (product_id) JOIN cov USING (branch_id)
        WHERE e.sale_date BETWEEN {S} AND {E} GROUP BY 1, 2),
 j AS (SELECT branch_id, product_id, COALESCE(st.qty, 0) sq, COALESCE(st.cost_uzs, 0) sv,
-             COALESCE(sl.q, 0) q, COALESCE(sl.a, 0) a
+             COALESCE(sl.q, 0) q, COALESCE(sl.a, 0) a, COALESCE(sl.q7, 0) q7
       FROM st FULL JOIN sl USING (branch_id, product_id))
 SELECT j.branch_id, pd.category_id, pd.brand, sum(sq)::float8 sq, sum(sv)::float8 sv, sum(q)::float8 q, sum(a)::float8 a,
-       count(*) FILTER (WHERE sq <= 0 AND q > 0) oos
+       count(*) FILTER (WHERE sq <= 0 AND q > 0) oos, sum(q7)::float8 q7
 FROM j JOIN pd USING (product_id) GROUP BY 1, 2, 3""", *s.params)
 
 
@@ -167,14 +171,15 @@ wf AS (SELECT DISTINCT warehouse_id FROM bb WHERE warehouse_id IS NOT NULL
        AND warehouse_id IN (SELECT DISTINCT warehouse_id FROM stock_wh WHERE snap_date = {D})),
 st AS (SELECT s.warehouse_id, s.product_id, s.qty, s.value_usd FROM stock_wh s
        JOIN wf USING (warehouse_id) JOIN pd USING (product_id) WHERE s.snap_date = {D}),
-sl AS (SELECT bb.warehouse_id, e.product_id, sum(e.qty) q, sum(e.amount) a FROM sales_fact e
+sl AS (SELECT bb.warehouse_id, e.product_id, sum(e.qty) q, sum(e.amount) a,
+              sum(e.qty) FILTER (WHERE e.sale_date > {E}::date - 7) q7 FROM sales_fact e
        JOIN bb USING (branch_id) JOIN pd USING (product_id) JOIN wf ON wf.warehouse_id = bb.warehouse_id
        WHERE e.sale_date BETWEEN {S} AND {E} GROUP BY 1, 2),
 j AS (SELECT warehouse_id, product_id, COALESCE(st.qty, 0) sq, COALESCE(st.value_usd, 0) sv,
-             COALESCE(sl.q, 0) q, COALESCE(sl.a, 0) a
+             COALESCE(sl.q, 0) q, COALESCE(sl.a, 0) a, COALESCE(sl.q7, 0) q7
       FROM st FULL JOIN sl USING (warehouse_id, product_id))
 SELECT j.warehouse_id, pd.category_id, pd.brand, sum(sq)::float8 sq, sum(sv)::float8 sv, sum(q)::float8 q, sum(a)::float8 a,
-       count(*) FILTER (WHERE sq <= 0 AND q > 0) oos
+       count(*) FILTER (WHERE sq <= 0 AND q > 0) oos, sum(q7)::float8 q7
 FROM j JOIN pd USING (product_id) GROUP BY 1, 2, 3""", *s.params)
 
 
@@ -185,14 +190,30 @@ def _days(stock: float, q: float) -> float | None:
     return stock / (q / WINDOW)
 
 
-def _level(days: float | None, prev: float | None) -> int | None:
+def _days_eff(stock: float, q: float, q7: float) -> float | None:
+    """Necha kunga yetadi — 30 kunlik va 7 kunlik sur'atdan qaysi biri KAM bo'lsa (savdo tezlashsa — tezroq tugaydi)."""
+    d30 = _days(stock, q)
+    if q7 >= MIN_Q7:
+        d7 = stock / (q7 / 7)
+        return d7 if d30 is None else min(d30, d7)
+    return d30
+
+
+def _accel(q: float, q7: float) -> float | None:
+    """Oxirgi 7 kunlik kunlik savdo 30 kunlik o'rtachadan necha marta yuqori (1,3 = +30%). Kam savdoda — None."""
+    if q <= 0 or q7 < MIN_Q7:
+        return None
+    return (q7 / 7) / (q / WINDOW)
+
+
+def _level(days: float | None, accel: float | None) -> int | None:
     if days is None:
         return None
     if days < LV_DAYS[0]:
         return 0
     if days < LV_DAYS[1]:
         return 1
-    if days < LV_DAYS[2] and prev is not None and prev > 0 and days <= prev * DROP:
+    if days < LV_DAYS[2] and accel is not None and accel >= ACCEL:
         return 2
     return None
 
@@ -214,12 +235,12 @@ async def base_data(con, f: Filters, cats: list[int], attrs: dict) -> dict:
     if sn["b"]:
         out["b"] = [tuple(r) for r in await _branch_rows(con, f, cats, attrs, sn["b"], _end(sn["b"], ls))]
         if sn["pb"]:
-            out["pb"] = {(r[0], r[1], r[2]): _days(r[3], r[5])
+            out["pb"] = {(r[0], r[1], r[2]): _days_eff(r[3], r[5], r[8])
                          for r in await _branch_rows(con, f, cats, attrs, sn["pb"], _end(sn["pb"], ls))}
     if sn["w"]:
         out["w"] = [tuple(r) for r in await _wh_rows(con, f, cats, attrs, sn["w"], _end(sn["w"], ls))]
         if sn["pw"]:
-            out["pw"] = {(r[0], r[1], r[2]): _days(r[3], r[5])
+            out["pw"] = {(r[0], r[1], r[2]): _days_eff(r[3], r[5], r[8])
                          for r in await _wh_rows(con, f, cats, attrs, sn["pw"], _end(sn["pw"], ls))}
     if sn["w"] or sn["b"]:
         out["rate"] = float(await con.fetchval(
@@ -241,7 +262,7 @@ def _signals(base: dict, loc: str) -> list[dict]:
     br = meta["branches"]
     # filiallar OOS va qoldig'ini ombor × kategoriya × brendga yig'ish
     wb: dict[tuple, list] = {}
-    for b, c, brand, sq, sv, q, a, oos in base["b"]:
+    for b, c, brand, sq, sv, q, a, oos, q7 in base["b"]:
         wid = br.get(b, {}).get("warehouse_id")
         if wid:
             x = wb.setdefault((wid, c, brand), [0.0, 0.0, 0])
@@ -249,27 +270,30 @@ def _signals(base: dict, loc: str) -> list[dict]:
             x[1] += q
             x[2] += oos
     if loc in ("all", "b"):
-        for b, c, brand, sq, sv, q, a, oos in base["b"]:
-            d = _days(sq, q)
+        for b, c, brand, sq, sv, q, a, oos, q7 in base["b"]:
+            d = _days_eff(sq, q, q7)
             prev = base["pb"].get((b, c, brand)) if base["pb"] else None
-            lv = _level(d, prev)
+            ac = _accel(q, q7)
+            lv = _level(d, ac)
             if lv is None:
                 continue
             bi = br.get(b, {})
             out.append({"t": "b", "id": b, "name": bi.get("name"), "sub": bi.get("region"), "cat_id": c,
                         "cat": meta["cats"].get(c), "brand": brand, "level": lv, "days": d, "prev": prev,
-                        "stock": sq, "sales_day": q / WINDOW, "risk": a / WINDOW, "oos": oos})
+                        "stock": sq, "sales_day": q / WINDOW, "risk": a / WINDOW, "oos": oos,
+                        "accel": ac})
     if loc in ("all", "w"):
-        for wid, c, brand, sq, sv, q, a, oos in base["w"]:
-            d = _days(sq, q)
+        for wid, c, brand, sq, sv, q, a, oos, q7 in base["w"]:
+            d = _days_eff(sq, q, q7)
             prev = base["pw"].get((wid, c, brand)) if base["pw"] else None
-            lv = _level(d, prev)
+            ac = _accel(q, q7)
+            lv = _level(d, ac)
             if lv is None:
                 continue
             bsq, bq, boos = wb.get((wid, c, brand), [0.0, 0.0, 0])
             out.append({"t": "w", "id": wid, "name": meta["wh"].get(wid), "sub": None, "cat_id": c,
                         "cat": meta["cats"].get(c), "brand": brand, "level": lv, "days": d, "prev": prev,
-                        "stock": sq, "sales_day": q / WINDOW, "risk": a / WINDOW, "oos": boos, "oos_sku": oos,
+                        "stock": sq, "sales_day": q / WINDOW, "risk": a / WINDOW, "oos": boos, "oos_sku": oos, "accel": ac,
                         "br_stock": bsq, "br_days": _days(bsq, q)})
     for x in out:   # «yangi» — oldingi qoldiqda signal yo'q edi (15 kundan ko'pga yetardi)
         has_prev = bool(base["pb"] if x["t"] == "b" else base["pw"])
@@ -297,6 +321,7 @@ async def signals(req: StockReq, request: Request, user: User = Depends(current_
             if k in x:
                 x[k] = _r(x[k])
         x["risk"], x["sales_day"] = round(x["risk"]), _r(x["sales_day"], 2)
+        x["accel"] = _r(x.get("accel"), 2)
     return {"snap": base["snap"], "counts": counts, "risk": risk, "new": new, "total": len(items), "items": page,
             "has_prev": bool(base["pb"] or base["pw"])}
 
@@ -325,14 +350,15 @@ async def stock_map(req: StockReq, request: Request, user: User = Depends(curren
     cells: dict = {}       # (row_id) → {brand: [sq, q]}
     names: dict = {}
     if req.rows == "w":
-        for wid, c, brand, sq, sv, q, a, oos in base["w"]:
+        for wid, c, brand, sq, sv, q, a, oos, q7 in base["w"]:
             if c == cat:
-                cells.setdefault(wid, {}).setdefault(brand, [0.0, 0.0])
-                cells[wid][brand][0] += sq
-                cells[wid][brand][1] += q
+                x = cells.setdefault(wid, {}).setdefault(brand, [0.0, 0.0, 0.0])
+                x[0] += sq
+                x[1] += q
+                x[2] += q7
                 names[wid] = meta["wh"].get(wid)
     else:
-        for b, c, brand, sq, sv, q, a, oos in base["b"]:
+        for b, c, brand, sq, sv, q, a, oos, q7 in base["b"]:
             if c != cat:
                 continue
             bi = br.get(b, {})
@@ -340,28 +366,32 @@ async def stock_map(req: StockReq, request: Request, user: User = Depends(curren
                 continue
             key = bi.get("region_id") if req.rows == "region" else b
             names[key] = meta["regions"].get(key) if req.rows == "region" else bi.get("name")
-            x = cells.setdefault(key, {}).setdefault(brand, [0.0, 0.0])
+            x = cells.setdefault(key, {}).setdefault(brand, [0.0, 0.0, 0.0])
             x[0] += sq
             x[1] += q
+            x[2] += q7
     rows, tot = [], {}
     for key, cs in cells.items():
         row = {"id": key, "name": names.get(key), "cells": {}}
         s_all = q_all = 0.0
         for b in brands:
             v = cs.get(b)
-            row["cells"][b] = None if not v else (_r(_days(*v)) if v[1] > 0 else (-1 if v[0] > 0 else None))
+            row["cells"][b] = None if not v else (_r(_days_eff(*v)) if v[1] > 0 else (-1 if v[0] > 0 else None))
             if v:
-                t = tot.setdefault(b, [0.0, 0.0])
+                t = tot.setdefault(b, [0.0, 0.0, 0.0])
                 t[0] += v[0]
                 t[1] += v[1]
+                t[2] += v[2]
+        q7_all = 0.0
         for v in cs.values():
             s_all += v[0]
             q_all += v[1]
-        row["all"] = _r(_days(s_all, q_all))
+            q7_all += v[2]
+        row["all"] = _r(_days_eff(s_all, q_all, q7_all))
         row["worst"] = min([d for d in row["cells"].values() if d is not None and d >= 0] or [1e9])
         rows.append(row)
     rows.sort(key=lambda r: (r["worst"], r["name"] or ""))
-    jami = {"cells": {b: (_r(_days(*tot[b])) if b in tot and tot[b][1] > 0 else None) for b in brands}}
+    jami = {"cells": {b: (_r(_days_eff(*tot[b])) if b in tot and tot[b][1] > 0 else None) for b in brands}}
     return {"snap": base["snap"], "category": cat, "category_name": meta["cats"].get(cat),
             "categories": [{"id": k, "name": v} for k, v in sorted(meta["cats"].items(), key=lambda x: x[1])],
             "brands": brands, "rows": rows, "total": jami, "rows_kind": req.rows, "wid": req.wid,
@@ -376,7 +406,7 @@ async def overview(req: StockReq, request: Request, user: User = Depends(current
     reg: dict = {}
     wh_b: dict = {}
     tb = {"sq": 0.0, "sv": 0.0, "q": 0.0, "a": 0.0, "oos": 0}
-    for b, c, brand, sq, sv, q, a, oos in base["b"]:
+    for b, c, brand, sq, sv, q, a, oos, q7 in base["b"]:
         bi = br.get(b, {})
         for d_, k in ((reg, bi.get("region_id")), (wh_b, bi.get("warehouse_id"))):
             x = d_.setdefault(k, {"sq": 0.0, "sv": 0.0, "q": 0.0, "a": 0.0, "oos": 0, "br": set()})
@@ -393,7 +423,7 @@ async def overview(req: StockReq, request: Request, user: User = Depends(current
         tb["oos"] += oos
     tw = {"sq": 0.0, "sv": 0.0, "q": 0.0}
     whs: dict = {}
-    for wid, c, brand, sq, sv, q, a, oos in base["w"]:
+    for wid, c, brand, sq, sv, q, a, oos, q7 in base["w"]:
         x = whs.setdefault(wid, {"sq": 0.0, "sv": 0.0, "q": 0.0})
         x["sq"] += sq
         x["sv"] += sv
@@ -467,16 +497,19 @@ WITH {w},
 cov AS (SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = {D}),
 bst AS (SELECT s.product_id, s.branch_id, s.qty FROM stock_branch s JOIN bw USING (branch_id) JOIN pd USING (product_id)
         WHERE s.snap_date = {D}),
-sl AS (SELECT e.product_id, e.branch_id, sum(e.qty) q, sum(e.amount) a FROM sales_fact e JOIN bw USING (branch_id)
+sl AS (SELECT e.product_id, e.branch_id, sum(e.qty) q, sum(e.amount) a,
+              sum(e.qty) FILTER (WHERE e.sale_date > {E}::date - 7) q7 FROM sales_fact e JOIN bw USING (branch_id)
        JOIN pd USING (product_id) JOIN cov USING (branch_id)
        WHERE e.sale_date BETWEEN {E}::date - {WINDOW - 1} AND {E} GROUP BY 1, 2),
-j AS (SELECT product_id, branch_id, COALESCE(bst.qty, 0) sq, COALESCE(sl.q, 0) q, COALESCE(sl.a, 0) a
+j AS (SELECT product_id, branch_id, COALESCE(bst.qty, 0) sq, COALESCE(sl.q, 0) q, COALESCE(sl.a, 0) a,
+             COALESCE(sl.q7, 0) q7
       FROM bst FULL JOIN sl USING (product_id, branch_id)),
 w AS (SELECT product_id, sum(qty) wq FROM stock_wh WHERE snap_date = {DW} AND warehouse_id = {WID}::int GROUP BY 1),
 oth AS (SELECT s.product_id, s.warehouse_id, s.qty FROM stock_wh s
         WHERE s.snap_date = {DW} AND s.warehouse_id IS DISTINCT FROM {WID}::int AND s.qty > 0)
 SELECT pd.product_id, pd.pname, pd.brand, coalesce(sum(j.sq), 0)::float8 bq, coalesce(sum(j.q), 0)::float8 q,
        coalesce(sum(j.a), 0)::float8 a, count(*) FILTER (WHERE j.sq <= 0 AND j.q > 0) oos,
+       coalesce(sum(j.q7), 0)::float8 q7,
        coalesce(max(w.wq), 0)::float8 wq,
        (SELECT json_agg(json_build_object('wid', o.warehouse_id, 'qty', o.qty) ORDER BY o.qty DESC) FROM oth o
         WHERE o.product_id = pd.product_id) other
@@ -485,20 +518,21 @@ GROUP BY pd.product_id, pd.pname, pd.brand
 HAVING coalesce(sum(j.sq), 0) > 0 OR coalesce(sum(j.q), 0) > 0 OR coalesce(max(w.wq), 0) > 0""", *s.params)
             whn = {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM warehouses")}
             items = []
-            tot = {"bq": 0.0, "q": 0.0, "a": 0.0, "wq": 0.0, "oos": 0}
+            tot = {"bq": 0.0, "q": 0.0, "a": 0.0, "wq": 0.0, "oos": 0, "q7": 0.0}
             for r in skus:
                 tot["bq"] += r["bq"]
                 tot["q"] += r["q"]
                 tot["a"] += r["a"]
                 tot["wq"] += r["wq"]
                 tot["oos"] += r["oos"]
+                tot["q7"] += r["q7"]
                 own = r["wq"] if req.loc_type == "w" else r["bq"]
-                d = _days(own, r["q"])
+                d = _days_eff(own, r["q"], r["q7"])
                 other = json.loads(r["other"]) if r["other"] else []
                 items.append({"id": r["product_id"], "name": r["pname"], "brand": r["brand"], "stock": own,
                               "br_stock": r["bq"], "wh_stock": r["wq"], "days": _r(d), "oos": r["oos"],
                               "risk": round(r["a"] / WINDOW), "sales_day": _r(r["q"] / WINDOW, 2),
-                              "level": _level(d, None),
+                              "level": _level(d, _accel(r["q"], r["q7"])),
                               "other": [{"name": whn.get(o["wid"]), "qty": o["qty"]} for o in other[:3]]})
             items.sort(key=lambda x: (x["days"] if x["days"] is not None else 1e9, -x["risk"]))
             # tarix: har bir qoldiq sanasi bo'yicha kunga yetadi
@@ -525,8 +559,10 @@ HAVING coalesce(sum(j.sq), 0) > 0 OR coalesce(sum(j.q), 0) > 0 OR coalesce(max(w
 WITH {w2}
 SELECT {stock_sql}::float8 sq,
        (SELECT coalesce(sum(e.qty), 0) FROM sales_fact e JOIN bw USING (branch_id) JOIN pd USING (product_id)
-        WHERE e.sale_date BETWEEN {E2}::date - {WINDOW - 1} AND {E2})::float8 q""", *s2.params)
-                hist.append({"date": d0.isoformat(), "stock": r["sq"], "days": _r(_days(r["sq"], r["q"]))})
+        WHERE e.sale_date BETWEEN {E2}::date - {WINDOW - 1} AND {E2})::float8 q,
+       (SELECT coalesce(sum(e.qty), 0) FROM sales_fact e JOIN bw USING (branch_id) JOIN pd USING (product_id)
+        WHERE e.sale_date BETWEEN {E2}::date - 6 AND {E2})::float8 q7""", *s2.params)
+                hist.append({"date": d0.isoformat(), "stock": r["sq"], "days": _r(_days_eff(r["sq"], r["q"], r["q7"]))})
             name = None
             if req.loc_type == "w":
                 name = whn.get(wid)
@@ -536,14 +572,15 @@ SELECT {stock_sql}::float8 sq,
                 name = await con.fetchval("SELECT name FROM regions WHERE id = $1", req.loc_id)
             nb = await con.fetchval("SELECT count(*) FROM branches WHERE warehouse_id = $1", wid) if wid and req.loc_type == "w" else None
             own = tot["wq"] if req.loc_type == "w" else tot["bq"]
-            d = _days(own, tot["q"])
-            prev_d = hist[-2]["days"] if len(hist) > 1 else None
+            d = _days_eff(own, tot["q"], tot["q7"])
+            ac = _accel(tot["q"], tot["q7"])
             return {"snap": {k: (v.isoformat() if v else None) for k, v in sn.items()},
                     "loc_type": req.loc_type, "loc_id": req.loc_id, "name": name or "Jami", "brand": req.brand,
                     "category": await con.fetchval("SELECT name FROM categories WHERE id = $1", cats[0]) if len(cats) == 1 else None,
-                    "branches": nb, "level": _level(d, prev_d),
+                    "branches": nb, "level": _level(d, ac), "accel": _r(ac, 2),
                     "total": {"stock": own, "br_stock": tot["bq"], "wh_stock": tot["wq"], "days": _r(d),
                               "br_days": _r(_days(tot["bq"], tot["q"])), "sales_day": _r(tot["q"] / WINDOW, 2),
+                              "sales_day7": _r(tot["q7"] / 7, 2),
                               "risk": round(tot["a"] / WINDOW), "oos": tot["oos"]},
                     "history": hist, "items": items[:60]}
     payload = req.model_dump(mode="json", include=set(Filters.model_fields) | {"loc_type", "loc_id", "brand", "map_category"})
@@ -615,7 +652,7 @@ FROM agg {'LEFT JOIN wst ON wst.k = agg.k' if not loc_dim else ''}""", *s.params
 # ---------------------------------------------------------------------------
 # Ro'yxatlar: 🚚 ombordan yuborish · 📈 ortiqcha · 💤 harakatsiz
 #   Me'yor (yuborish uchun) = 2 oylik savdo = 2 × 30 kunlik savdo (Sanjarbek tanlovi, «savdo × 2»).
-#   Yuborish: filialda < 7 kunga yetadigan SKU, uning omborida bor → me'yor − bor (ombordagidan oshmaydi;
+#   Yuborish: filialda < 7 kunga yetadigan SKU (30 va 7 kunlik sur'atdan kami), uning omborida bor → me'yor − bor (ombordagidan oshmaydi;
 #   bir omborning qoldig'i eng kam qolgan filiallarga birinchi taqsimlanadi).
 #   Ortiqcha / harakatsiz — «zona» (ombor + uning filiallari) × SKU: > 90 kunga yetadi / 60 kunda sotuv yo'q.
 NORM_MONTHS = 2
@@ -639,11 +676,13 @@ st AS (SELECT s.branch_id, s.product_id, s.qty, s.cost_uzs FROM stock_branch s J
        JOIN pd USING (product_id) WHERE s.snap_date = {D}),
 sl AS (SELECT e.branch_id, e.product_id,
               sum(e.qty) FILTER (WHERE e.sale_date > {E}::date - {WINDOW}) q30,
-              sum(e.amount) FILTER (WHERE e.sale_date > {E}::date - {WINDOW}) a30, sum(e.qty) q60
+              sum(e.amount) FILTER (WHERE e.sale_date > {E}::date - {WINDOW}) a30, sum(e.qty) q60,
+              sum(e.qty) FILTER (WHERE e.sale_date > {E}::date - 7) q7
        FROM sales_fact e JOIN bb USING (branch_id) JOIN pd USING (product_id) JOIN cov USING (branch_id)
        WHERE e.sale_date BETWEEN {E}::date - {IDLE_DAYS - 1} AND {E} GROUP BY 1, 2)
 SELECT branch_id, product_id, COALESCE(st.qty, 0)::float8 sq, COALESCE(st.cost_uzs, 0)::float8 sv,
-       COALESCE(sl.q30, 0)::float8 q30, COALESCE(sl.a30, 0)::float8 a30, COALESCE(sl.q60, 0)::float8 q60
+       COALESCE(sl.q30, 0)::float8 q30, COALESCE(sl.a30, 0)::float8 a30, COALESCE(sl.q60, 0)::float8 q60,
+       COALESCE(sl.q7, 0)::float8 q7
 FROM st FULL JOIN sl USING (branch_id, product_id)""", *s.params)
     if sn["w"]:
         s2 = _SQL(f, cats, attrs)
@@ -670,7 +709,7 @@ def build_lists(br_rows, wh_rows, prod: dict, meta: dict, rate: float) -> dict:
         q30, sq = r["q30"], r["sq"]
         if q30 <= 0:
             continue
-        days = sq / (q30 / WINDOW)
+        days = _days_eff(sq, q30, r["q7"])
         if days >= SEND_DAYS:
             continue
         bi = br.get(r["branch_id"], {})
@@ -817,17 +856,19 @@ def build_xlsx(base: dict, lists: dict, sku_rows: list, prod: dict) -> bytes:
     ws = wb.active
     ws.title = "Signallar"
     sheet(ws, ["Daraja", "Joy turi", "Joy", "Hudud", "Kategoriya", "Brend", "Qoldiq, dona", "Kunga yetadi",
-               "O'tgan hafta, kun", "Filiallarda, dona", "OOS (filial×SKU)", "Savdo, dona/kun", "Xavf, so'm/kun", "Yangi"],
+               "O'tgan hafta, kun", "Filiallarda, dona", "OOS (filial×SKU)", "Savdo, dona/kun", "7 kunlik savdo, ±%",
+               "Xavf, so'm/kun", "Yangi"],
           [[LV_NAMES[x["level"]], "Ombor" if x["t"] == "w" else "Filial", x["name"], x.get("sub") or "", x["cat"], x["brand"],
             round(x["stock"]), _r(x["days"]), _r(x["prev"]), round(x["br_stock"]) if x["t"] == "w" else None, x["oos"],
-            _r(x["sales_day"], 2), round(x["risk"]), "ha" if x["new"] else ""] for x in sig],
-          [12, 9, 28, 18, 18, 14, 11, 11, 12, 12, 12, 12, 14, 7], lv_col=0)
+            _r(x["sales_day"], 2), round((x["accel"] - 1) * 100) if x.get("accel") else None,
+            round(x["risk"]), "ha" if x["new"] else ""] for x in sig],
+          [12, 9, 28, 18, 18, 14, 11, 11, 12, 12, 12, 12, 12, 14, 7], lv_col=0)
     br = base["meta"]["branches"]
     rows = []
     for r in sku_rows:
         if r["q30"] <= 0:
             continue
-        d = r["sq"] / (r["q30"] / WINDOW)
+        d = _days_eff(r["sq"], r["q30"], r["q7"])
         if d >= SEND_DAYS:
             continue
         p, bi = prod.get(r["product_id"], {}), br.get(r["branch_id"], {})
