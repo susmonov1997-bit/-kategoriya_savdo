@@ -334,13 +334,16 @@ async def sku_card(pool: asyncpg.Pool, pid: int) -> str:
             return "Tovar topilmadi."
         db = await con.fetchval("SELECT max(snap_date) FROM stock_branch")
         dw = await con.fetchval("SELECT max(snap_date) FROM stock_wh")
-        end = await con.fetchval("SELECT max(sale_date) FROM sales_fact") or db or dw
+        last = await con.fetchval("SELECT max(sale_date) FROM sales_fact")
+        snap = db or dw
+        end = min(snap, last) if snap and last else (last or snap)
         br = await con.fetch(
             """WITH st AS (SELECT branch_id, qty FROM stock_branch WHERE snap_date = $2 AND product_id = $1),
-                    sl AS (SELECT branch_id, sum(qty) q FROM sales_fact WHERE product_id = $1
+                    sl AS (SELECT branch_id, sum(qty) q, sum(qty) FILTER (WHERE sale_date > $3::date - 7) q7
+                           FROM sales_fact WHERE product_id = $1
                            AND sale_date BETWEEN $3::date - 29 AND $3 GROUP BY 1),
                     cov AS (SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = $2)
-               SELECT b.name, COALESCE(st.qty, 0)::float8 sq, COALESCE(sl.q, 0)::float8 q,
+               SELECT b.name, COALESCE(st.qty, 0)::float8 sq, COALESCE(sl.q, 0)::float8 q, COALESCE(sl.q7, 0)::float8 q7,
                       (b.id IN (SELECT branch_id FROM cov)) cov
                FROM branches b LEFT JOIN st ON st.branch_id = b.id LEFT JOIN sl ON sl.branch_id = b.id
                WHERE st.qty IS NOT NULL OR sl.q IS NOT NULL""", pid, db, end) if end else []
@@ -348,10 +351,14 @@ async def sku_card(pool: asyncpg.Pool, pid: int) -> str:
                              "WHERE s.snap_date = $2 AND s.product_id = $1 AND s.qty > 0 GROUP BY 1 ORDER BY 2 DESC",
                              pid, dw) if dw else []
     bq = sum(r["sq"] for r in br)
-    q30 = sum(r["q"] for r in br)
+    q30 = sum(r["q"] for r in br)                       # hammasi (pastdagi izoh uchun)
+    qc = sum(r["q"] for r in br if r["cov"])            # kunga yetadi — faqat qoldiq fayliga kirgan filiallar
+    q7c = sum(r["q7"] for r in br if r["cov"])
     nb = sum(1 for r in br if r["sq"] > 0)
     wq = sum(r["q"] for r in wh)
-    days = f" · {_n(bq / (q30 / 30))} kunga" if q30 > 0 else ""
+    from api_stock import _days_eff
+    dd = _days_eff(bq, qc, q7c)
+    days = f" · {_n(dd)} kunga" if dd is not None else ""
     out = [f"<b>{esc(p['name'])}</b>", f"{esc(p['cat'])} · {esc(p['brand'])} · ID <code>{p['product_id']}</code>"]
     if db:
         out.append(f"Filiallarda: <b>{_n(bq)}</b> dona · {nb} filial{days}")

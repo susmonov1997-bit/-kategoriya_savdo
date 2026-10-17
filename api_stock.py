@@ -55,7 +55,7 @@ class StockReq(Filters):
     rows: Literal["w", "region", "b"] = "w"      # xarita qatorlari
     wid: int | None = None                       # xarita: shu omborning filiallari
     map_category: int | None = None              # xarita kategoriyasi (ko'p kategoriyali doirada)
-    loc_type: Literal["w", "b", "region", "all"] = "w"
+    loc_type: Literal["w", "b", "region", "all"] = "all"
     loc_id: int | None = None
     brand: str | None = None
     dim: str = "category"
@@ -173,9 +173,9 @@ wf AS (SELECT DISTINCT warehouse_id FROM bb WHERE warehouse_id IS NOT NULL
        AND warehouse_id IN (SELECT DISTINCT warehouse_id FROM stock_wh WHERE snap_date = {D})),
 st AS (SELECT s.warehouse_id, s.product_id, s.qty, s.value_usd FROM stock_wh s
        JOIN wf USING (warehouse_id) JOIN pd USING (product_id) WHERE s.snap_date = {D}),
-sl AS (SELECT bb.warehouse_id, e.product_id, sum(e.qty) q, sum(e.amount) a,
+sl AS (SELECT b2.warehouse_id, e.product_id, sum(e.qty) q, sum(e.amount) a,
               sum(e.qty) FILTER (WHERE e.sale_date > {E}::date - 7) q7 FROM sales_fact e
-       JOIN bb USING (branch_id) JOIN pd USING (product_id) JOIN wf ON wf.warehouse_id = bb.warehouse_id
+       JOIN branches b2 ON b2.id = e.branch_id JOIN pd USING (product_id) JOIN wf ON wf.warehouse_id = b2.warehouse_id
        WHERE e.sale_date BETWEEN {S} AND {E} GROUP BY 1, 2),
 j AS (SELECT warehouse_id, product_id, COALESCE(st.qty, 0) sq, COALESCE(st.value_usd, 0) sv,
              COALESCE(sl.q, 0) q, COALESCE(sl.a, 0) a, COALESCE(sl.q7, 0) q7
@@ -408,55 +408,53 @@ async def stock_map(req: StockReq, request: Request, user: User = Depends(curren
 async def overview(req: StockReq, request: Request, user: User = Depends(current_user)):
     base = await _base(request, user, req)
     meta, br, rate = base["meta"], base["meta"]["branches"], base.get("rate") or 0
+    z = lambda: {"sq": 0.0, "sv": 0.0, "q": 0.0, "q7": 0.0, "a": 0.0, "oos": 0, "br": set()}  # noqa: E731
     reg: dict = {}
     wh_b: dict = {}
-    tb = {"sq": 0.0, "sv": 0.0, "q": 0.0, "a": 0.0, "oos": 0}
+    tb = z()
     for b, c, brand, sq, sv, q, a, oos, q7 in base["b"]:
         bi = br.get(b, {})
-        for d_, k in ((reg, bi.get("region_id")), (wh_b, bi.get("warehouse_id"))):
-            x = d_.setdefault(k, {"sq": 0.0, "sv": 0.0, "q": 0.0, "a": 0.0, "oos": 0, "br": set()})
+        for x in (reg.setdefault(bi.get("region_id"), z()), wh_b.setdefault(bi.get("warehouse_id"), z()), tb):
             x["sq"] += sq
             x["sv"] += sv
             x["q"] += q
+            x["q7"] += q7
             x["a"] += a
             x["oos"] += oos
             x["br"].add(b)
-        tb["sq"] += sq
-        tb["sv"] += sv
-        tb["q"] += q
-        tb["a"] += a
-        tb["oos"] += oos
-    tw = {"sq": 0.0, "sv": 0.0, "q": 0.0}
+    tw = z()
     whs: dict = {}
     for wid, c, brand, sq, sv, q, a, oos, q7 in base["w"]:
-        x = whs.setdefault(wid, {"sq": 0.0, "sv": 0.0, "q": 0.0})
-        x["sq"] += sq
-        x["sv"] += sv
-        x["q"] += q
-        tw["sq"] += sq
-        tw["sv"] += sv
-        tw["q"] += q
+        for x in (whs.setdefault(wid, z()), tw):   # q — omborning barcha filiallari savdosi
+            x["sq"] += sq
+            x["sv"] += sv
+            x["q"] += q
+            x["q7"] += q7
     sig = _signals(base, "all")
     counts = {str(k): sum(1 for x in sig if x["level"] == k) for k in (0, 1, 2)}
-    regions = [{"id": k, "name": meta["regions"].get(k), "stock": v["sq"], "value": v["sv"], "days": _r(_days(v["sq"], v["q"])),
+    regions = [{"id": k, "name": meta["regions"].get(k), "stock": v["sq"], "value": v["sv"],
+                "days": _r(_days_eff(v["sq"], v["q"], v["q7"])),
                 "oos": v["oos"], "branches": len(v["br"]), "sales_day": v["a"] / WINDOW}
                for k, v in reg.items() if k is not None]
     regions.sort(key=lambda r: (r["days"] if r["days"] is not None else 1e9))
     warehouses = []
     for wid in sorted(set(whs) | {k for k in wh_b if k}, key=lambda k: meta["wh"].get(k) or ""):
-        w_ = whs.get(wid, {"sq": 0.0, "sv": 0.0, "q": 0.0})
-        b_ = wh_b.get(wid, {"sq": 0.0, "q": 0.0, "oos": 0, "br": set()})
-        q = w_["q"] or b_["q"]
+        w_ = whs.get(wid, z())
+        b_ = wh_b.get(wid, z())
+        q, q7 = (w_["q"], w_["q7"]) if wid in whs else (b_["q"], b_["q7"])
         warehouses.append({"id": wid, "name": meta["wh"].get(wid), "stock": w_["sq"], "value": w_["sv"] * rate,
-                           "days": _r(_days(w_["sq"], q)), "br_stock": b_["sq"], "br_days": _r(_days(b_["sq"], b_["q"])),
+                           "days": _r(_days_eff(w_["sq"], q, q7)), "br_stock": b_["sq"],
+                           "br_days": _r(_days_eff(b_["sq"], b_["q"], b_["q7"])),
                            "branches": len(b_["br"]), "oos": b_["oos"],
                            "regions": sorted({meta["regions"].get(br[b]["region_id"]) for b in b_["br"] if b in br})})
-    q_all = tb["q"]
+    # tarmoq: ombor bo'lsa — omborlar zonasi savdosi (barcha filiallar), bo'lmasa — qoldiq faylidagi filiallar savdosi
+    qn, q7n = (tw["q"], tw["q7"]) if base["w"] else (tb["q"], tb["q7"])
     lsum = (await _lists(request, user, req)).get("summary")
     return {"snap": base["snap"], "rate": rate, "counts": counts, "lists": lsum, "links": base.get("links"),
             "total": {"br_stock": tb["sq"], "br_value": tb["sv"], "wh_stock": tw["sq"], "wh_value": tw["sv"] * rate,
-                      "days": _r(_days(tb["sq"] + tw["sq"], q_all)), "br_days": _r(_days(tb["sq"], q_all)),
-                      "wh_days": _r(_days(tw["sq"], q_all)), "oos": tb["oos"], "sales_day": tb["a"] / WINDOW},
+                      "days": _r(_days_eff(tb["sq"] + tw["sq"], qn, q7n)),
+                      "br_days": _r(_days_eff(tb["sq"], tb["q"], tb["q7"])),
+                      "wh_days": _r(_days_eff(tw["sq"], tw["q"], tw["q7"])), "oos": tb["oos"], "sales_day": tb["a"] / WINDOW},
             "warehouses": warehouses, "regions": regions}
 
 
@@ -490,11 +488,14 @@ async def detail(req: StockReq, request: Request, user: User = Depends(current_u
             s = _SQL(f, cats, attrs)
             w = s.ctes()
             if wid and req.loc_type == "w":
-                w += f", bw AS (SELECT * FROM bb WHERE warehouse_id = {s.p(wid)})"
+                w += (f", bw AS (SELECT id AS branch_id, region_id, cluster_id, warehouse_id FROM branches "
+                   f"WHERE warehouse_id = {s.p(wid)})")
             else:
                 w += ", bw AS (SELECT * FROM bb)"
             D = s.p(sn["b"])
-            E = s.p(_end(sn["b"], ls) or req.date_to)
+            isw = req.loc_type == "w"
+            # ombor: savdo — omborning BARCHA filiallari (qoldiq fayliga kirmaganlari ham), sana — ombor qoldig'i sanasi
+            E = s.p(_end(sn["w"] if isw else sn["b"], ls) or req.date_to)
             DW = s.p(sn["w"])
             WID = s.p(wid)
             skus = await con.fetch(f"""
@@ -504,16 +505,16 @@ bst AS (SELECT s.product_id, s.branch_id, s.qty FROM stock_branch s JOIN bw USIN
         WHERE s.snap_date = {D}),
 sl AS (SELECT e.product_id, e.branch_id, sum(e.qty) q, sum(e.amount) a,
               sum(e.qty) FILTER (WHERE e.sale_date > {E}::date - 7) q7 FROM sales_fact e JOIN bw USING (branch_id)
-       JOIN pd USING (product_id) JOIN cov USING (branch_id)
+       JOIN pd USING (product_id) {'' if isw else 'JOIN cov USING (branch_id)'}
        WHERE e.sale_date BETWEEN {E}::date - {WINDOW - 1} AND {E} GROUP BY 1, 2),
 j AS (SELECT product_id, branch_id, COALESCE(bst.qty, 0) sq, COALESCE(sl.q, 0) q, COALESCE(sl.a, 0) a,
-             COALESCE(sl.q7, 0) q7
+             COALESCE(sl.q7, 0) q7, (branch_id IN (SELECT branch_id FROM cov)) cv
       FROM bst FULL JOIN sl USING (product_id, branch_id)),
 w AS (SELECT product_id, sum(qty) wq FROM stock_wh WHERE snap_date = {DW} AND warehouse_id = {WID}::int GROUP BY 1),
 oth AS (SELECT s.product_id, s.warehouse_id, s.qty FROM stock_wh s
         WHERE s.snap_date = {DW} AND s.warehouse_id IS DISTINCT FROM {WID}::int AND s.qty > 0)
 SELECT pd.product_id, pd.pname, pd.brand, coalesce(sum(j.sq), 0)::float8 bq, coalesce(sum(j.q), 0)::float8 q,
-       coalesce(sum(j.a), 0)::float8 a, count(*) FILTER (WHERE j.sq <= 0 AND j.q > 0) oos,
+       coalesce(sum(j.a), 0)::float8 a, count(*) FILTER (WHERE j.cv AND j.sq <= 0 AND j.q > 0) oos,
        coalesce(sum(j.q7), 0)::float8 q7,
        coalesce(max(w.wq), 0)::float8 wq,
        (SELECT json_agg(json_build_object('wid', o.warehouse_id, 'qty', o.qty) ORDER BY o.qty DESC) FROM oth o
@@ -544,7 +545,8 @@ HAVING coalesce(sum(j.sq), 0) > 0 OR coalesce(sum(j.q), 0) > 0 OR coalesce(max(w
             s3 = _SQL(f, cats, attrs)
             w3 = s3.ctes()
             if wid and req.loc_type == "w":
-                w3 += f", bw AS (SELECT * FROM bb WHERE warehouse_id = {s3.p(wid)})"
+                w3 += (f", bw AS (SELECT id AS branch_id, region_id, cluster_id, warehouse_id FROM branches "
+                   f"WHERE warehouse_id = {s3.p(wid)})")
             else:
                 w3 += ", bw AS (SELECT * FROM bb)"
             E3 = s3.p(_end(sn["b"] or sn["w"], ls) or req.date_to)
@@ -563,7 +565,8 @@ WHERE e.sale_date BETWEEN {E3}::date - {WINDOW - 1} AND {E3} GROUP BY 1 ORDER BY
                 s2 = _SQL(f, cats, attrs)
                 w2 = s2.ctes()
                 if wid and req.loc_type == "w":
-                    w2 += f", bw AS (SELECT * FROM bb WHERE warehouse_id = {s2.p(wid)})"
+                    w2 += (f", bw AS (SELECT id AS branch_id, region_id, cluster_id, warehouse_id FROM branches "
+                   f"WHERE warehouse_id = {s2.p(wid)})")
                 else:
                     w2 += ", bw AS (SELECT * FROM bb)"
                 D2, E2 = s2.p(d0), s2.p(_end(d0, ls))
@@ -629,12 +632,14 @@ async def stock_by(req: StockReq, request: Request, user: User = Depends(current
             ls = sn["sales_to"]
             key = BY_DIMS[req.dim]
             loc_dim = req.dim in ("region", "cluster", "branch")
+            # joy filtri bo'lsa ombor qoldig'i qo'shilmaydi: ombor butun zonaga xizmat qiladi, savdo esa faqat filtrdagi
+            no_wh = loc_dim or bool(req.region_ids or req.cluster_ids or req.branch_ids)
             s = _SQL(req, cats, attrs)
             w = s.ctes()
             D = s.p(sn["b"] or sn["w"])
             E = s.p(_end(sn["b"] or sn["w"], ls))
-            DW = None if loc_dim else s.p(sn["w"] or sn["b"])
-            wh_part = "" if loc_dim else f"""
+            DW = None if no_wh else s.p(sn["w"] or sn["b"])
+            wh_part = "" if no_wh else f"""
 , wst AS (SELECT {key} k, sum(s.qty) wq, sum(s.value_usd) wv FROM stock_wh s JOIN pd USING (product_id)
           WHERE s.snap_date = {DW} AND s.warehouse_id IN (SELECT DISTINCT warehouse_id FROM bb) GROUP BY 1)"""
             rows = await con.fetch(f"""
@@ -642,22 +647,28 @@ WITH {w},
 cov AS (SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = {D}),
 st AS (SELECT s.branch_id, s.product_id, s.qty, s.cost_uzs, s.price_uzs FROM stock_branch s JOIN bb USING (branch_id)
        JOIN pd USING (product_id) WHERE s.snap_date = {D}),
-sl AS (SELECT e.branch_id, e.product_id, sum(e.qty) q FROM sales_fact e JOIN bb USING (branch_id)
+sl AS (SELECT e.branch_id, e.product_id, sum(e.qty) q, sum(e.qty) FILTER (WHERE e.sale_date > {E}::date - 7) q7
+       FROM sales_fact e JOIN bb USING (branch_id)
        JOIN pd USING (product_id) WHERE e.sale_date BETWEEN {E}::date - {WINDOW - 1} AND {E} GROUP BY 1, 2),
 j AS (SELECT branch_id, product_id, COALESCE(st.qty, 0) sq, COALESCE(st.cost_uzs, 0) sv,
-             COALESCE(st.price_uzs, 0) sp, COALESCE(sl.q, 0) q, (branch_id IN (SELECT branch_id FROM cov)) cov
+             COALESCE(st.price_uzs, 0) sp, COALESCE(sl.q, 0) q, COALESCE(sl.q7, 0) q7,
+             (branch_id IN (SELECT branch_id FROM cov)) cov
       FROM st FULL JOIN sl USING (branch_id, product_id)),
-agg AS (SELECT {key} k, sum(sq) sq, sum(sv) sv, sum(sp) sp, sum(q) q, count(*) FILTER (WHERE cov AND sq <= 0 AND q > 0) oos
+agg AS (SELECT {key} k, sum(sq) sq, sum(sv) sv, sum(sp) sp, sum(q) FILTER (WHERE cov) q, sum(q) qa,
+               sum(q7) FILTER (WHERE cov) q7, sum(q7) q7a,
+               count(*) FILTER (WHERE cov AND sq <= 0 AND q > 0) oos
         FROM j JOIN pd USING (product_id) JOIN bb USING (branch_id) GROUP BY 1){wh_part}
-SELECT agg.k, agg.sq::float8, agg.sv::float8, agg.sp::float8, agg.q::float8, agg.oos{', coalesce(wst.wq, 0)::float8 wq, coalesce(wst.wv, 0)::float8 wv' if not loc_dim else ', 0::float8 wq, 0::float8 wv'}
-FROM agg {'LEFT JOIN wst ON wst.k = agg.k' if not loc_dim else ''}""", *s.params)
+SELECT agg.k, agg.sq::float8, agg.sv::float8, agg.sp::float8, COALESCE(agg.q, 0)::float8 q, COALESCE(agg.qa, 0)::float8 qa,
+       COALESCE(agg.q7, 0)::float8 q7, COALESCE(agg.q7a, 0)::float8 q7a, agg.oos{', coalesce(wst.wq, 0)::float8 wq, coalesce(wst.wv, 0)::float8 wv' if not no_wh else ', 0::float8 wq, 0::float8 wv'}
+FROM agg {'LEFT JOIN wst ON wst.k = agg.k' if not no_wh else ''}""", *s.params)
             rate = float(await con.fetchval("SELECT rate FROM fx_periods WHERE $1 >= valid_from AND $1 < valid_to",
                                             sn["w"] or sn["b"]) or 0)
             items = {}
             for r in rows:
                 stock = r["sq"] + r["wq"]
-                d = _days(stock, r["q"])
-                if stock <= 0 and r["q"] <= 0:
+                q, q7 = (r["q"], r["q7"]) if no_wh else (r["qa"], r["q7a"])   # ombor bilan — butun zona savdosi
+                d = _days_eff(stock, q, q7)
+                if stock <= 0 and q <= 0:
                     continue
                 items[r["k"]] = {"stock": stock, "br": r["sq"], "wh": r["wq"], "days": _r(d), "oos": r["oos"],
                                  "value": r["sv"] + r["wv"] * rate, "sell": r["sp"] + r["wv"] * rate,
@@ -712,15 +723,28 @@ WITH {w2}
 SELECT s.warehouse_id, s.product_id, s.qty::float8 wq, COALESCE(s.value_usd, 0)::float8 wv
 FROM stock_wh s JOIN pd USING (product_id)
 WHERE s.snap_date = {DW} AND s.qty > 0 AND s.warehouse_id IN (SELECT warehouse_id FROM bb)""", *s2.params)
+    # zona (ombor + BARCHA filiallari) savdosi — ortiqcha/harakatsiz uchun; joy filtri bo'lsa zona = faqat filtrdagi filiallar
+    zone_sales = None
+    if sn["w"] and not (f.region_ids or f.cluster_ids or f.branch_ids):
+        s3 = _SQL(f, cats, attrs)
+        w3 = s3.ctes()
+        E3 = s3.p(_end(sn["w"], ls))
+        zone_sales = {(r["warehouse_id"], r["product_id"]): (r["q30"], r["q60"]) for r in await con.fetch(f"""
+WITH {w3}
+SELECT b2.warehouse_id, e.product_id, COALESCE(sum(e.qty) FILTER (WHERE e.sale_date > {E3}::date - {WINDOW}), 0)::float8 q30,
+       sum(e.qty)::float8 q60
+FROM sales_fact e JOIN branches b2 ON b2.id = e.branch_id JOIN pd USING (product_id)
+WHERE b2.warehouse_id IS NOT NULL AND e.sale_date BETWEEN {E3}::date - {IDLE_DAYS - 1} AND {E3}
+GROUP BY 1, 2""", *s3.params)}
     pids = list({r["product_id"] for r in br_rows} | {r["product_id"] for r in wh_rows})
     prod = {r["product_id"]: dict(r) for r in await con.fetch(
         """SELECT p.product_id, p.name, p.brand, c.name cat FROM products p JOIN categories c ON c.id = p.category_id
            WHERE p.product_id = ANY($1::bigint[])""", pids)}
-    return br_rows, wh_rows, prod
+    return br_rows, wh_rows, prod, zone_sales
 
 
 def build_lists(br_rows, wh_rows, prod: dict, meta: dict, rate: float,
-                norm_days: int = NORM_DAYS, trig_days: int = SEND_DAYS) -> dict:
+                norm_days: int = NORM_DAYS, trig_days: int = SEND_DAYS, zone_sales: dict | None = None) -> dict:
     br, whn = meta["branches"], meta["wh"]
     avail: dict[tuple, float] = {(r["warehouse_id"], r["product_id"]): r["wq"] for r in wh_rows}
     # --- ombordan yuborish
@@ -770,10 +794,14 @@ def build_lists(br_rows, wh_rows, prod: dict, meta: dict, rate: float,
         z["q60"] += r["q60"]
         if r["sq"] > 0:
             z["top"].append((r["sq"], br.get(r["branch_id"], {}).get("name")))
-    for r in wh_rows:
-        z = zone.setdefault((r["warehouse_id"], r["product_id"]), {"bq": 0.0, "bv": 0.0, "q30": 0.0, "q60": 0.0, "wq": 0.0, "wv": 0.0, "top": []})
-        z["wq"] += r["wq"]
-        z["wv"] += r["wv"] * rate
+    if zone_sales is not None:          # ombor qoldig'i va omborning barcha filiallari savdosi
+        for r in wh_rows:
+            z = zone.setdefault((r["warehouse_id"], r["product_id"]), {"bq": 0.0, "bv": 0.0, "q30": 0.0, "q60": 0.0, "wq": 0.0, "wv": 0.0, "top": []})
+            z["wq"] += r["wq"]
+            z["wv"] += r["wv"] * rate
+        for (wid, pid), z in zone.items():
+            if wid is not None:
+                z["q30"], z["q60"] = zone_sales.get((wid, pid), (0.0, 0.0))
     over, idle = [], []
     for (wid, pid), z in zone.items():
         stock = z["bq"] + z["wq"]
@@ -787,7 +815,9 @@ def build_lists(br_rows, wh_rows, prod: dict, meta: dict, rate: float,
                 "value": z["bv"] + z["wv"], "top": [{"name": n, "qty": q} for q, n in top[:4]]}
         if z["q60"] <= 0:
             idle.append(item)
-        elif z["q30"] > 0:
+        elif z["q30"] <= 0:                 # 30 kunda sotilmagan, 31–60 kun oldin sotilgan — ortiqcha (∞)
+            over.append({**item, "days": None})
+        else:
             d = stock / (z["q30"] / WINDOW)
             if d > OVER_DAYS:
                 over.append({**item, "days": round(d)})
@@ -815,8 +845,8 @@ async def lists_data(con, f: Filters, cats: list[int], attrs: dict,
     }
     rate = float(await con.fetchval("SELECT rate FROM fx_periods WHERE $1 >= valid_from AND $1 < valid_to",
                                     sn["w"] or sn["b"]) or 0)
-    br_rows, wh_rows, prod = await _sku_level(con, f, cats, attrs, sn)
-    out = build_lists(br_rows, wh_rows, prod, meta, rate, norm_days, trig_days)
+    br_rows, wh_rows, prod, zs = await _sku_level(con, f, cats, attrs, sn)
+    out = build_lists(br_rows, wh_rows, prod, meta, rate, norm_days, trig_days, zs)
     out["snap"] = {k: (v.isoformat() if v else None) for k, v in sn.items()}
     out["rate"] = rate
     return out
@@ -928,9 +958,9 @@ async def export_bytes(con, f: Filters, cats: list[int], attrs: dict,
     sn = await snapshots(con, f.date_to)
     if not sn["b"] and not sn["w"]:
         return None
-    br_rows, wh_rows, prod = await _sku_level(con, f, cats, attrs, sn)
+    br_rows, wh_rows, prod, zs = await _sku_level(con, f, cats, attrs, sn)
     meta = {"branches": base["meta"]["branches"], "wh": base["meta"]["wh"]}
-    lists = build_lists(br_rows, wh_rows, prod, meta, base["rate"], norm_days, trig_days)
+    lists = build_lists(br_rows, wh_rows, prod, meta, base["rate"], norm_days, trig_days, zs)
     d = sn["b"] or sn["w"]
     return build_xlsx(base, lists, br_rows, prod), f"Qoldiq_signallari_{d.strftime('%d.%m.%Y')}.xlsx"
 

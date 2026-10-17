@@ -1696,7 +1696,7 @@ async function renderMap(host) {
 }
 function skuRows(items, locType) {
   return items.map(x => {
-    const lv = x.days == null ? null : x.days < 3 ? 0 : x.days < 7 ? 1 : x.days < 15 ? 2 : null;
+    const lv = x.level != null ? x.level : null;      // server darajasi (🟡 — savdo tezlashgan bo'lsa)
     const alt = x.other && x.other.length ? `<span>boshqa omborda: ${x.other.map(o => `${esc(o.name.replace(' омбори', ''))} ${nf0.format(o.qty)}`).join(', ')}</span>` : '';
     return `<div class="al ${lv == null ? 'l9' : 'l' + lv}"><span class="w"><b>${esc(x.name)}</b>${dPill(x.days)}</span>
       <span class="k"><span>${locType === 'w' ? 'omborda' : 'qoldiq'} <b>${nf0.format(x.stock)}</b></span>${locType === 'w' ? `<span>filiallarda ${nf0.format(x.br_stock)}</span>` : (x.wh_stock ? `<span>omborida ${nf0.format(x.wh_stock)}</span>` : '')}
@@ -1882,7 +1882,7 @@ async function renderListView(host, D_) {
   } else {
     const n = D_.show.list || 30, items = d.items || [];
     body = items.length ? items.slice(0, n).map(x => `<div class="li"><span class="r1"><span class="n">${esc(x.name)}</span><span class="v">${MQ() ? nf0.format(x.stock) + ' dona' : money(x.value)}</span></span>
-      <span class="m">${q.list === 'over' ? `<span class="qp hi">${nf0.format(x.days)} kunga</span>` : `<span class="qp hi">${d.idle_days}+ kun sotuvsiz</span>`}<span><b>${nf0.format(x.stock)}</b> dona</span>
+      <span class="m">${q.list === 'over' ? `<span class="qp hi">${x.days == null ? '30 kun sotuvsiz' : nf0.format(x.days) + ' kunga'}</span>` : `<span class="qp hi">${d.idle_days}+ kun sotuvsiz</span>`}<span><b>${nf0.format(x.stock)}</b> dona</span>
         <span>${esc(shortW(x.zone))}${x.wh_stock ? ` · omborda ${nf0.format(x.wh_stock)}` : ''}${x.branches ? ` · ${x.branches} filialda ${nf0.format(x.br_stock)}` : ''}</span></span>
       ${x.top.length ? `<span class="m"><span>eng ko'p: ${x.top.map(t => `${esc(t.name.replace(/ filiali$/, ''))} — ${nf0.format(t.qty)}`).join(', ')}${x.branches > x.top.length ? ' …' : ''}</span></span>` : ''}</div>`).join('')
       + (items.length > n ? `<button class="more" data-more="list">Yana ${nf0.format(items.length - n)} ta ▾</button>` : '')

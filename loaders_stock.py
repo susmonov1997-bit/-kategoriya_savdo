@@ -361,10 +361,11 @@ async def load_wh_stock(pool: asyncpg.Pool, data: bytes, file_name: str | None =
                         .agg(qty=("qty", "sum"), value_usd=("value_usd", "sum"), vn=("value_usd", "count")).reset_index())
                 ok["value_usd"] = ok["value_usd"].where(ok["vn"] > 0)
                 pend = (df[~okm].groupby(["loc_key", "pid"], sort=False)
-                          .agg(qty=("qty", "sum"), value_usd=("value_usd", "sum"),
+                          .agg(qty=("qty", "sum"), value_usd=("value_usd", "sum"), vn=("value_usd", "count"),
                                loc_name=("wh_name", "first"), name=(W_NAME, "first"), cat=(W_CAT, "first"),
                                wid=("wid", "first"))
                           .reset_index())
+                pend["value_usd"] = pend["value_usd"].where(pend["vn"] > 0)
                 file_wids = sorted({int(w) for w in df_all["wid"].dropna()})
                 rr = await con.fetchrow(
                     """WITH x AS (DELETE FROM stock_wh WHERE snap_date=$1 AND warehouse_id = ANY($2::int[]) RETURNING qty)

@@ -65,9 +65,11 @@ async def summary_text(pool: asyncpg.Pool) -> str | None:
     new2 = sum(1 for x in sig if x["level"] == 2 and x["new"])
     tb = sum(r[3] for r in base["b"])
     tw = sum(r[3] for r in base["w"])
-    q = sum(r[5] for r in base["b"])
+    # tarmoq savdosi: ombor qoldig'i bo'lsa — omborlar zonasi (barcha filiallar), bo'lmasa — qoldiq faylidagi filiallar
+    q = sum(r[5] for r in base["w"]) if base["w"] else sum(r[5] for r in base["b"])
+    q7 = sum(r[8] for r in base["w"]) if base["w"] else sum(r[8] for r in base["b"])
     val = sum(r[4] for r in base["b"]) + sum(r[4] for r in base["w"]) * base["rate"]
-    days = S._days(tb + tw, q)
+    days = S._days_eff(tb + tw, q, q7)
     d = snap.get("b") or snap.get("w")
     lines = [f"📦 <b>Qoldiq · {d[8:10]}.{d[5:7]}</b> · barcha kategoriyalar",
              f"Jami: <b>{_money(val)}</b> · {_n(tb + tw)} dona" + (f" · {_n(days)} kunga" if days else ""), "",
