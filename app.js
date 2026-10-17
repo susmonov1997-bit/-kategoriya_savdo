@@ -1498,7 +1498,7 @@ async function init() {
 // ============================================================ QOLDIQ
 // «Qoldiq» tabi (⚠ Signallar · ▦ Xarita · 📦 Qoldiq) va boshqa tablardagi «📦 qoldiq» qatorlari.
 
-const QS = {view: 'sig', level: null, loc: 'all', limit: 30, rows: 'w', wid: null, mapCat: null,
+const QS = {mapVal: 'days', view: 'sig', level: null, loc: 'all', limit: 30, rows: 'w', wid: null, mapCat: null,
             detail: null, sig: null, map: null, ov: null, seq: 0, scrollY: 0};
 const STK = {list: null, top: null};
 const LV = [{n: 'Tugadi', s: '< 3 kun', i: '🔴'}, {n: 'Tugayapti', s: '< 7 kun', i: '🟠'}, {n: 'Kamaymoqda', s: 'savdo tezlashgan', i: '🟡'}];
@@ -1512,7 +1512,7 @@ const lvPill = (lv, d) => `<span class="qp l${lv}">${d == null ? '—' : nf0.for
 // ---------------------------------------------------------------- boshqa tablardagi qator
 function stockLine(x, sku) {
   if (!x) return '';
-  const val = sku ? `<b>${nf0.format(x.stock)}</b> dona` : `<b>${money(x.value)}</b>`;
+  const val = sku || MQ() ? `<b>${nf0.format(x.stock)}</b> dona` : `<b>${money(x.value)}</b>`;
   const oos = x.oos ? (sku ? `<span>${nf0.format(x.oos)} filialda yo'q</span>` : `<span>OOS <b>${nf0.format(x.oos)}</b></span>`) : '';
   return `<span class="qline"><span>📦 qoldiq ${val}</span>${dPill(x.days)}${oos}</span>`;
 }
@@ -1619,7 +1619,7 @@ function sigCard(x) {
   return `<button class="al l${x.level}" data-t="${x.t}" data-id="${x.id}" data-c="${x.cat_id}" data-b="${esc(x.brand)}">
     <span class="p">${ic} <b>${esc(x.name)}</b>${x.sub ? ` · ${esc(x.sub)}` : ''} · ${esc(x.cat || '')}${x.new ? '<span class="nw2">yangi</span>' : ''}</span>
     <span class="w"><b>${esc(x.brand)}</b>${lvPill(x.level, x.days)}</span>
-    <span class="k">${lines.map(l => `<span>${l}</span>`).join('')}<span><b>≈ ${money(x.risk)}</b>/kun xavf</span></span></button>`;
+    <span class="k">${lines.map(l => `<span>${l}</span>`).join('')}<span>${MQ() ? `savdo <b>≈ ${nf1.format(x.sales_day || 0)}</b> dona/kun` : `<b>≈ ${money(x.risk)}</b>/kun xavf`}</span></span></button>`;
 }
 async function renderSignals(host, more) {
   const seq = ++QS.seq;
@@ -1666,17 +1666,20 @@ async function renderMap(host) {
   const cats = d.categories.length > 1 ? `<label class="sortl">Kategoriya <select id="qCat">${d.categories.map(c =>
     `<option value="${c.id}" ${c.id === d.category ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>` : `<b>${esc(d.category_name || '')}</b>`;
   const head = `<tr><th></th>${d.brands.map(b => `<th title="${esc(b)}">${esc(b)}</th>`).join('')}</tr>`;
+  const qv = QS.mapVal === 'qty';
+  const cv = (row, b) => qv ? (row.qty && row.qty[b] != null ? nf0.format(row.qty[b]) : '—') : hmTxt(row.cells[b]);
   const rows = d.rows.map(r => `<tr><td class="n">${d.rows_kind === 'w' ? `<button class="lnk" data-wid="${r.id}">${esc((r.name || '').replace(/ омбори$/, ''))} ›</button>` : esc(r.name)}</td>
-    ${d.brands.map(b => `<td class="${hmCls(r.cells[b])}" data-r="${r.id}" data-b="${esc(b)}">${hmTxt(r.cells[b])}</td>`).join('')}</tr>`).join('');
-  const tot = `<tr class="tot2"><td class="n"><b>Jami</b></td>${d.brands.map(b => `<td class="${hmCls(d.total.cells[b])}">${hmTxt(d.total.cells[b])}</td>`).join('')}</tr>`;
+    ${d.brands.map(b => `<td class="${hmCls(r.cells[b])}" data-r="${r.id}" data-b="${esc(b)}">${cv(r, b)}</td>`).join('')}</tr>`).join('');
+  const tot = `<tr class="tot2"><td class="n"><b>Jami</b></td>${d.brands.map(b => `<td class="${hmCls(d.total.cells[b])}">${cv(d.total, b)}</td>`).join('')}</tr>`;
   host.innerHTML = `<div class="hint">${snapNote(d.snap)}</div>
     <div class="qchips">${rk.map(([k, l]) => `<button data-rows="${k}" aria-pressed="${QS.rows === k && !(k === 'b' && QS.wid)}">${l}</button>`).join('')}</div>
-    <div class="ctl">${cats}</div>
+    <div class="ctl">${cats}<span class="seg mini" id="qMv"><button data-mv="days" aria-pressed="${!qv}">Kun</button><button data-mv="qty" aria-pressed="${qv}">Dona</button></span></div>
     ${QS.wid ? `<div class="bc2"><button class="tchip back" id="qWidBack">‹ Omborlar</button><span>${esc(d.wh_name || '')} filiallari</span></div>` : ''}
     ${d.rows.length && d.brands.length ? `<div class="card hmw"><table class="hm">${head}${rows}${tot}</table></div>` : `<div class="card"><div class="empty">Bu kategoriyada qoldiq yo'q</div></div>`}
     <div class="lg"><span><i class="h0"></i>&lt;3 kun</span><span><i class="h1"></i>3–7</span><span><i class="h2"></i>8–14</span><span><i class="h3"></i>me'yorda</span><span><i class="h5"></i>sotilmaydi</span></div>
-    <p class="foot">Katakda — necha kunga yetadi: qoldiq ÷ kunlik savdo (30 kunlik va oxirgi 7 kunlik sur'atdan qaysi biri tez bo'lsa). Ombor qatorida — ombor qoldig'i ÷ u ta'minlaydigan filiallar savdosi. Ombor nomini bossangiz — filiallari; katakni bossangiz — SKU'lar.</p>`;
+    <p class="foot">${qv ? `Katakda — qoldiq, dona (${d.rows_kind === 'w' ? "ombor qatorida — faqat ombordagi qoldiq" : "filiallardagi qoldiq"}); rangi — necha kunga yetishi.` : "Katakda — necha kunga yetadi: qoldiq ÷ kunlik savdo (30 kunlik va oxirgi 7 kunlik sur'atdan qaysi biri tez bo'lsa)."} Ombor qatorida — ombor qoldig'i ÷ u ta'minlaydigan filiallar savdosi. Ombor nomini bossangiz — filiallari; katakni bossangiz — SKU'lar.</p>`;
   host.querySelectorAll('[data-rows]').forEach(b => b.onclick = () => { QS.rows = b.dataset.rows; QS.wid = null; QS.map = null; renderMap(host); });
+  host.querySelectorAll('[data-mv]').forEach(b => b.onclick = () => { if (QS.mapVal === b.dataset.mv) return; QS.mapVal = b.dataset.mv; renderMap(host); });
   const qc = $('qCat'); if (qc) qc.onchange = () => { QS.mapCat = +qc.value; QS.map = null; renderMap(host); };
   host.querySelectorAll('[data-wid]').forEach(b => b.onclick = () => { QS.rows = 'b'; QS.wid = +b.dataset.wid; QS.map = null; renderMap(host); });
   const wb = $('qWidBack'); if (wb) wb.onclick = () => { QS.rows = 'w'; QS.wid = null; QS.map = null; renderMap(host); };
@@ -1691,7 +1694,7 @@ function skuRows(items, locType) {
     const alt = x.other && x.other.length ? `<span>boshqa omborda: ${x.other.map(o => `${esc(o.name.replace(' омбори', ''))} ${nf0.format(o.qty)}`).join(', ')}</span>` : '';
     return `<div class="al ${lv == null ? 'l9' : 'l' + lv}"><span class="w"><b>${esc(x.name)}</b>${dPill(x.days)}</span>
       <span class="k"><span>${locType === 'w' ? 'omborda' : 'qoldiq'} <b>${nf0.format(x.stock)}</b></span>${locType === 'w' ? `<span>filiallarda ${nf0.format(x.br_stock)}</span>` : (x.wh_stock ? `<span>omborida ${nf0.format(x.wh_stock)}</span>` : '')}
-      ${x.oos ? `<span>${locType === 'b' ? 'tugagan' : `${nf0.format(x.oos)} filialda yo'q`}</span>` : ''}${x.risk ? `<span><b>${money(x.risk)}</b>/kun</span>` : ''}${alt}</span></div>`;
+      ${x.oos ? `<span>${locType === 'b' ? 'tugagan' : `${nf0.format(x.oos)} filialda yo'q`}</span>` : ''}${x.risk ? `<span>${MQ() ? `<b>${nf1.format(x.sales_day || 0)}</b> dona/kun` : `<b>${money(x.risk)}</b>/kun`}</span>` : ''}${alt}</span></div>`;
   }).join('');
 }
 async function openCellSheet(q, title) {
@@ -1801,15 +1804,16 @@ async function renderOverview(host) {
   const bar = days => `<span class="dbar"><i style="left:${Math.min(100, (days == null ? 100 : days / 60 * 100)).toFixed(0)}%"></i></span>`;
   host.innerHTML = `${linkWarn(d.links)}<div class="hint">${snapNote(d.snap)}</div>
     <div class="qtot"><div class="r1"><span>Jami qoldiq</span><span class="pl">${dTxtK(t.days)}</span></div>
-      <div class="big">${money(t.br_value + t.wh_value)}</div>
-      <div class="g3">${gc('Filiallar', money(t.br_value), `${nf0.format(t.br_stock)} dona · tannarx`)}${gc('Omborlar', money(t.wh_value), `${nf0.format(t.wh_stock)} dona · A narx×kurs`)}${gc('OOS', nf0.format(t.oos), 'filial×SKU')}</div></div>
+      <div class="big">${MQ() ? nf0.format(t.br_stock + t.wh_stock) + ' dona' : money(t.br_value + t.wh_value)}</div>
+      <div class="g3">${MQ() ? gc('Filiallar', `${nf0.format(t.br_stock)} dona`, money(t.br_value)) + gc('Omborlar', `${nf0.format(t.wh_stock)} dona`, money(t.wh_value))
+        : gc('Filiallar', money(t.br_value), `${nf0.format(t.br_stock)} dona · tannarx`) + gc('Omborlar', money(t.wh_value), `${nf0.format(t.wh_stock)} dona · A narx×kurs`)}${gc('OOS', nf0.format(t.oos), 'filial×SKU')}</div></div>
     ${listCards(d.lists)}
     <div class="sec"><h2>Omborlar</h2><span class="hint">o'z filiallari savdosiga</span></div>
-    ${d.warehouses.map(w => `<button class="li can qw" data-w="${w.id}"><span class="r1"><span class="n">🏬 ${esc(w.name)}</span><span class="v">${money(w.value)}</span></span>
+    ${d.warehouses.map(w => `<button class="li can qw" data-w="${w.id}"><span class="r1"><span class="n">🏬 ${esc(w.name)}</span><span class="v">${MQ() ? nf0.format(w.stock + w.br_stock) + ' dona' : money(w.value)}</span></span>
       <span class="m">${dPill(w.days)}<span>omborda <b>${nf0.format(w.stock)}</b> dona</span><span>filiallarda ${dTxtK(w.br_days)}</span><span>OOS ${nf0.format(w.oos)}</span></span>
       <span class="m"><span>${esc(w.regions.join(', '))}</span></span>${bar(w.days)}</button>`).join('')}
     <div class="sec"><h2>Hududlar</h2><span class="hint">filial qoldig'i · kam qolgani tepada</span></div>
-    ${d.regions.map(r => `<button class="li can qr" data-r="${r.id}"><span class="r1"><span class="n">${esc(r.name)}</span><span class="v">${money(r.value)}</span></span>
+    ${d.regions.map(r => `<button class="li can qr" data-r="${r.id}"><span class="r1"><span class="n">${esc(r.name)}</span><span class="v">${MQ() ? nf0.format(r.stock) + ' dona' : money(r.value)}</span></span>
       <span class="m">${dPill(r.days)}<span><b>${nf0.format(r.stock)}</b> dona</span><span>${r.branches} filial</span><span>OOS ${nf0.format(r.oos)}</span></span>${bar(r.days)}</button>`).join('')}
     <p class="foot">Filial qoldig'i — tannarxda (Kirim So'm), ombor qoldig'i — «A сектор» narxi × kurs (${nf0.format(d.rate || 0)}). Necha kunga yetadi — qoldiq ÷ 30 kunlik o'rtacha savdo.</p>`;
   host.querySelectorAll('[data-list]').forEach(b => b.onclick = () => openDetail({list: b.dataset.list}));
@@ -1821,8 +1825,8 @@ function listCards(l) {
   if (!l) return '';
   return `<div class="qlc">
     <button class="qlc-s" data-list="send"><span class="t">🚚 Ombordan yuborish</span><b>${nf0.format(l.send.positions)}</b><span>poz · ${nf0.format(l.send.qty)} dona</span></button>
-    <button class="qlc-o" data-list="over"><span class="t">📈 Ortiqcha</span><b>${money(l.over.value)}</b><span>&gt; 90 kun · ${nf0.format(l.over.positions)} poz</span></button>
-    <button class="qlc-i" data-list="idle"><span class="t">💤 Harakatsiz</span><b>${money(l.idle.value)}</b><span>60 kun sotuvsiz · ${nf0.format(l.idle.positions)}</span></button></div>`;
+    <button class="qlc-o" data-list="over"><span class="t">📈 Ortiqcha</span><b>${MQ() ? nf0.format(l.over.qty || 0) + ' dona' : money(l.over.value)}</b><span>&gt; 90 kun · ${nf0.format(l.over.positions)} poz</span></button>
+    <button class="qlc-i" data-list="idle"><span class="t">💤 Harakatsiz</span><b>${MQ() ? nf0.format(l.idle.qty || 0) + ' dona' : money(l.idle.value)}</b><span>60 kun sotuvsiz · ${nf0.format(l.idle.positions)}</span></button></div>`;
 }
 async function stockExport(btn) {
   const t = btn.textContent; btn.disabled = true; btn.textContent = 'Tayyorlanmoqda…';
@@ -1864,14 +1868,14 @@ async function renderListView(host, D_) {
       const open = D_.open.has(String(g.id)), n = D_.show[g.id] || 10;
       const items = open ? g.items.slice(0, n).map(x => `<div class="li"><span class="r1"><span class="n">${esc((D_.by || 'w') === 'b' ? x.name : x.branch)}</span><span class="v">+${nf0.format(x.send)} dona</span></span>
         <span class="m"><span>${esc((D_.by || 'w') === 'b' ? `${shortW(x.wname)} omboridan` : x.name)}</span></span>
-        <span class="m">${dPill(x.days)}<span>bor <b>${nf0.format(x.have)}</b></span><span>me'yor <b>${nf0.format(x.norm)}</b></span><span>omborda <b>${nf0.format(x.wh)}</b></span>${x.risk ? `<span>savdo ≈ ${money(x.risk)}/kun</span>` : ''}</span></div>`).join('') : '';
+        <span class="m">${dPill(x.days)}<span>bor <b>${nf0.format(x.have)}</b></span><span>me'yor <b>${nf0.format(x.norm)}</b></span><span>omborda <b>${nf0.format(x.wh)}</b></span>${x.risk ? `<span>savdo ≈ ${MQ() ? nf1.format(x.sd || 0) + ' dona' : money(x.risk)}/kun</span>` : ''}</span></div>`).join('') : '';
       const more = open && g.items.length > n ? `<button class="more" data-more="${esc(g.id)}">Yana ${nf0.format(g.items.length - n)} ta ▾</button>` : '';
       return `<button class="whh" data-open="${esc(g.id)}"><b>${open ? '▾' : '▸'} ${(D_.by || 'w') === 'b' ? '🏪' : '🏬'} ${esc(g.name)}</b><span>${nf0.format(g.positions)} poz · ${nf0.format(g.qty)} dona</span></button>${items}${more}`;
     }).join('') : `<div class="card"><div class="empty">Yuboriladigan tovar yo'q — filiallarda yetarli yoki omborda ham yo'q 👍</div></div>`;
     body += `<p class="foot">Filialda ${d.send_days} kundan kamga yetadigan SKU, uning omborida bor. Me'yor — ${esc(d.norm)} (30 kunlik savdo × 2). Yuboriladi = me'yor − bor, ombordagidan oshmaydi; ombor qoldig'i eng kam qolgan filiallarga birinchi taqsimlanadi.</p>`;
   } else {
     const n = D_.show.list || 30, items = d.items || [];
-    body = items.length ? items.slice(0, n).map(x => `<div class="li"><span class="r1"><span class="n">${esc(x.name)}</span><span class="v">${money(x.value)}</span></span>
+    body = items.length ? items.slice(0, n).map(x => `<div class="li"><span class="r1"><span class="n">${esc(x.name)}</span><span class="v">${MQ() ? nf0.format(x.stock) + ' dona' : money(x.value)}</span></span>
       <span class="m">${q.list === 'over' ? `<span class="qp hi">${nf0.format(x.days)} kunga</span>` : `<span class="qp hi">${d.idle_days}+ kun sotuvsiz</span>`}<span><b>${nf0.format(x.stock)}</b> dona</span>
         <span>${esc(shortW(x.zone))}${x.wh_stock ? ` · omborda ${nf0.format(x.wh_stock)}` : ''}${x.branches ? ` · ${x.branches} filialda ${nf0.format(x.br_stock)}` : ''}</span></span>
       ${x.top.length ? `<span class="m"><span>eng ko'p: ${x.top.map(t => `${esc(t.name.replace(/ filiali$/, ''))} — ${nf0.format(t.qty)}`).join(', ')}${x.branches > x.top.length ? ' …' : ''}</span></span>` : ''}</div>`).join('')
@@ -1880,7 +1884,8 @@ async function renderListView(host, D_) {
     body += `<p class="foot">Zona — ombor va u ta'minlaydigan filiallar birga. ${q.list === 'over' ? `Ortiqcha — zona qoldig'i ${d.over_days} kundan ko'pga yetadi (30 kunlik savdo bo'yicha).` : `Harakatsiz — qoldig'i bor, ${d.idle_days} kunda zonada bitta ham sotilmagan.`} Qiymati: filialda tannarx, omborda A narx × kurs.</p>`;
   }
   const tot = q.list === 'send' ? `${nf0.format(d.summary.send.positions)} poz · ${nf0.format(d.summary.send.qty)} dona`
-    : q.list === 'over' ? `${nf0.format(d.summary.over.positions)} poz · ${money(d.summary.over.value)}` : `${nf0.format(d.summary.idle.positions)} poz · ${money(d.summary.idle.value)}`;
+    : q.list === 'over' ? `${nf0.format(d.summary.over.positions)} poz · ${MQ() ? nf0.format(d.summary.over.qty || 0) + ' dona' : money(d.summary.over.value)}`
+    : `${nf0.format(d.summary.idle.positions)} poz · ${MQ() ? nf0.format(d.summary.idle.qty || 0) + ' dona' : money(d.summary.idle.value)}`;
   host.innerHTML = `<button class="tchip back" id="qBack">‹ Orqaga</button>
     <div class="qdh"><h2>${LIST_T[q.list]}</h2><div class="hint">${tot} · ${snapNote(d.snap)}</div></div>
     <div class="seg big">${segs}</div>${body}

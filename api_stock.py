@@ -374,7 +374,7 @@ async def stock_map(req: StockReq, request: Request, user: User = Depends(curren
             x[2] += q7
     rows, tot = [], {}
     for key, cs in cells.items():
-        row = {"id": key, "name": names.get(key), "cells": {}}
+        row = {"id": key, "name": names.get(key), "cells": {}, "qty": {b: round(cs[b][0]) for b in brands if b in cs}}
         s_all = q_all = 0.0
         for b in brands:
             v = cs.get(b)
@@ -393,7 +393,8 @@ async def stock_map(req: StockReq, request: Request, user: User = Depends(curren
         row["worst"] = min([d for d in row["cells"].values() if d is not None and d >= 0] or [1e9])
         rows.append(row)
     rows.sort(key=lambda r: (r["worst"], r["name"] or ""))
-    jami = {"cells": {b: (_r(_days_eff(*tot[b])) if b in tot and tot[b][1] > 0 else None) for b in brands}}
+    jami = {"cells": {b: (_r(_days_eff(*tot[b])) if b in tot and tot[b][1] > 0 else None) for b in brands},
+            "qty": {b: round(tot[b][0]) for b in brands if b in tot}}
     return {"snap": base["snap"], "category": cat, "category_name": meta["cats"].get(cat),
             "categories": [{"id": k, "name": v} for k, v in sorted(meta["cats"].items(), key=lambda x: x[1])],
             "brands": brands, "rows": rows, "total": jami, "rows_kind": req.rows, "wid": req.wid,
@@ -753,7 +754,7 @@ def build_lists(br_rows, wh_rows, prod: dict, meta: dict, rate: float) -> dict:
         g["items"].append({"branch": bi.get("name"), "region": bi.get("region"), "pid": r["product_id"],
                            "name": p.get("name"), "brand": p.get("brand"), "cat": p.get("cat"),
                            "have": r["sq"], "norm": norm, "send": send, "wh": avail[(wid, r["product_id"])],
-                           "days": round(days, 1), "risk": round(r["a30"] / WINDOW)})
+                           "days": round(days, 1), "risk": round(r["a30"] / WINDOW), "sd": round(q30 / WINDOW, 2)})
     send_groups = sorted(groups.values(), key=lambda g: -g["qty"])
     # --- zona (ombor + filiallari) × SKU
     zone: dict[tuple, dict] = {}
@@ -793,8 +794,8 @@ def build_lists(br_rows, wh_rows, prod: dict, meta: dict, rate: float) -> dict:
         "send": send_groups, "over": over, "idle": idle,
         "summary": {"send": {"positions": sum(g["positions"] for g in send_groups), "qty": sum(g["qty"] for g in send_groups),
                              "warehouses": len(send_groups)},
-                    "over": {"positions": len(over), "value": sum(x["value"] for x in over)},
-                    "idle": {"positions": len(idle), "value": sum(x["value"] for x in idle)}},
+                    "over": {"positions": len(over), "value": sum(x["value"] for x in over), "qty": sum(x["stock"] for x in over)},
+                    "idle": {"positions": len(idle), "value": sum(x["value"] for x in idle), "qty": sum(x["stock"] for x in idle)}},
         "norm": f"{NORM_MONTHS} oylik savdo", "send_days": SEND_DAYS, "over_days": OVER_DAYS, "idle_days": IDLE_DAYS,
     }
 
