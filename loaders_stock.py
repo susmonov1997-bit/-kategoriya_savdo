@@ -2,8 +2,8 @@
 
 Filial qoldig'i (Tovar_qoldigi_17.10.xlsx):
     majburiy: Filial, Tovar Id, Qoldiq
-    ixtiyoriy: Hudud (yoki Худуд), Kirim So'm (yoki «кирим сум»), Sotish narxi, Tovar Variant nomi, Tovar kategoriyasi, Brand
-    (registr farqi muhim emas: «Tovar ID» = «Tovar Id»)
+    ixtiyoriy: Hudud (yoki Худуд), Kirim narxi + Valyutasi, Sotish narxi, Tovar Variant nomi, Tovar kategoriyasi, Brand
+    (registr farqi muhim emas: «Tovar ID» = «Tovar Id»). Tannarx = Kirim narxi × bot kursi (so'mda bo'lsa — o'zi).
     (Limit, Vitrina, Harakatsiz muddati … hozircha o'qilmaydi — bo'lmasa ham muammo yo'q)
 Ombor qoldig'i (Ombor qoldig'i 17-10-2026.xlsx):
     majburiy: ID, Омбор, Мижоз учун қолдиқ (rezervsiz)
@@ -33,10 +33,10 @@ from loaders_common import EXCEL_ENGINE, LoaderError, clean_text, name_key, read
 
 # --- filial qoldig'i ---
 B_BRANCH, B_ID, B_QTY = "Filial", "Tovar Id", "Qoldiq"
-B_REGION, B_COST, B_PRICE = "Hudud", "Kirim So'm", "Sotish narxi"
+B_REGION, B_COST, B_CUR, B_PRICE = "Hudud", "Kirim narxi", "Valyutasi", "Sotish narxi"
 B_NAME, B_CAT, B_BRAND = "Tovar Variant nomi", "Tovar kategoriyasi", "Brand"
 B_REQ = [B_BRANCH, B_ID, B_QTY]
-B_OPT = [B_REGION, B_COST, B_PRICE, B_NAME, B_CAT, B_BRAND]
+B_OPT = [B_REGION, B_COST, B_CUR, B_PRICE, B_NAME, B_CAT, B_BRAND]
 
 # --- ombor qoldig'i ---
 W_ID, W_WH, W_QTY = "ID", "Омбор", "Мижоз учун қолдиқ"
@@ -51,7 +51,6 @@ TZ = ZoneInfo("Asia/Tashkent")
 # Ustun nomining boshqa yozilishlari (registr va apostrof farqi name_key bilan o'zi tenglashadi: «Tovar ID» = «Tovar Id»)
 B_ALIASES = {
     B_REGION: ["Худуд"],
-    B_COST: ["кирим сум", "кирим сўм"],
 }
 _B_CANON = {name_key(c): c for c in B_REQ + B_OPT}
 _B_CANON.update({name_key(a): c for c, al in B_ALIASES.items() for a in al})
@@ -113,7 +112,9 @@ def date_from_name(file_name: str | None, ref: date | None = None) -> date | Non
         except ValueError:
             pass
     found = None
-    for m in _DATE_RE.finditer(file_name):
+    # har bir pozitsiyadan tekshiriladi («shablon2_19.10.2026»: «2_19» noto'g'ri sana — keyingi moslik yo'qolmasin)
+    ms = (_DATE_RE.match(file_name, i) for i in range(len(file_name)))
+    for m in (m for m in ms if m):
         d, mo, y = int(m.group(1)), int(m.group(2)), m.group(3)
         yy = (int(y) + 2000 if len(y) == 2 else int(y)) if y else ref.year
         try:
@@ -157,6 +158,7 @@ class StockReport:
     price_uzs: float = 0
     value_usd: float = 0
     rate: float | None = None
+    no_rate: bool = False
     by_loc: list[dict] = field(default_factory=list)       # [{name, qty, skus, value, parts}]
     replaced: dict = field(default_factory=dict)
     pending: dict = field(default_factory=dict)            # {rows, qty, skus}
@@ -244,20 +246,26 @@ def _parse_branch(data: bytes) -> tuple[pd.DataFrame, int, list[str], int]:
     zero = int((df["qty"] == 0).sum())
     df = df[df["qty"] != 0]
     df["pid"] = df["pid"].astype("int64")
+    # tannarx: «Kirim narxi» × bot kursi (qoldiq sanasidagi). «Valyutasi» so'm bo'lsa — narx o'zi (kurssiz).
     cost = _num(df[B_COST]) if B_COST in df.columns else pd.Series(float("nan"), index=df.index)
+    cur = df[B_CUR].map(lambda v: name_key(v) or "") if B_CUR in df.columns else pd.Series("", index=df.index)
+    is_sum = cur.str.contains("сум|сўм|so'm|som|sum|uzs", regex=True)
     price = _num(df[B_PRICE]) if B_PRICE in df.columns else pd.Series(float("nan"), index=df.index)
-    df["cost_uzs"] = df["qty"] * cost
+    df["cost_usd"] = (df["qty"] * cost).where(~is_sum)
+    df["cost_sum"] = (df["qty"] * cost).where(is_sum)
     df["price_uzs"] = df["qty"] * price
     for c in (B_REGION, B_NAME, B_CAT, B_BRAND):
         df[c] = df[c].map(clean_text) if c in df.columns else None
     df["br_name"] = df[B_BRANCH].map(clean_text)
     g = (df.groupby(["br_key", "pid"], sort=False)
-           .agg(qty=("qty", "sum"), cost_uzs=("cost_uzs", "sum"), cost_n=("cost_uzs", "count"),
+           .agg(qty=("qty", "sum"), cost_usd=("cost_usd", "sum"), usd_n=("cost_usd", "count"),
+                cost_sum=("cost_sum", "sum"), sum_n=("cost_sum", "count"),
                 price_uzs=("price_uzs", "sum"), price_n=("price_uzs", "count"),
                 br_name=("br_name", "first"), region=(B_REGION, "first"), name=(B_NAME, "first"),
                 cat=(B_CAT, "first"), brand=(B_BRAND, "first"))
            .reset_index())
-    g["cost_uzs"] = g["cost_uzs"].where(g["cost_n"] > 0)      # narx yo'q bo'lsa — NULL (0 emas)
+    g["cost_usd"] = g["cost_usd"].where(g["usd_n"] > 0)       # narx yo'q bo'lsa — NULL (0 emas)
+    g["cost_sum"] = g["cost_sum"].where(g["sum_n"] > 0)
     g["price_uzs"] = g["price_uzs"].where(g["price_n"] > 0)
     return g, total, errors, zero
 
@@ -277,6 +285,12 @@ async def load_branch_stock(pool: asyncpg.Pool, data: bytes, file_name: str | No
                 raise LoaderError("Faylda birorta ham to'g'ri qoldiq qatori yo'q")
             rep = StockReport("stock_branch", upload_id, d.isoformat(), src, rows_total=total, errors=errors,
                               zero_rows=zero, dates=[d.isoformat()])
+            rate = await con.fetchval("SELECT rate FROM fx_periods WHERE $1 >= valid_from AND $1 < valid_to", d)
+            rep.rate = float(rate) if rate else None
+            usd = g["cost_usd"] * (float(rate) if rate else float("nan"))
+            g["cost_uzs"] = usd.fillna(0) + g["cost_sum"].fillna(0)
+            g["cost_uzs"] = g["cost_uzs"].where(usd.notna() | g["cost_sum"].notna())
+            rep.no_rate = bool(not rate and g["cost_usd"].notna().any())
             async with con.transaction():
                 brs = {r["name_key"]: (r["id"], r["wh"]) for r in await con.fetch(
                     """SELECT b.name_key, b.id, w.name wh FROM branches b LEFT JOIN warehouses w ON w.id = b.warehouse_id""")}
@@ -462,7 +476,10 @@ def format_report(r: StockReport, max_items: int = 15) -> str:
                f"Sana: <b>{d}</b> ({src})",
                f"Qatorlar: {_fmt(r.rows_total)} → yuklandi: <b>{_fmt(r.rows_loaded)}</b>",
                f"Filiallar: <b>{r.locations}</b> · SKU: {_fmt(r.skus)} · jami <b>{_fmt(r.qty)}</b> dona",
-               f"Tannarxda: <b>{_mlrd(r.cost_uzs)}</b> · sotish narxida: {_mlrd(r.price_uzs)}"]
+               f"Tannarxda: <b>{_mlrd(r.cost_uzs)}</b> (kirim narxi × kurs "
+               f"{_fmt(r.rate) + ' so' + chr(39) + 'm/$' if r.rate else '—'}) · sotish narxida: {_mlrd(r.price_uzs)}"]
+        if r.no_rate:
+            out.append("⚠️ Shu sana uchun kurs topilmadi — dollardagi tannarx hisoblanmadi. Kursni yuklab, qoldiqni qayta yuklang.")
         if r.by_loc:
             out += ["", "<b>Omborlar bo'yicha:</b>"]
             out += [f"  • {esc(x['name'])} — {x['branches']} filial · {_fmt(x['qty'])} dona · {_mlrd(x['value'])}"
