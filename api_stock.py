@@ -671,7 +671,7 @@ FROM agg {'LEFT JOIN wst ON wst.k = agg.k' if not no_wh else ''}""", *s.params)
                 if stock <= 0 and q <= 0:
                     continue
                 items[r["k"]] = {"stock": stock, "br": r["sq"], "wh": r["wq"], "days": _r(d), "oos": r["oos"],
-                                 "value": r["sv"] + r["wv"] * rate, "sell": r["sp"] + r["wv"] * rate,
+                                 "value": r["sv"] + r["wv"] * rate, "sell": r["sv"] + r["wv"] * rate,   # filial — tannarxda, ombor — A sektor narxida
                                  "lv": 0 if d is not None and d < LV_DAYS[0] else 1 if d is not None and d < LV_DAYS[1]
                                  else 3 if d is not None and d > 90 else 2 if d is not None and d < LV_DAYS[2] else 4}
             return {"snap": {k: (v.isoformat() if v else None) for k, v in sn.items()}, "items": items}

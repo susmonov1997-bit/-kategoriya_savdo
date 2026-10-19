@@ -227,6 +227,7 @@ function updMeta() {
   $('tmeta').textContent = parts.filter(Boolean).join(' · ');
 }
 function resetView() { st.showAll = false; TREE = null; for (const k of [...ROOTS.keys()]) if (k !== 'm') ROOTS.delete(k); }
+function resetTree() { st.showAll = false; TREE = null; }   // faqat Qirqim (Tovarlar tugunlari saqlanadi)
 
 // --- pastki oyna (umumiy)
 function openSheetBox(title, bodyHtml, footHtml) {
@@ -303,9 +304,11 @@ function openPeriodSheet() {
 
 async function openFilterSheet() {
   const host = openSheetBox('Filtr', `<div class="empty">Yuklanmoqda…</div>`);
+  const box = host.firstChild;                // kutish paytida yopilsa yoki boshqa oyna ochilsa — chizmaymiz
   let opts;
   try { opts = await api('options', filters()); }
-  catch (e) { closeSheet(); showError(e); return; }
+  catch (e) { if (host.firstChild === box) { closeSheet(); showError(e); } return; }
+  if (host.firstChild !== box) return;
   const draft = {}; for (const d in st.f) draft[d] = new Set(st.f[d]);
   const open = new Set();                     // sukut: barcha bo'limlar yig'ilgan
   for (const d in opts) opts[d].forEach(o => remember(d, o.key, o.label));
@@ -566,6 +569,8 @@ function dimOptions(sel, includeNone) {
 // Umumiy daraxt yadrosi: qirqim (m), xususiyat qiymatlari (a:…) va TOP-10 SKU (s:…) uchun bir xil
 const psig = path => path.map(p => `${p.dim}=${p.key}`).join('/');
 const nsig = n => n.root + '|' + psig(n.path);
+// s tuguni n ning o'zi yoki uning ichidami ("brand=LG" ≠ "brand=LG2")
+const isUnder = (s, n) => s === n || (n.endsWith('|') ? s.startsWith(n) : s.startsWith(n + '/'));
 const ROOTS = new Map();           // root id -> ildiz tugun
 const ORDERS = {drill: () => drillPath(), prod: () => prodPath(), loc: () => LOC_PATH};
 function childDimFor(path, order = 'drill') {
@@ -613,20 +618,26 @@ async function fetchChildren(node) {
   stockForNode(node);                        // «📦 qoldiq» qatori — fonda keladi
   return res;
 }
-async function buildTree() {
-  // ilova ochilganda hammasi yig'ilgan; foydalanuvchi ochgan bo'lsa (shu seansda) ochiq qoladi
+async function buildTree(cur = () => true) {
+  // ilova ochilganda hammasi yig'ilgan; foydalanuvchi ochgan bo'lsa (shu seansda) ochiq qoladi.
+  // Daraxt avval alohida quriladi; eskirgan so'rov (cur() = false) TREE'ni almashtirmaydi.
   const root = newRoot('m', 'drill', [], {label: 'Jami', depth: 0, open: false});
   root.open = OPEN.has(nsig(root));
   if (root.childDim) await fetchChildren(root);
-  TREE = root; FOCUS = root;
+  if (!cur()) return false;
+  let focus = root;
   const reopen = async node => {            // oldin ochilgan shoxlarni qayta ochish
     for (const ch of node.children || []) {
+      if (!cur()) return;
       if (OPEN.has(nsig(ch)) && ch.childDim) {
-        try { await fetchChildren(ch); ch.open = true; FOCUS = ch; await reopen(ch); } catch (e) { OPEN.delete(nsig(ch)); }
+        try { await fetchChildren(ch); ch.open = true; focus = ch; await reopen(ch); } catch (e) { OPEN.delete(nsig(ch)); }
       }
     }
   };
   await reopen(root);
+  if (!cur()) return false;
+  ROOTS.set('m', root); TREE = root; FOCUS = focus;
+  return true;
 }
 function findBySig(s) {
   const r = ROOTS.get(s.split('|')[0]); if (!r) return null;
@@ -646,7 +657,7 @@ async function toggleNode(node) {
   const main = node.root === 'm';
   if (node.open) {
     node.open = false;
-    if (main) { OPEN.delete(nsig(node)); if (FOCUS && nsig(FOCUS).startsWith(nsig(node))) FOCUS = findParent(node) || TREE; }
+    if (main) { OPEN.delete(nsig(node)); if (FOCUS && isUnder(nsig(FOCUS), nsig(node))) FOCUS = findParent(node) || TREE; }
     rerender(node.root); return;
   }
   node.loading = true; rerender(node.root);
@@ -815,7 +826,7 @@ function renderPivot(host) {
     return v; };
   let max = 0; for (const i of rowsShown) for (const c of cols) max = Math.max(max, val(i, c));
   const heat = v => { if (!v || !max) return ''; const t = v / max; const s = t > .8 ? '--h5' : t > .6 ? '--h4' : t > .4 ? '--h3' : t > .2 ? '--h2' : '--h1';
-    return `background:var(${s});${t > .6 ? 'color:#fff' : ''}`; };
+    return `background:var(${s});${t > .8 ? 'color:var(--h5t)' : t > .6 ? 'color:#fff' : ''}`; };
   const mln = v => (v ? (MQ() ? nf0.format(v) : nf1.format(v / 1e6)) : '·');
   const fmtCell = v => st.pvMode === 'amount' ? mln(v) : (v ? nf1.format(v) + '%' : '·');
   const lastCol = i => st.pvMode === 'amount' ? `<b>${mln(mval(i.current))}</b>` : st.pvMode === 'row' ? '<b>100%</b>' : `<b>${pct(i.share)}</b>`;
@@ -961,14 +972,14 @@ async function openSku(node) {
 const TOP_SORTS = () => [['m', MQ() ? 'Dona' : 'Summa'], [MQ() ? 'amount' : 'qty', MQ() ? 'Summa' : 'Dona'], ['margin', 'Gross'], ['delta', "O'zg."]];
 function topApiSort() { return st.topSort === 'm' || st.topSort === 'delta' ? st.metric : st.topSort; }
 async function loadTop() {
-  const F = filters(), seq = reqSeq.main;
+  const F = filters(), seq = reqSeq.main, ts = ++reqSeq.top, cur = () => seq === reqSeq.main && ts === reqSeq.top;
   $('top').classList.add('loading');
   try {
     const t = await api('breakdown', {...F, rows: 'sku', sort: topApiSort(), limit: st.topN});
-    if (seq !== reqSeq.main) return;
+    if (!cur()) return;
     renderTop(t);
-  } catch (e) { showError(e); }
-  finally { $('top').classList.remove('loading'); }
+  } catch (e) { if (cur()) showError(e); }
+  finally { if (cur()) $('top').classList.remove('loading'); }
 }
 function skuName(label, brand, strip) {
   let rest = String(label || '');
@@ -1027,7 +1038,7 @@ function renderTopBody() {
 }
 
 // ---------------------------------------------------------------- yuklash
-const reqSeq = {main: 0};
+const reqSeq = {main: 0, q: 0, top: 0};
 function showError(e) {
   if (e.status === 401 || e.status === 403) {
     $('app').hidden = true;
@@ -1076,6 +1087,7 @@ async function loadTab(t) {
   STALE[t] = false;
   const F = filters(), seq = reqSeq.main;
   if (t === 'Qirqim') {
+    const qs = ++reqSeq.q, cur = () => seq === reqSeq.main && qs === reqSeq.q;
     const host = $('breakdown'); host.classList.add('loading');
     if (!host.firstChild) host.innerHTML = `<div class="empty">Yuklanmoqda…</div>`;
     try {
@@ -1085,23 +1097,23 @@ async function loadTab(t) {
         if (!st.cols || st.cols === st.rows || !avail.includes(st.cols))
           st.cols = attrDims().find(d => d !== st.rows) || (cat().extra_dims || []).find(d => d !== st.rows) || (st.rows === 'brand' ? 'region' : 'brand');
         const bd = await api('breakdown', {...F, rows: st.rows, cols: st.cols, sort: apiSort(), desc: st.sort !== 'name', limit: 500});
-        if (seq !== reqSeq.main) return;
+        if (!cur()) return;
         BD = bd;
       } else {
-        await buildTree();
-        if (seq !== reqSeq.main) return;
+        if (!(await buildTree(cur))) return;
       }
       renderBreakdown();
-    } catch (e) { if (seq === reqSeq.main) { STALE[t] = true; showError(e); } }
-    finally { host.classList.remove('loading'); }
+    } catch (e) { if (cur()) { STALE[t] = true; showError(e); } }
+    finally { if (cur()) host.classList.remove('loading'); }
   } else if (t === 'Qoldiq') {
     loadStockTab();
   } else if (t === 'Tovarlar') {
     const secs = ['ablocks', 'top'].map($); secs.forEach(s => s.classList.add('loading'));
     if (!$('ablocks').firstChild) $('ablocks').innerHTML = `<div class="empty">Yuklanmoqda…</div>`;
     try {
+      const ts = ++reqSeq.top;
       const [attrs, top] = await Promise.all([api('attributes', F), api('breakdown', {...F, rows: 'sku', sort: topApiSort(), limit: st.topN})]);
-      if (seq !== reqSeq.main) return;
+      if (seq !== reqSeq.main || ts !== reqSeq.top) return;
       ATTR = attrs; renderAttrBlocks(); renderTop(top);
     } catch (e) { if (seq === reqSeq.main) { STALE[t] = true; showError(e); } }
     finally { secs.forEach(s => s.classList.remove('loading')); }
@@ -1115,8 +1127,8 @@ $('filBtn').onclick = openFilterSheet;
 const reloadQirqim = () => { STALE.Qirqim = true; loadTab('Qirqim'); };
 $('rowsDim').onchange = e => { st.rows = e.target.value; if (st.cols === st.rows) st.cols = ''; st.showAll = false; reloadQirqim(); };
 $('colsDim').onchange = e => { st.cols = e.target.value === st.rows ? '' : e.target.value; st.showAll = false; reloadQirqim(); };
-$('sortBy').onchange = e => { st.sort = e.target.value; resetView(); reloadQirqim(); };
-document.querySelectorAll('#brMode button').forEach(b => b.onclick = () => { if (st.mode === b.dataset.m) return; st.mode = b.dataset.m; resetView(); renderBreakdown(); reloadQirqim(); });
+$('sortBy').onchange = e => { st.sort = e.target.value; resetTree(); reloadQirqim(); };
+document.querySelectorAll('#brMode button').forEach(b => b.onclick = () => { if (st.mode === b.dataset.m) return; st.mode = b.dataset.m; resetTree(); renderBreakdown(); reloadQirqim(); });
 function syncBack() {
   const nb = $('navBack');
   if (nb) {
@@ -1269,7 +1281,7 @@ function renderPlan() {
     const fp = c.factAmt ? c.factG / c.factAmt * 100 : null, pp = c.planAmt && c.planG ? c.planG / c.planAmt * 100 : null;
     return fp == null && pp == null ? '' : `gross ${pct(fp)}${pp != null ? ` · reja ${pct(pp)}` : ''}`;
   };
-  const head = `<div class="card"><div class="sh"><span class="label">${esc(periodLabel())} · ${gnames.join(' + ')} · ${isG ? 'gross marja' : 'savdo'}</span>
+  const head = `<div class="card"><div class="sh"><span class="label">${esc(periodLabel())} · ${esc(gnames.join(' + '))} · ${isG ? 'gross marja' : 'savdo'}</span>
       ${T.expPct != null && mode !== 'ytd' ? `<span class="pill warn">kutilgan ${pct(T.expPct)}</span>` : ''}</div>
     <div class="plh">${ring(T.pct, 88, mode === 'year' ? 'yillikdan' : 'bajarildi')}
       <div class="tx"><span class="v">${money(T.fact)}</span>
@@ -1337,6 +1349,7 @@ function setTab(t) {
   window.scrollTo(0, 0);
   if (t === 'Umumiy') renderChart();                 // yashirin paytda kenglik 0 bo'ladi — qayta chizamiz
   if (STALE[t]) loadTab(t);
+  syncBack();
   try { tg && tg.HapticFeedback && tg.HapticFeedback.selectionChanged(); } catch (e) {}
 }
 document.querySelectorAll('#tabbar button').forEach(b => b.onclick = () => { if (TAB !== b.dataset.t) setTab(b.dataset.t); });
@@ -1567,7 +1580,8 @@ async function stockPlanCard(host) {
   const card = document.createElement('div');
   card.className = 'card qplan';
   card.innerHTML = `<div class="sh"><span class="label">📦 Qoldiq rejani bajarishga yetadimi?</span><span class="hint">${dm(r.snap && (r.snap.b || r.snap.w))} holati</span></div>
-    <div class="m2">Oy oxirigacha kerakli savdo — <b>${money(need)}</b> · filial + ombor qoldig'i (sotish narxida) — <b>${money(have)}</b></div>
+    <div class="m2">Oy oxirigacha kerakli savdo — <b>${money(need)}</b></div>
+    <div class="m2">Qoldiq — <b>${money(have)}</b> <span class="hint">filial tannarxda + ombor A sektor narxida</span></div>
     <div class="m2">${gap > 0 ? `<span class="qp lo">${money(gap)} yetmaydi</span>` : `<span class="qp ok">yetadi · zaxira ${money(-gap)}</span>`}
       ${short.length ? `<span class="hint">yetmaydi: ${short.slice(0, 4).map(x => esc(x.name)).join(', ')}${short.length > 4 ? ` +${short.length - 4}` : ''}</span>` : ''}</div>`;
   host.querySelector('.qplan')?.remove();

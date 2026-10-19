@@ -2,7 +2,7 @@
 
 Filial qoldig'i (Tovar_qoldigi_17.10.xlsx):
     majburiy: Filial, Tovar Id, Qoldiq
-    ixtiyoriy: Hudud (yoki Худуд), Kirim narxi + Valyutasi, Sotish narxi, Tovar Variant nomi, Tovar kategoriyasi, Brand
+    ixtiyoriy: Hudud (yoki Худуд), Kirim narxi + Valyutasi, Tovar Variant nomi, Tovar kategoriyasi, Brand
     (registr farqi muhim emas: «Tovar ID» = «Tovar Id»). Tannarx = Kirim narxi × bot kursi (so'mda bo'lsa — o'zi).
     (Limit, Vitrina, Harakatsiz muddati … hozircha o'qilmaydi — bo'lmasa ham muammo yo'q)
 Ombor qoldig'i (Ombor qoldig'i 17-10-2026.xlsx):
@@ -33,10 +33,10 @@ from loaders_common import EXCEL_ENGINE, LoaderError, clean_text, name_key, read
 
 # --- filial qoldig'i ---
 B_BRANCH, B_ID, B_QTY = "Filial", "Tovar Id", "Qoldiq"
-B_REGION, B_COST, B_CUR, B_PRICE = "Hudud", "Kirim narxi", "Valyutasi", "Sotish narxi"
+B_REGION, B_COST, B_CUR = "Hudud", "Kirim narxi", "Valyutasi"
 B_NAME, B_CAT, B_BRAND = "Tovar Variant nomi", "Tovar kategoriyasi", "Brand"
 B_REQ = [B_BRANCH, B_ID, B_QTY]
-B_OPT = [B_REGION, B_COST, B_CUR, B_PRICE, B_NAME, B_CAT, B_BRAND]
+B_OPT = [B_REGION, B_COST, B_CUR, B_NAME, B_CAT, B_BRAND]   # «Sotish narxi» o'qilmaydi
 
 # --- ombor qoldig'i ---
 W_ID, W_WH, W_QTY = "ID", "Омбор", "Мижоз учун қолдиқ"
@@ -250,10 +250,9 @@ def _parse_branch(data: bytes) -> tuple[pd.DataFrame, int, list[str], int]:
     cost = _num(df[B_COST]) if B_COST in df.columns else pd.Series(float("nan"), index=df.index)
     cur = df[B_CUR].map(lambda v: name_key(v) or "") if B_CUR in df.columns else pd.Series("", index=df.index)
     is_sum = cur.str.contains("сум|сўм|so'm|som|sum|uzs", regex=True)
-    price = _num(df[B_PRICE]) if B_PRICE in df.columns else pd.Series(float("nan"), index=df.index)
     df["cost_usd"] = (df["qty"] * cost).where(~is_sum)
     df["cost_sum"] = (df["qty"] * cost).where(is_sum)
-    df["price_uzs"] = df["qty"] * price
+    df["price_uzs"] = float("nan")                        # sotish narxi ishlatilmaydi (bazada NULL)
     for c in (B_REGION, B_NAME, B_CAT, B_BRAND):
         df[c] = df[c].map(clean_text) if c in df.columns else None
     df["br_name"] = df[B_BRANCH].map(clean_text)
@@ -477,7 +476,7 @@ def format_report(r: StockReport, max_items: int = 15) -> str:
                f"Qatorlar: {_fmt(r.rows_total)} → yuklandi: <b>{_fmt(r.rows_loaded)}</b>",
                f"Filiallar: <b>{r.locations}</b> · SKU: {_fmt(r.skus)} · jami <b>{_fmt(r.qty)}</b> dona",
                f"Tannarxda: <b>{_mlrd(r.cost_uzs)}</b> (kirim narxi × kurs "
-               f"{_fmt(r.rate) + ' so' + chr(39) + 'm/$' if r.rate else '—'}) · sotish narxida: {_mlrd(r.price_uzs)}"]
+               f"{_fmt(r.rate) + ' so' + chr(39) + 'm/$' if r.rate else '—'})"]
         if r.no_rate:
             out.append("⚠️ Shu sana uchun kurs topilmadi — dollardagi tannarx hisoblanmadi. Kursni yuklab, qoldiqni qayta yuklang.")
         if r.by_loc:
