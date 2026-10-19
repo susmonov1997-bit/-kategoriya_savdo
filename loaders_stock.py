@@ -2,7 +2,8 @@
 
 Filial qoldig'i (Tovar_qoldigi_17.10.xlsx):
     majburiy: Filial, Tovar Id, Qoldiq
-    ixtiyoriy: Hudud, Kirim So'm, Sotish narxi, Tovar Variant nomi, Tovar kategoriyasi, Brand
+    ixtiyoriy: Hudud (yoki Худуд), Kirim So'm (yoki «кирим сум»), Sotish narxi, Tovar Variant nomi, Tovar kategoriyasi, Brand
+    (registr farqi muhim emas: «Tovar ID» = «Tovar Id»)
     (Limit, Vitrina, Harakatsiz muddati … hozircha o'qilmaydi — bo'lmasa ham muammo yo'q)
 Ombor qoldig'i (Ombor qoldig'i 17-10-2026.xlsx):
     majburiy: ID, Омбор, Мижоз учун қолдиқ (rezervsiz)
@@ -18,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import io
 import json
 import re
 from dataclasses import dataclass, field
@@ -27,7 +29,7 @@ from zoneinfo import ZoneInfo
 import asyncpg
 import pandas as pd
 
-from loaders_common import LoaderError, clean_text, name_key, read_sheet_with_header
+from loaders_common import EXCEL_ENGINE, LoaderError, clean_text, name_key, read_sheet_with_header
 
 # --- filial qoldig'i ---
 B_BRANCH, B_ID, B_QTY = "Filial", "Tovar Id", "Qoldiq"
@@ -46,8 +48,45 @@ KEEP_DAILY_DAYS = 92      # shundan eski qoldiqdan har haftaning faqat oxirgi sa
 TZ = ZoneInfo("Asia/Tashkent")
 
 
+# Ustun nomining boshqa yozilishlari (registr va apostrof farqi name_key bilan o'zi tenglashadi: «Tovar ID» = «Tovar Id»)
+B_ALIASES = {
+    B_REGION: ["Худуд"],
+    B_COST: ["кирим сум", "кирим сўм"],
+}
+_B_CANON = {name_key(c): c for c in B_REQ + B_OPT}
+_B_CANON.update({name_key(a): c for c, al in B_ALIASES.items() for a in al})
+
+
+def _bcanon(h) -> str | None:
+    """Sarlavha → standart ustun nomi (filial qoldig'i uchun); tanilmasa None."""
+    return _B_CANON.get(name_key(h) or "")
+
+
 def is_branch_stock_file(headers: set[str]) -> bool:
-    return set(B_REQ) <= headers
+    return set(B_REQ) <= {_bcanon(h) for h in headers}
+
+
+def _read_branch(data: bytes) -> pd.DataFrame:
+    """Filial qoldig'i varag'ini o'qiydi: sarlavha qatorini topadi, ustunlarni standart nomlarga o'giradi."""
+    buf = io.BytesIO(data)
+    try:
+        head = pd.read_excel(buf, header=None, dtype=object, nrows=15, engine=EXCEL_ENGINE)
+    except Exception as e:  # noqa: BLE001
+        raise LoaderError(f"Excel faylni o'qib bo'lmadi: {e}") from e
+    hi = next((i for i in range(len(head)) if set(B_REQ) <= {_bcanon(c) for c in head.iloc[i].tolist()}), None)
+    if hi is None:
+        raise LoaderError("Sarlavha qatori topilmadi. Birinchi 15 qatorda quyidagi ustunlar bo'lishi kerak: "
+                          + ", ".join(B_REQ))
+    buf.seek(0)
+    try:
+        df = pd.read_excel(buf, header=hi, dtype=object, engine=EXCEL_ENGINE, usecols=lambda c: _bcanon(c) is not None)
+    except Exception as e:  # noqa: BLE001
+        raise LoaderError(f"Excel faylni o'qib bo'lmadi: {e}") from e
+    df.columns = [_bcanon(c) for c in df.columns]
+    df = df.loc[:, ~df.columns.duplicated()]           # ikkala yozilish bo'lsa — birinchisi olinadi
+    df["_excel_row"] = [hi + 2 + k for k in range(len(df))]
+    df = df.dropna(how="all", subset=[c for c in df.columns if c != "_excel_row"])
+    return df.reset_index(drop=True)
 
 
 def is_wh_stock_file(headers: set[str]) -> bool:
@@ -188,7 +227,7 @@ def _snap(file_name: str | None) -> tuple[date, str]:
 # Filial qoldig'i
 # =====================================================================
 def _parse_branch(data: bytes) -> tuple[pd.DataFrame, int, list[str], int]:
-    df, _ = read_sheet_with_header(data, B_REQ, 15, B_REQ + B_OPT)
+    df = _read_branch(data)
     missing = [c for c in B_REQ if c not in df.columns]
     if missing:
         raise LoaderError("Majburiy ustun(lar) yo'q: " + ", ".join(missing))
