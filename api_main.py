@@ -72,7 +72,10 @@ async def scope_ctx(con, f: Filters, user: User) -> tuple[list[int], dict, bool]
     kind, _, val = (f.scope or "").partition(":")
     if kind == "c":
         try:
-            cats = [r["id"] for r in await con.fetch("SELECT id FROM categories WHERE id = $1", int(val))]
+            cid = int(val)
+            if not 0 < cid < 2**31:
+                raise ValueError
+            cats = [r["id"] for r in await con.fetch("SELECT id FROM categories WHERE id = $1", cid)]
         except ValueError:
             raise HTTPException(422, "Noto'g'ri kategoriya")
     elif kind == "g":
@@ -335,11 +338,11 @@ async def _daily(f: Filters, request: Request, user: User = Depends(current_user
 
 
 # ---------------------------------------------------------------------------
-def _sort_key(item: dict, metric: str):
+def _sort_key(item: dict, metric: str, share_by: str = "amount"):
     if metric == "name":
         return (item["sort"] is None, item["sort"] or 0, item["label"] or "")
     k: Kpi = item["current"]
-    v = k.amount if metric == "share" else getattr(k, metric)
+    v = getattr(k, share_by) if metric == "share" else getattr(k, metric)
     return v if v is not None else float("-inf")
 
 
@@ -393,7 +396,7 @@ async def _breakdown(req: BreakdownRequest, request: Request, user: User = Depen
         i["share_pp"] = (round(i["share"] - i["prev_share"], 2)
                          if i["share"] is not None and i["prev_share"] is not None else None)
 
-    items.sort(key=lambda i: _sort_key(i, req.sort), reverse=req.desc and req.sort != "name")
+    items.sort(key=lambda i: _sort_key(i, req.sort, req.share_by), reverse=req.desc and req.sort != "name")
     if req.sort == "name" and req.desc:
         items.reverse()
     total_rows = len(items)
@@ -500,10 +503,11 @@ async def _attributes(f: Filters, request: Request, user: User = Depends(current
             has_cmp = compare_period(f) is not None
             items = [{"key": r["key"], "label": r["label"], "sort": r["sort"], "current": kpi_from(r, "c"),
                       "previous": kpi_from(r, "p") if has_cmp else None} for r in rows]
-            items = [i for i in items if i["current"].amount or i["current"].qty]
             sb = f.share_by
-            tc = sum(getattr(i["current"], sb) for i in items)
+            # o'tgan davr jami — joriy davrda sotilmagan qiymatlar ham (breakdown bilan bir xil maxraj)
             tp = sum(getattr(i["previous"], sb) for i in items) if has_cmp else 0
+            items = [i for i in items if i["current"].amount or i["current"].qty]
+            tc = sum(getattr(i["current"], sb) for i in items)
             selected = set()
             if dim == "brand":
                 selected = set(f.brands)

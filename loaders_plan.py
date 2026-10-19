@@ -18,6 +18,8 @@ Qoidalar:
 """
 from __future__ import annotations
 
+import re
+
 import asyncio
 import html
 import io
@@ -36,6 +38,7 @@ _MONTH_PREFIX = [("янв", "yan"), ("фев", "fev"), ("мар", "mar"), ("ап
                  ("июн", "iyun"), ("июл", "iyul"), ("авг", "avg"), ("сен", "sen"), ("окт", "okt"),
                  ("ноя", "noy"), ("дек", "dek")]
 _GROSS_WORDS = ("марж", "marj", "gross", "валов", "гросс")
+_SALES_WORDS = ("savdo", "продаж", "савдо", "сотув", "товарооборот")
 _SKIP_CATS = {"жами", "итого", "jami", "всего", "total"}
 
 
@@ -94,14 +97,20 @@ def _parse_sheet(name: str, raw: pd.DataFrame, scan_rows: int = 20) -> Sheet | N
         if isinstance(n, int) and 2000 <= n <= 2100:
             year = n
             break
-        for tok in str(v).replace(".", " ").split():
-            if tok.isdigit() and 2000 <= int(tok) <= 2100:
-                year = int(tok)
-                break
-        if year:
+        m_ = re.search(r"(?<!\d)(20\d\d)(?!\d)", str(v))      # «2026-yil», «Reja_2026», «2026 йил»
+        if m_:
+            year = int(m_.group(1))
             break
-    text = " ".join(above + [name]).lower()
-    metric = "gross" if any(w in text for w in _GROSS_WORDS) else "amount"
+    # ko'rsatkich: avval varaq nomi; nomda yo'q bo'lsa — sarlavha ustidagi matn, lekin «savdo» so'zi ham bo'lsa — savdo
+    nm, text = name.lower(), " ".join(above).lower()
+    if any(w in nm for w in _GROSS_WORDS):
+        metric = "gross"
+    elif any(w in nm for w in _SALES_WORDS):
+        metric = "amount"
+    elif any(w in text for w in _GROSS_WORDS) and not any(w in text for w in _SALES_WORDS):
+        metric = "gross"
+    else:
+        metric = "amount"
     if year is None:
         raise LoaderError(f"«{name}» varag'ida yil topilmadi — sarlavha qatori ustiga yilni yozing (masalan, 2026)")
 
@@ -168,44 +177,53 @@ async def load_plan(pool: asyncpg.Pool, data: bytes, file_name: str | None = Non
     async with pool.acquire() as con:
         upload_id = await con.fetchval(
             "INSERT INTO uploads(kind, file_name, tg_user_id) VALUES ('plan',$1,$2) RETURNING id", file_name, tg_user_id)
-        async with con.transaction():
+        try:
+            async with con.transaction():
+                for s in sheets:
+                    c = col[s.metric]
+                    await con.execute(f"UPDATE sales_plan SET {c} = NULL WHERE year = $1", s.year)
+                    recs = [(s.year, m, k, v["category"], v["grp"], val, upload_id)
+                            for k, v in s.rows.items() for m, val in v["months"].items()]
+                    await con.executemany(
+                        f"""INSERT INTO sales_plan(year, month, name_key, category, grp, {c}, upload_id)
+                            VALUES ($1,$2,$3,$4,$5,$6,$7)
+                            ON CONFLICT (year, month, name_key) DO UPDATE
+                            SET {c} = EXCLUDED.{c}, category = EXCLUDED.category,
+                                grp = COALESCE(EXCLUDED.grp, sales_plan.grp), upload_id = EXCLUDED.upload_id""", recs)
+                await con.execute("DELETE FROM sales_plan WHERE plan_amount IS NULL AND plan_gross IS NULL")
+                db_cats = {name_key(r["name"]): r for r in await con.fetch("SELECT name, grp FROM categories")}
+                db_keys = set(db_cats)
+            rep = PlanLoadReport(upload_id=upload_id, years=sorted({s.year for s in sheets}))
+            nid = set()
             for s in sheets:
-                c = col[s.metric]
-                await con.execute(f"UPDATE sales_plan SET {c} = NULL WHERE year = $1", s.year)
-                recs = [(s.year, m, k, v["category"], v["grp"], val, upload_id)
-                        for k, v in s.rows.items() for m, val in v["months"].items()]
-                await con.executemany(
-                    f"""INSERT INTO sales_plan(year, month, name_key, category, grp, {c}, upload_id)
-                        VALUES ($1,$2,$3,$4,$5,$6,$7)
-                        ON CONFLICT (year, month, name_key) DO UPDATE
-                        SET {c} = EXCLUDED.{c}, category = EXCLUDED.category,
-                            grp = COALESCE(EXCLUDED.grp, sales_plan.grp), upload_id = EXCLUDED.upload_id""", recs)
-            await con.execute("DELETE FROM sales_plan WHERE plan_amount IS NULL AND plan_gross IS NULL")
-            db_cats = {name_key(r["name"]): r for r in await con.fetch("SELECT name, grp FROM categories")}
-            db_keys = set(db_cats)
-        rep = PlanLoadReport(upload_id=upload_id, years=sorted({s.year for s in sheets}))
-        nid = set()
-        for s in sheets:
-            tot = sum(sum(v["months"].values()) for v in s.rows.values())
-            rep.sheets.append({"name": s.name, "metric": s.metric, "year": s.year, "cats": len(s.rows), "total": tot,
-                               "months": len({m for v in s.rows.values() for m in v["months"]})})
-            for v in s.rows.values():
-                g = rep.groups.setdefault(f"{s.year}|{v['grp'] or '—'}", {"amount": 0.0, "gross": 0.0, "cats": 0})
-                g[s.metric] += sum(v["months"].values())
+                tot = sum(sum(v["months"].values()) for v in s.rows.values())
+                rep.sheets.append({"name": s.name, "metric": s.metric, "year": s.year, "cats": len(s.rows), "total": tot,
+                                   "months": len({m for v in s.rows.values() for m in v["months"]})})
+                for v in s.rows.values():
+                    g = rep.groups.setdefault(f"{s.year}|{v['grp'] or '—'}", {"amount": 0.0, "gross": 0.0, "cats": 0})
+                    g[s.metric] += sum(v["months"].values())
+                    if s.metric == "amount":
+                        g["cats"] += 1
+                nid |= {v["category"] for k, v in s.rows.items() if k not in db_keys}
                 if s.metric == "amount":
-                    g["cats"] += 1
-            nid |= {v["category"] for k, v in s.rows.items() if k not in db_keys}
-            if s.metric == "amount":
-                for k, v in s.rows.items():
-                    dg = db_cats[k]["grp"] if k in db_cats else None
-                    if dg and v["grp"] and dg.upper() != v["grp"]:
-                        rep.warnings.append(f"{v['category']}: rejada {v['grp']}, mas'ullar ro'yxatida {dg} — "
-                                            "reja bo'limida rejadagi guruh olinadi")
-            rep.warnings += [f"«{s.name}»: {w}" for w in s.warnings]
-        rep.not_in_db = sorted(nid)
-        await con.execute(
-            "UPDATE uploads SET status='done', finished_at=now(), rows_total=$2, rows_loaded=$2, report=$3 WHERE id=$1",
-            upload_id, sum(len(s.rows) for s in sheets), json.dumps(rep.__dict__, ensure_ascii=False, default=str))
+                    for k, v in s.rows.items():
+                        dg = db_cats[k]["grp"] if k in db_cats else None
+                        if dg and v["grp"] and dg.upper() != v["grp"]:
+                            rep.warnings.append(f"{v['category']}: rejada {v['grp']}, mas'ullar ro'yxatida {dg} — "
+                                                "reja bo'limida rejadagi guruh olinadi")
+                rep.warnings += [f"«{s.name}»: {w}" for w in s.warnings]
+            rep.not_in_db = sorted(nid)
+            await con.execute(
+                "UPDATE uploads SET status='done', finished_at=now(), rows_total=$2, rows_loaded=$2, report=$3 WHERE id=$1",
+                upload_id, sum(len(s.rows) for s in sheets), json.dumps(rep.__dict__, ensure_ascii=False, default=str))
+        except Exception as e:
+            try:
+                await con.execute("UPDATE uploads SET status='failed', finished_at=now(), report=$2 WHERE id=$1",
+                                  upload_id, json.dumps({"error": str(e)}, ensure_ascii=False))
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+
     return rep
 
 

@@ -40,7 +40,7 @@ def _minus_months(d: date, k: int, to_end: bool = False) -> date:
 def mom_period(d1: date, d2: date) -> tuple[date, date]:
     """O'tgan oyning shu kunlari: 01–05.10 → 01–05.09; 01–30.09 (to'liq oy) → 01–31.08.
     Davr bir oydan uzun bo'lsa, ustma-ust tushmasligi uchun kerakli oy soniga suriladi."""
-    end = d2 == _month_end(d2)
+    end = d1.day == 1 and d2 == _month_end(d2)       # to'liq oy(lar) — o'tgan oyning ham to'liq oyi
     k = 1
     while _minus_months(d2, k, end) >= d1:
         k += 1
@@ -51,7 +51,9 @@ def compare_period(f: Filters) -> tuple[date, date] | None:
     if f.compare == "none":
         return None
     if f.compare == "yoy":
-        return _minus_year(f.date_from), _minus_year(f.date_to)
+        p = (_minus_year(f.date_from), _minus_year(f.date_to))
+        # davr bir yildan uzun bo'lsa o'tgan yil joriy davr bilan ustma-ust tushadi — solishtirib bo'lmaydi
+        return None if p[1] >= f.date_from else p
     if f.compare == "mom":
         return mom_period(f.date_from, f.date_to)
     days = (f.date_to - f.date_from).days + 1
