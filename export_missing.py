@@ -212,7 +212,7 @@ async def pending_report(con: asyncpg.Connection) -> dict:
              "rows": int(r["n"]), "qty": float(r["qty"]), "amount": float(r["amount"]),
              "first": r["d1"].isoformat(), "last": r["d2"].isoformat(), "days": int(r["days"])}
             for r in await con.fetch(
-                """SELECT sp.product_id pid, max(sp.product_name) name, max(sp.category) cat, max(sp.brand) brand,
+                """SELECT sp.product_id pid, (array_agg(sp.product_name ORDER BY sp.sale_date DESC))[1] name, max(sp.category) cat, max(sp.brand) brand,
                           count(*) n, sum(sp.qty) qty, sum(sp.amount) amount, min(sp.sale_date) d1, max(sp.sale_date) d2,
                           count(DISTINCT sp.sale_date) days
                    FROM sales_pending sp

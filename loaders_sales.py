@@ -33,6 +33,7 @@ COL_BRANCH = "Филиал"
 COL_CAT = "Категория"
 COL_ID = "Товар ИД"
 COL_NAME = "Товар номи"
+COL_VAR = "Товар Вариант номи"      # to'liq nom (rang/hajm bilan) — spravochnikda yo'qlar ro'yxatida shu ko'rsatiladi
 COL_DATE = "Сана"
 COL_BONUS = "Бонус"
 COL_QTY = "Сони"
@@ -41,7 +42,7 @@ COL_AMOUNT = "Жами(Чиқим нархи)"
 COL_UNIT = "Кирим нархи"
 COL_CUR = "Кирим нархи(Валюта тури)"
 COL_BRAND = "Бранд"
-OPTIONAL = [COL_BONUS, COL_UNIT, COL_CUR, COL_BRAND]
+OPTIONAL = [COL_BONUS, COL_UNIT, COL_CUR, COL_BRAND, COL_VAR]
 _USD = {"доллар", "долл", "dollar", "usd", "$", "у.е.", "уе"}
 _UZS = {"сум", "сўм", "сом", "so'm", "som", "sum", "uzs"}
 
@@ -153,6 +154,9 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
     keep = REQUIRED + [c for c in OPTIONAL if c in df.columns] + ["_excel_row"]
     df = df[keep].copy()
     rows_total = len(df)
+    # nom: «Товар Вариант номи» (bo'lsa), aks holda «Товар номи»
+    df["_pname"] = df[COL_VAR].map(clean_text) if COL_VAR in df.columns else None
+    df["_pname"] = df["_pname"].fillna(df[COL_NAME].map(clean_text)) if COL_VAR in df.columns else df[COL_NAME].map(clean_text)
 
     # --- turlarni o'girish va xato qatorlar ---
     df["d"] = _parse_dates(df[COL_DATE])
@@ -236,7 +240,7 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
 
     unk_sku = sc[sc["prod_cat"].isna()]
     unknown_skus = [
-        {"product_id": int(pid), "name": clean_text(g[COL_NAME].iloc[0]), "category": clean_text(g[COL_CAT].iloc[0]),
+        {"product_id": int(pid), "name": g["_pname"].iloc[0], "category": clean_text(g[COL_CAT].iloc[0]),
          "brand": clean_text(g[COL_BRAND].iloc[0]) if COL_BRAND in g.columns else None,
          "rows": len(g), "amount": float(g["amount"].sum()), "qty": float(g["qty"].sum())}
         for pid, g in unk_sku.groupby("pid")
@@ -254,7 +258,7 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
     pend_src = good[~good["is_k"] & good["cat_key"].isin(own_keys) & ~good.index.isin(ok.index)].copy()
     pend_src["brand_txt"] = pend_src[COL_BRAND].map(clean_text) if COL_BRAND in pend_src.columns else None
     pend = (pend_src.groupby(["d", "br_key", "pid", "is_bonus"], as_index=False)
-            .agg(branch_name=(COL_BRANCH, "first"), pname=(COL_NAME, "first"), category=(COL_CAT, "first"),
+            .agg(branch_name=(COL_BRANCH, "first"), pname=("_pname", "first"), category=(COL_CAT, "first"),
                  brand=("brand_txt", "first"), qty=("qty", "sum"), amount=("amount", "sum"), cost=("cost", "sum"),
                  cost_usd=("cost_usd", "sum"), cost_uzs=("cost_uzs", "sum"))) if len(pend_src) else pend_src
     pend_records = [(r.d, r.br_key, clean_text(r.branch_name), int(r.pid), clean_text(r.pname), clean_text(r.category),
