@@ -13,6 +13,7 @@ import asyncpg
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp,
                            Message, WebAppInfo)
@@ -27,7 +28,8 @@ import bot_stock
 from bot_stock import prompt_new
 from stock_notify import schedule_summary
 from notify import broadcast_upload, get_setting, is_muted, period_text, send_users_update, set_setting
-from export_missing import build_missing_xlsx, file_name as missing_file_name, has_missing, missing_caption, report_of
+from export_missing import (all_pending_kb, build_missing_xlsx, file_name as missing_file_name, has_missing,
+                            missing_caption, pending_report, pending_text, report_of)
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -35,10 +37,28 @@ TG_LIMIT = 4000  # xabar uzunligi zaxira bilan
 
 
 async def send_long(m: Message, text: str) -> None:
-    while text:
-        cut = text if len(text) <= TG_LIMIT else text[: text.rfind("\n", 0, TG_LIMIT)]
-        await m.answer(cut)
-        text = text[len(cut):].lstrip("\n")
+    from notify import split_text
+    for p in split_text(text, TG_LIMIT):
+        await m.answer(p)
+
+
+_BG: set[asyncio.Task] = set()
+
+
+def _bg(coro) -> None:
+    """Fon vazifasi — havola saqlanadi (aks holda GC uni yarim yo'lda o'chirib yuborishi mumkin)."""
+    t = asyncio.create_task(coro)
+    _BG.add(t)
+    t.add_done_callback(_BG.discard)
+
+
+async def safe_edit(c: CallbackQuery, text: str, reply_markup=None) -> None:
+    """edit_text: «message is not modified» va boshqa Telegram xatolarida yiqilmaydi."""
+    try:
+        await c.message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        if "not modified" not in str(e):
+            log.warning("Xabarni tahrirlab bo'lmadi: %s", e)
 
 
 def _app_kb(text: str = "📊 Savdoni ochish") -> InlineKeyboardMarkup | None:
@@ -68,6 +88,7 @@ async def start(m: Message, pool: asyncpg.Pool) -> None:
         text = f"Salom! Siz: <b>{ROLE_NAMES[acc.level]}</b>.\nSavdoni ko'rish uchun pastdagi tugmani bosing."
         if acc.can_upload:
             text += WELCOME_UPLOAD
+            text += "\n/kutayotgan — spravochnikda yo'qligi uchun kutayotgan barcha savdo (Excel)"
         text += "\n\n/status — bazadagi ma'lumotlar holati\n/attrs — kategoriyalar va xususiyatlar"
         text += "\n/kurs — dollar kursi (front marja uchun)"
         text += "\n/qoldiq ART-12 — tovar qayerda qancha bor"
@@ -123,7 +144,7 @@ async def access_request(c: CallbackQuery, bot: Bot, pool: asyncpg.Pool) -> None
             sent += 1
         except Exception as e:  # noqa: BLE001  (admin botni hali ochmagan bo'lishi mumkin)
             log.warning("Adminga (%s) so'rov yuborilmadi: %s", admin_id, e)
-    await c.message.edit_text("✅ So'rovingiz adminga yuborildi. Tasdiqlanishi bilan xabar keladi."
+    await safe_edit(c, "✅ So'rovingiz adminga yuborildi. Tasdiqlanishi bilan xabar keladi."
                               if sent else "⚠️ So'rov saqlandi, lekin adminga yetkazilmadi — admin botga /start bosishi kerak.")
     await c.answer()
 
@@ -152,7 +173,7 @@ async def access_decide(c: CallbackQuery, bot: Bot, pool: asyncpg.Pool) -> None:
     who = _who(dict(row))
     by = html.escape(c.from_user.first_name or str(c.from_user.id))
     if approve:
-        await c.message.edit_text(f"✅ <b>Ruxsat berildi</b> — {ROLE_NAMES[role]}\n{who}\n<i>Tasdiqladi: {by}</i>")
+        await safe_edit(c, f"✅ <b>Ruxsat berildi</b> — {ROLE_NAMES[role]}\n{who}\n<i>Tasdiqladi: {by}</i>")
         msg = f"✅ Kirish tasdiqlandi! Siz: <b>{ROLE_NAMES[role]}</b>.\nSavdoni ko'rish uchun tugmani bosing."
         if role == "uploader":
             msg += WELCOME_UPLOAD
@@ -161,7 +182,7 @@ async def access_decide(c: CallbackQuery, bot: Bot, pool: asyncpg.Pool) -> None:
         except Exception as e:  # noqa: BLE001
             log.warning("Foydalanuvchiga xabar yuborilmadi: %s", e)
     else:
-        await c.message.edit_text(f"❌ <b>Rad etildi</b>\n{who}\n<i>Rad etdi: {by}</i>")
+        await safe_edit(c, f"❌ <b>Rad etildi</b>\n{who}\n<i>Rad etdi: {by}</i>")
         try:
             await bot.send_message(tg_id, "❌ Kirish so'rovingiz rad etildi.")
         except Exception as e:  # noqa: BLE001
@@ -230,7 +251,7 @@ async def users_manage(c: CallbackQuery, bot: Bot, pool: asyncpg.Pool) -> None:
                 pass
     invalidate(tg_id)
     text, kb = await _users_view(pool)
-    await c.message.edit_text(text, reply_markup=kb)
+    await safe_edit(c, text, reply_markup=kb)
     await c.answer(note)
 
 
@@ -329,8 +350,12 @@ async def xabar_cmd(m: Message, pool: asyncpg.Pool) -> None:
     arg = ((m.text or "").split() + [""])[1].lower()
     if arg in ("off", "ochir", "o'chir", "0"):
         await set_setting(pool, "notify_muted", "1", m.from_user.id)
+        await set_setting(pool, "muted_from", None)
+        await set_setting(pool, "muted_to", None)
     elif arg in ("on", "yoq", "1"):
         await set_setting(pool, "notify_muted", "0", m.from_user.id)
+        await set_setting(pool, "muted_from", None)
+        await set_setting(pool, "muted_to", None)
     text, kb = await _xabar_view(pool)
     await m.answer(text, reply_markup=kb)
 
@@ -360,6 +385,34 @@ async def xabar_cb(c: CallbackQuery, pool: asyncpg.Pool, bot: Bot) -> None:
     except Exception:  # noqa: BLE001
         await c.message.answer(text + note, reply_markup=kb)
     await c.answer("Saqlandi")
+
+
+# ---------------------------------------------------------------------------
+# /kutayotgan — hamma yuklangan fayllardan spravochnikda yo'q SKU/filiallar (to'planib borgan) + Excel shablon
+async def _send_pending(pool: asyncpg.Pool, msg: Message) -> None:
+    async with pool.acquire() as con:
+        rep = await pending_report(con)
+        xlsx = await build_missing_xlsx(con, rep) if has_missing(rep) else None
+    await send_long(msg, pending_text(rep))
+    if xlsx:
+        await msg.answer_document(BufferedInputFile(xlsx, filename=missing_file_name(rep)), caption=missing_caption(rep))
+
+
+@router.message(Command("kutayotgan"))
+async def pending_cmd(m: Message, pool: asyncpg.Pool) -> None:
+    if not (await get_access(pool, m.from_user.id)).can_upload:
+        await m.answer("⛔ Bu buyruq faqat fayl yuklovchilar uchun.")
+        return
+    await _send_pending(pool, m)
+
+
+@router.callback_query(F.data == "pend:all")
+async def pending_cb(c: CallbackQuery, pool: asyncpg.Pool) -> None:
+    if not (await get_access(pool, c.from_user.id)).can_upload:
+        await c.answer("Faqat fayl yuklovchilar uchun", show_alert=True)
+        return
+    await c.answer("Tayyorlanmoqda…")
+    await _send_pending(pool, c.message)
 
 
 @router.message(Command("status"))
@@ -404,27 +457,31 @@ async def on_document(m: Message, bot: Bot, pool: asyncpg.Pool) -> None:
         return
 
     wait = await m.answer("⏳ Fayl tekshirilmoqda…")
-    buf = io.BytesIO()
-    await bot.download(doc, destination=buf)
-    data = buf.getvalue()
-
     kind = upload_id = None
     try:
-        kind, text, upload_id = await load_any_ex(pool, data, doc.file_name, m.from_user.id)
+        buf = io.BytesIO()
+        await bot.download(doc, destination=buf)
+        data = buf.getvalue()
+        from api_upload import _DB_LOCK   # Mini App yuklashi bilan bir vaqtda ketmasligi uchun
+        async with _DB_LOCK:
+            kind, text, upload_id = await load_any_ex(pool, data, doc.file_name, m.from_user.id)
     except LoaderError as e:
-        text = f"❌ Yuklanmadi: {e}"
+        text = f"❌ Yuklanmadi: {html.escape(str(e), quote=False)}"
     except Exception:  # noqa: BLE001
         log.exception("Yuklashda xato")
         text = "❌ Kutilmagan xato. Loglarni tekshiring — ma'lumot o'zgartirilmadi."
-    await wait.delete()
+    try:
+        await wait.delete()
+    except Exception:  # noqa: BLE001
+        pass
     await send_long(m, text)
     if kind and upload_id:
         # adminlarga to'liq hisobot, savdo bo'lsa — hammaga "yangilandi" xabari (fonda)
-        asyncio.create_task(broadcast_upload(pool, kind, text, upload_id, m.from_user.id,
+        _bg(broadcast_upload(pool, kind, text, upload_id, m.from_user.id,
                                              m.from_user.full_name, "bot", doc.file_name, bot))
         if kind in ("sales", "stock_branch", "stock_wh", "branches", "products"):
             # spravochnikda yo'q filial / tanilmagan ombor bo'limi — adminlarga tugmali so'rov
-            asyncio.create_task(prompt_new(pool, bot))
+            _bg(prompt_new(pool, bot))
         if kind in ("stock_branch", "stock_wh"):
             schedule_summary(pool)       # qoldiq xulosasi — oxirgi qoldiq yuklashidan ~2,5 daqiqa keyin bitta
     if kind == "sales" and upload_id:
@@ -435,7 +492,7 @@ async def on_document(m: Message, bot: Bot, pool: asyncpg.Pool) -> None:
                 xlsx = await build_missing_xlsx(con, rep) if has_missing(rep) else None
             if xlsx:
                 await m.answer_document(BufferedInputFile(xlsx, filename=missing_file_name(rep)),
-                                        caption=missing_caption(rep))
+                                        caption=missing_caption(rep), reply_markup=all_pending_kb())
         except Exception:  # noqa: BLE001
             log.exception("Spravochnikda yo'qlar Excel'ini yuborib bo'lmadi")
 
