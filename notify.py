@@ -41,12 +41,22 @@ async def _who(pool: asyncpg.Pool, tg_id: int, fallback: str = "") -> str:
     return f"{html.escape(name)}{html.escape(un)} (ID <code>{tg_id}</code>)"
 
 
-async def _chunks(bot: Bot, chat_id: int, text: str, kb=None) -> None:
+def split_text(text: str, limit: int = TG_LIMIT) -> list[str]:
+    """Matnni qatorlar bo'yicha bo'laklarga bo'ladi; juda uzun qator bo'lsa — qattiq kesadi (cheksiz sikl bo'lmaydi)."""
     parts = []
     while text:
-        cut = text if len(text) <= TG_LIMIT else text[: text.rfind("\n", 0, TG_LIMIT)]
+        if len(text) <= limit:
+            parts.append(text)
+            break
+        i = text.rfind("\n", 0, limit)
+        cut = text[:i] if i > 0 else text[:limit]
         parts.append(cut)
         text = text[len(cut):].lstrip("\n")
+    return parts
+
+
+async def _chunks(bot: Bot, chat_id: int, text: str, kb=None) -> None:
+    parts = split_text(text)
     for i, p in enumerate(parts):
         await bot.send_message(chat_id, p, reply_markup=kb if i == len(parts) - 1 else None)
 

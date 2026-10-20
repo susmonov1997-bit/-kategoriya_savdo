@@ -98,24 +98,33 @@ async def load_owners(pool: asyncpg.Pool, data: bytes, file_name: str | None = N
         upload_id = await con.fetchval(
             "INSERT INTO uploads(kind, file_name, tg_user_id) VALUES ('owners',$1,$2) RETURNING id",
             file_name, tg_user_id)
-        async with con.transaction():
-            await con.execute("DELETE FROM category_owner_list")
-            await con.executemany(
-                "INSERT INTO category_owner_list(name_key, category, grp, owner, upload_id) VALUES ($1,$2,$3,$4,$5)",
-                [(k, v["category"], v["grp"], v["owner"], upload_id) for k, v in rows.items()])
-            matched, grp_changes, without = await apply_owner_list(con)
-            db_keys = {name_key(r["name"]) for r in await con.fetch("SELECT name FROM categories")}
-        owners: dict[str, int] = {}
-        for v in rows.values():
-            owners[v["owner"]] = owners.get(v["owner"], 0) + 1
-        rep = OwnersLoadReport(
-            upload_id=upload_id, rows_total=total, loaded=len(rows),
-            owners=dict(sorted(owners.items(), key=lambda kv: (-kv[1], kv[0]))),
-            matched=matched, not_in_db=sorted(v["category"] for k, v in rows.items() if k not in db_keys),
-            without_owner=without, group_changes=grp_changes, duplicates=dups, errors=errors)
-        await con.execute(
-            "UPDATE uploads SET status='done', finished_at=now(), rows_total=$2, rows_loaded=$3, report=$4 WHERE id=$1",
-            upload_id, total, len(rows), json.dumps(rep.__dict__, ensure_ascii=False, default=str))
+        try:
+            async with con.transaction():
+                await con.execute("DELETE FROM category_owner_list")
+                await con.executemany(
+                    "INSERT INTO category_owner_list(name_key, category, grp, owner, upload_id) VALUES ($1,$2,$3,$4,$5)",
+                    [(k, v["category"], v["grp"], v["owner"], upload_id) for k, v in rows.items()])
+                matched, grp_changes, without = await apply_owner_list(con)
+                db_keys = {name_key(r["name"]) for r in await con.fetch("SELECT name FROM categories")}
+            owners: dict[str, int] = {}
+            for v in rows.values():
+                owners[v["owner"]] = owners.get(v["owner"], 0) + 1
+            rep = OwnersLoadReport(
+                upload_id=upload_id, rows_total=total, loaded=len(rows),
+                owners=dict(sorted(owners.items(), key=lambda kv: (-kv[1], kv[0]))),
+                matched=matched, not_in_db=sorted(v["category"] for k, v in rows.items() if k not in db_keys),
+                without_owner=without, group_changes=grp_changes, duplicates=dups, errors=errors)
+            await con.execute(
+                "UPDATE uploads SET status='done', finished_at=now(), rows_total=$2, rows_loaded=$3, report=$4 WHERE id=$1",
+                upload_id, total, len(rows), json.dumps(rep.__dict__, ensure_ascii=False, default=str))
+        except Exception as e:
+            try:
+                await con.execute("UPDATE uploads SET status='failed', finished_at=now(), report=$2 WHERE id=$1",
+                                  upload_id, json.dumps({"error": str(e)}, ensure_ascii=False))
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+
     return rep
 
 

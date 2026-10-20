@@ -83,6 +83,15 @@ def _preview_text(text: str, kind: str) -> str:
     return "\n".join(lines)
 
 
+_BG: set = set()
+
+
+def _bg(coro) -> None:
+    t = asyncio.create_task(coro)
+    _BG.add(t)
+    t.add_done_callback(_BG.discard)
+
+
 async def _check(pool, job: dict) -> None:
     t0 = time.time()
     try:
@@ -121,27 +130,31 @@ async def _load(pool, job: dict) -> None:
         async with _DB_LOCK:
             kind, text, upload_id = await load_any_ex(pool, data, job["file_name"], job["user_id"])
         job.update(status="done", report=text, upload_id=upload_id, kind=kind)
-        # hisobot matni tarixda qayta ko'rish uchun saqlanadi
-        await pool.execute(
-            "UPDATE uploads SET report = COALESCE(report, '{}'::jsonb) || jsonb_build_object('text', $2::text, "
-            "'via', 'miniapp') WHERE id = $1", upload_id, text)
-        await _notify(job["user_id"], text)
-        await broadcast_upload(pool, kind, text, upload_id, job["user_id"], job.get("user_name", ""),
-                               "miniapp", job["file_name"])
-        if kind in ("sales", "stock_branch", "stock_wh", "branches", "products"):
-            await prompt_new(pool)       # yangi filial / tanilmagan ombor bo'limi — adminlarga tugmali so'rov
-        if kind in ("stock_branch", "stock_wh"):
-            from stock_notify import schedule_summary
-            schedule_summary(pool)
-        if kind == "sales":
-            async with pool.acquire() as con:
-                rep = await report_of(con, upload_id)
-                if has_missing(rep):
-                    job["missing_xlsx"] = await build_missing_xlsx(con, rep)
-                    job["missing_report"] = {k: rep.get(k) for k in ("dates", "unknown_skus", "unknown_branches")}
-                    await _send_missing(job["user_id"], job["missing_xlsx"], job["missing_report"])
-                else:
-                    job.pop("missing_xlsx", None)
+        # --- bundan keyingi qadamlar ma'lumot saqlangandan keyin: xato bo'lsa ham yuklash "done" qoladi ---
+        try:
+            # hisobot matni tarixda qayta ko'rish uchun saqlanadi
+            await pool.execute(
+                "UPDATE uploads SET report = COALESCE(report, '{}'::jsonb) || jsonb_build_object('text', $2::text, "
+                "'via', 'miniapp') WHERE id = $1", upload_id, text)
+            await _notify(job["user_id"], text)
+            await broadcast_upload(pool, kind, text, upload_id, job["user_id"], job.get("user_name", ""),
+                                   "miniapp", job["file_name"])
+            if kind in ("sales", "stock_branch", "stock_wh", "branches", "products"):
+                await prompt_new(pool)       # yangi filial / tanilmagan ombor bo'limi — adminlarga tugmali so'rov
+            if kind in ("stock_branch", "stock_wh"):
+                from stock_notify import schedule_summary
+                schedule_summary(pool)
+            if kind == "sales":
+                async with pool.acquire() as con:
+                    rep = await report_of(con, upload_id)
+                    if has_missing(rep):
+                        job["missing_xlsx"] = await build_missing_xlsx(con, rep)
+                        job["missing_report"] = {k: rep.get(k) for k in ("dates", "unknown_skus", "unknown_branches")}
+                        await _send_missing(job["user_id"], job["missing_xlsx"], job["missing_report"])
+                    else:
+                        job.pop("missing_xlsx", None)
+        except Exception:  # noqa: BLE001
+            log.exception("Yuklashdan keyingi qadamda xato (ma'lumot saqlangan)")
     except LoaderError as e:
         job.update(status="failed", error=str(e))
     except Exception as e:  # noqa: BLE001
@@ -162,7 +175,9 @@ async def _notify(chat_id: int, text: str) -> None:
         from aiogram.enums import ParseMode
         bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         try:
-            await bot.send_message(chat_id, "📥 Mini App orqali yuklandi\n\n" + text[:3900])
+            from notify import split_text
+            for p in split_text("📥 Mini App orqali yuklandi\n\n" + text):
+                await bot.send_message(chat_id, p)
         finally:
             await bot.session.close()
     except Exception as e:  # noqa: BLE001
@@ -204,7 +219,7 @@ async def upload(request: Request, file: UploadFile = File(...), user: User = De
     job = {"id": jid, "status": "checking", "file_name": name, "size_mb": round(size / 1048576, 1),
            "path": str(path), "user_id": user.id, "user_name": user.first_name or "", "created": time.time()}
     _JOBS[jid] = job
-    asyncio.create_task(_check(request.app.state.pool, job))
+    _bg(_check(request.app.state.pool, job))
     return _public(job)
 
 
@@ -226,7 +241,7 @@ async def upload_confirm(jid: str, request: Request, user: User = Depends(upload
     if job["status"] != "checked":
         raise HTTPException(409, "Faqat tekshiruvdan o'tgan faylni tasdiqlash mumkin")
     job.update(status="loading", report=None)
-    asyncio.create_task(_load(request.app.state.pool, job))
+    _bg(_load(request.app.state.pool, job))
     return _public(job)
 
 

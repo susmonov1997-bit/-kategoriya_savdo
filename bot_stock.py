@@ -18,6 +18,7 @@ import asyncpg
 from aiogram import Bot, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton as Btn, InlineKeyboardMarkup, Message
 
@@ -28,6 +29,15 @@ from loaders_common import name_key
 from pending import format_resolved, resolve_pending, resolve_stock
 
 log = logging.getLogger(__name__)
+
+
+async def safe_edit(c: CallbackQuery, text: str, reply_markup=None) -> None:
+    """edit_text: «message is not modified» kabi Telegram xatolarida yiqilmaydi."""
+    try:
+        await c.message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        if "not modified" not in str(e):
+            log.warning("Xabarni tahrirlab bo'lmadi: %s", e)
 router = Router()
 esc = lambda s: html.escape(str(s or ""), quote=False)  # noqa: E731
 
@@ -260,7 +270,7 @@ async def nb_cb(c: CallbackQuery, pool: asyncpg.Pool) -> None:
                     if rg:
                         await con.execute("UPDATE branch_requests SET region_id = $2 WHERE id = $1", rid, rg)
                         text = await _finish(pool, con, await _req(con, rid), c.from_user.id)
-                        await c.message.edit_text(text)
+                        await safe_edit(c, text)
                         await c.answer("Saqlandi")
                         return
                 text, kb = await _step_rg(con, req)
@@ -279,13 +289,13 @@ async def nb_cb(c: CallbackQuery, pool: asyncpg.Pool) -> None:
                     text, kb = await _step_wh(con, req)
                 else:
                     text = await _finish(pool, con, req, c.from_user.id)
-                    await c.message.edit_text(text)
+                    await safe_edit(c, text)
                     await c.answer("Saqlandi")
                     return
         else:
             await c.answer()
             return
-    await c.message.edit_text(text, reply_markup=kb)
+    await safe_edit(c, text, reply_markup=kb)
     await c.answer()
 
 
@@ -317,7 +327,7 @@ async def wa_cb(c: CallbackQuery, pool: asyncpg.Pool) -> None:
             await con.execute("UPDATE warehouse_requests SET done_at = now(), done_by = $2 WHERE id = $1",
                               req["id"], c.from_user.id)
         wname = await con.fetchval("SELECT name FROM warehouses WHERE id = $1", int(wid))
-    await c.message.edit_text(
+    await safe_edit(c, 
         f"✅ «{esc(req['sample_name'])}» → <b>{esc(wname)}</b>. Keyingi fayllarda o'zi taniydi."
         + (f"\n📦 Kutayotgan qoldiq ulandi: {st['stock_rows']} qator · {_n(st['stock_qty'])} dona"
            if st["stock_rows"] else ""))

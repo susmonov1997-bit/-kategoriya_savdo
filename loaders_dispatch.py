@@ -64,14 +64,19 @@ async def load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int 
 
 
 async def _resolve(pool, upload_id: int) -> str:
-    """Spravochnik yuklangach — kutayotgan savdoni ulash; natija upload hisobotiga ham yoziladi."""
-    async with pool.acquire() as con:
-        async with con.transaction():
-            r = await resolve_pending(con)
-        if r["rows"] or r["comp_rows"]:
-            await con.execute("UPDATE uploads SET report = COALESCE(report, '{}'::jsonb) || jsonb_build_object('pending_resolved', $2::jsonb) "
-                              "WHERE id = $1", upload_id, json.dumps(r))
-    return format_resolved(r)
+    """Spravochnik yuklangach — kutayotgan savdo/qoldiqni ulash; natija upload hisobotiga ham yoziladi.
+    Spravochnik allaqachon saqlangan — bu qadam xato bersa ham yuklash muvaffaqiyatli hisoblanadi."""
+    try:
+        async with pool.acquire() as con:
+            async with con.transaction():
+                r = await resolve_pending(con)
+            if r["rows"] or r["comp_rows"] or r.get("stock_rows"):
+                await con.execute("UPDATE uploads SET report = COALESCE(report, '{}'::jsonb) || jsonb_build_object('pending_resolved', $2::jsonb) "
+                                  "WHERE id = $1", upload_id, json.dumps(r, default=str))
+        return format_resolved(r)
+    except Exception:  # noqa: BLE001
+        log.exception("Kutayotgan ma'lumotni ulab bo'lmadi")
+        return "\n⚠️ Spravochnik saqlandi, lekin kutayotgan savdo/qoldiqni ulashda xato — keyingi yuklashda qayta uriniladi."
 
 
 async def _load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int | None) -> tuple[str, str, int]:

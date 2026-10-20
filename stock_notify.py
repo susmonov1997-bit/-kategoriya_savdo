@@ -23,6 +23,7 @@ import config
 log = logging.getLogger(__name__)
 DELAY = 150
 _TASK: asyncio.Task | None = None
+_SENDING = False
 LV = ["🔴 Tugadi", "🟠 Tugayapti", "🟡 Kamaymoqda"]
 
 
@@ -126,14 +127,19 @@ async def send_summary(pool: asyncpg.Pool, bot: Bot | None = None) -> int:
 
 def schedule_summary(pool: asyncpg.Pool, delay: int = DELAY) -> None:
     """Qoldiq yuklangach chaqiriladi: oldingi rejalashtirilgan xulosa bekor qilinadi, yangisi delay dan keyin."""
-    global _TASK
-    if _TASK and not _TASK.done():
-        _TASK.cancel()
+    global _TASK, _SENDING
+    if _TASK and not _TASK.done() and not _SENDING:
+        _TASK.cancel()           # hali kutayotgan bo'lsa — bekor; yuborilayotgan bo'lsa — tugatiladi, yangisi alohida
 
     async def run():
+        global _SENDING
         try:
             await asyncio.sleep(delay)
-            await send_summary(pool)
+            _SENDING = True
+            try:
+                await send_summary(pool)
+            finally:
+                _SENDING = False
         except asyncio.CancelledError:
             pass
         except Exception:  # noqa: BLE001

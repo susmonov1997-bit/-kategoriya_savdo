@@ -9,7 +9,7 @@
   --prev:#B4BACB;
   --or:#9A3C0A; --or-soft:#FFE7D6; --good:#166534; --good-soft:#E3F5EA; --bad:#9F1D1D; --bad-soft:#FCE8E8;
   --warn:#8A6200; --warn-soft:#FFF4D6;
-  --h1:#E0E7FF; --h2:#C7D2FE; --h3:#A5B4FC; --h4:#6366F1; --h5:#3730A3;
+  --h1:#E0E7FF; --h2:#C7D2FE; --h3:#A5B4FC; --h4:#6366F1; --h5:#3730A3; --h5t:#fff;
   --shadow:0 1px 3px rgba(20,30,60,.07);
   --s1:#4338CA; --s2:#EA6A2F; --s3:#16A37A; --s4:#E0A100; --s5:#DB5C91; --s6:#2F8F3A; --s7:#7C3AED; --s8:#DC4A48; --so:#C3C8D4;
   --r:18px; --r2:14px;
@@ -25,7 +25,7 @@
     --prev:#566078;
     --or:#FDBA74; --or-soft:#3A2414; --good:#4ADE80; --good-soft:#15291D; --bad:#F87171; --bad-soft:#341B1B;
     --warn:#F2C94C; --warn-soft:#3A3218;
-    --h1:#1E2347; --h2:#2B3270; --h3:#3F47A8; --h4:#6366F1; --h5:#A5B4FC;
+    --h1:#1E2347; --h2:#2B3270; --h3:#3F47A8; --h4:#6366F1; --h5:#A5B4FC; --h5t:#11143A;
     --s1:#818CF8; --s2:#F08A55; --s3:#34C79A; --s4:#E8B53A; --s5:#E57BA8; --s6:#4CB35A; --s7:#A78BFA; --s8:#EF6B69; --so:#4A5164;
     --shadow:none;
   }
@@ -39,7 +39,7 @@
   --prev:#566078;
   --or:#FDBA74; --or-soft:#3A2414; --good:#4ADE80; --good-soft:#15291D; --bad:#F87171; --bad-soft:#341B1B;
   --warn:#F2C94C; --warn-soft:#3A3218;
-  --h1:#1E2347; --h2:#2B3270; --h3:#3F47A8; --h4:#6366F1; --h5:#A5B4FC;
+  --h1:#1E2347; --h2:#2B3270; --h3:#3F47A8; --h4:#6366F1; --h5:#A5B4FC; --h5t:#11143A;
   --s1:#818CF8; --s2:#F08A55; --s3:#34C79A; --s4:#E8B53A; --s5:#E57BA8; --s6:#4CB35A; --s7:#A78BFA; --s8:#EF6B69; --so:#4A5164;
   --shadow:none;
 }

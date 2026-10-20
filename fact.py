@@ -24,10 +24,12 @@ async def refresh_dates(con: asyncpg.Connection, dates: list) -> None:
 
 async def rebuild(con: asyncpg.Connection) -> None:
     t0 = time.time()
+    v0 = await con.fetchval("SELECT version FROM fact_meta WHERE id = 1")
     async with con.transaction():
         await con.execute("TRUNCATE sales_fact")
         await con.execute(f"INSERT INTO sales_fact {FACT_SELECT}")
-        await con.execute("UPDATE fact_meta SET dirty = false, rebuilt_at = now() WHERE id = 1")
+        # qayta qurish paytida spravochnik/kurs o'zgargan bo'lsa (versiya oshgan) — dirty saqlanadi, keyingisi yana quradi
+        await con.execute("UPDATE fact_meta SET dirty = (version <> $1), rebuilt_at = now() WHERE id = 1", v0)
     await con.execute("ANALYZE sales_fact")
     log.info("sales_fact qayta qurildi: %.1f s", time.time() - t0)
 
