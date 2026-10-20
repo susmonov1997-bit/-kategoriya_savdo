@@ -15,7 +15,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
-from aiogram.types import (BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp,
+from aiogram.types import (BufferedInputFile, CallbackQuery, ErrorEvent, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp,
                            Message, WebAppInfo)
 
 import config
@@ -390,9 +390,19 @@ async def xabar_cb(c: CallbackQuery, pool: asyncpg.Pool, bot: Bot) -> None:
 # ---------------------------------------------------------------------------
 # /kutayotgan — hamma yuklangan fayllardan spravochnikda yo'q SKU/filiallar (to'planib borgan) + Excel shablon
 async def _send_pending(pool: asyncpg.Pool, msg: Message) -> None:
-    async with pool.acquire() as con:
-        rep = await pending_report(con)
-        xlsx = await build_missing_xlsx(con, rep) if has_missing(rep) else None
+    wait = await msg.answer("⏳ Kutayotganlar ro'yxati tayyorlanmoqda…")
+    try:
+        async with pool.acquire() as con:
+            rep = await pending_report(con)
+            xlsx = await build_missing_xlsx(con, rep) if has_missing(rep) else None
+    except Exception as e:  # noqa: BLE001 — jim qolmasin: xato foydalanuvchiga ko'rinadi
+        log.exception("/kutayotgan xatosi")
+        await wait.edit_text(f"❌ Ro'yxatni tayyorlab bo'lmadi: {html.escape(str(e), quote=False)[:300]}")
+        return
+    try:
+        await wait.delete()
+    except Exception:  # noqa: BLE001
+        pass
     await send_long(msg, pending_text(rep))
     if xlsx:
         await msg.answer_document(BufferedInputFile(xlsx, filename=missing_file_name(rep)), caption=missing_caption(rep))
@@ -500,6 +510,19 @@ async def on_document(m: Message, bot: Bot, pool: asyncpg.Pool) -> None:
 _DP: Dispatcher | None = None
 
 
+async def _on_error(event: ErrorEvent) -> bool:
+    """Har qanday kutilmagan xato: logga to'liq, foydalanuvchiga qisqa xabar (bot jim qolmasin)."""
+    log.error("Bot xatosi: %s", event.exception, exc_info=event.exception)
+    u = event.update
+    msg = u.message or (u.callback_query.message if u.callback_query else None)
+    if msg is not None:
+        try:
+            await msg.answer(f"❌ Xato: {html.escape(str(event.exception), quote=False)[:300]}")
+        except Exception:  # noqa: BLE001
+            pass
+    return True
+
+
 async def run_bot(pool: asyncpg.Pool) -> None:
     """Botni long-polling rejimida ishga tushiradi (bitta nusxa bo'lishi shart)."""
     global _DP
@@ -507,6 +530,7 @@ async def run_bot(pool: asyncpg.Pool) -> None:
         _DP = Dispatcher()
         _DP.include_router(router)
         _DP.include_router(bot_stock.router)
+        _DP.errors.register(_on_error)
     dp = _DP
     dp["pool"] = pool
     bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
