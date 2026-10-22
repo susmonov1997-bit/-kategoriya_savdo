@@ -327,8 +327,8 @@ async def _xabar_view(pool) -> tuple[str, InlineKeyboardMarkup]:
     a, b = await get_setting(pool, "muted_from"), await get_setting(pool, "muted_to")
     if muted:
         text = ("🔕 <b>Yuklashdan keyingi xabarlar O'CHIRILGAN</b>\n"
-                "Fayl yuklanganda foydalanuvchilarga ham, boshqa adminlarga ham xabar bormaydi "
-                "(yuklagan odamning o'ziga hisobot boradi).")
+                "Foydalanuvchilarga «Savdo ma'lumoti yangilandi» xabari bormaydi. "
+                "Adminlarga to'liq hisobot borishda davom etadi (yuklagan odamning o'ziga ham).")
         if a:
             text += f"\n\nO'chirilgan paytda yuklangan savdo: <b>{period_text([a, b])}</b>"
         kb = [[InlineKeyboardButton(text="🔔 Yoqish", callback_data="ntf:on")]]

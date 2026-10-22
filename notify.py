@@ -100,10 +100,12 @@ async def broadcast_upload(pool: asyncpg.Pool, kind: str, report_text: str, uplo
     """Xatolar yutiladi — xabar yuborilmasa ham yuklash natijasi o'zgarmaydi."""
     if not config.BOT_TOKEN:
         return
-    # admin /xabar bilan o'chirgan bo'lsa — hech kimga yuborilmaydi (yuklagan odamning o'z hisoboti alohida boradi);
-    # savdo sanalari eslab qolinadi — yoqilganda bitta umumiy xabar yuborish mumkin
+    # admin /xabar bilan o'chirgan bo'lsa — foydalanuvchilarga «yangilandi» xabari bormaydi, adminlarga to'liq
+    # hisobot boradi; savdo sanalari eslab qolinadi — yoqilganda bitta umumiy xabar yuborish mumkin
+    muted = False
     try:
         if await is_muted(pool):
+            muted = True
             if kind == "sales" and upload_id:
                 async with pool.acquire() as con:
                     rep = await report_of(con, upload_id)
@@ -112,7 +114,6 @@ async def broadcast_upload(pool: asyncpg.Pool, kind: str, report_text: str, uplo
                     a, b = await get_setting(pool, "muted_from"), await get_setting(pool, "muted_to")
                     await set_setting(pool, "muted_from", min(filter(None, [a, d[0]])))
                     await set_setting(pool, "muted_to", max(filter(None, [b, d[-1]])))
-            return
     except Exception:  # noqa: BLE001
         log.exception("Xabar sozlamasini o'qib bo'lmadi — xabarlar odatdagidek yuboriladi")
     own = bot is None
@@ -147,7 +148,7 @@ async def broadcast_upload(pool: asyncpg.Pool, kind: str, report_text: str, uplo
             await asyncio.sleep(0.05)
 
         # --- 2. Savdo yangilansa — hammaga qisqa xabar ---
-        if kind != "sales":
+        if kind != "sales" or muted:
             return
         await send_users_update(pool, bot, period, {uploader_id, *config.ADMIN_IDS})
     except Exception:  # noqa: BLE001

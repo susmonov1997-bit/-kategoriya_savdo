@@ -101,12 +101,14 @@ def _kb() -> InlineKeyboardMarkup:
 
 async def send_summary(pool: asyncpg.Pool, bot: Bot | None = None) -> int:
     from notify import is_muted
-    if not config.BOT_TOKEN or await is_muted(pool):
+    if not config.BOT_TOKEN:
         return 0
     text = await summary_text(pool)
     if not text:
         return 0
-    users = {r["tg_id"] for r in await pool.fetch("SELECT tg_id FROM users WHERE status = 'approved'")} | set(config.ADMIN_IDS)
+    # /xabar o'chirilgan bo'lsa — faqat adminlarga
+    users = set(config.ADMIN_IDS) if await is_muted(pool) else \
+        {r["tg_id"] for r in await pool.fetch("SELECT tg_id FROM users WHERE status = 'approved'")} | set(config.ADMIN_IDS)
     own = bot is None
     if own:
         bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
