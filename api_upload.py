@@ -269,6 +269,56 @@ async def history_missing_send(upload_id: int, request: Request, user: User = De
     return {"ok": True}
 
 
+async def _send_doc(chat_id: int, text: str, data: bytes, fname: str, caption: str | None = None) -> bool:
+    if not config.BOT_TOKEN:
+        return False
+    try:
+        from aiogram import Bot
+        from aiogram.client.default import DefaultBotProperties
+        from aiogram.enums import ParseMode
+        from aiogram.types import BufferedInputFile
+        from notify import split_text
+        bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        try:
+            for p in split_text(text):
+                await bot.send_message(chat_id, p)
+            await bot.send_document(chat_id, BufferedInputFile(data, filename=fname), caption=caption)
+        finally:
+            await bot.session.close()
+        return True
+    except Exception as e:  # noqa: BLE001
+        log.warning("Botga fayl yuborilmadi: %s", e)
+        return False
+
+
+@router.post("/export/products")
+async def export_products_send(request: Request, user: User = Depends(uploader)):
+    """Bazadagi umumiy tovar spravochnigini botga yuboradi."""
+    from export_products import products_export
+    async with request.app.state.pool.acquire() as con:
+        res = await products_export(con)
+    if res is None:
+        raise HTTPException(404, "Bazada hali tovar spravochnigi yo'q")
+    data, fname, text = res
+    if not await _send_doc(user.id, text, data, fname):
+        raise HTTPException(503, "Botga yuborib bo'lmadi — botga /start bosilganini tekshiring")
+    return {"ok": True}
+
+
+@router.post("/export/pending")
+async def export_pending_send(request: Request, user: User = Depends(uploader)):
+    """Barcha kutayotganlar (spravochnikda yo'q SKU/filiallar) ro'yxatini botga yuboradi."""
+    from export_missing import file_name, pending_report, pending_text
+    async with request.app.state.pool.acquire() as con:
+        rep = await pending_report(con)
+        if not has_missing(rep):
+            raise HTTPException(404, "Kutayotgan savdo yo'q — hamma SKU va filiallar spravochnikda bor")
+        data = await build_missing_xlsx(con, rep)
+    if not await _send_doc(user.id, pending_text(rep), data, file_name(rep), missing_caption(rep)):
+        raise HTTPException(503, "Botga yuborib bo'lmadi — botga /start bosilganini tekshiring")
+    return {"ok": True}
+
+
 @router.delete("/upload/{jid}")
 async def upload_cancel(jid: str, user: User = Depends(uploader)):
     job = _job(jid, user)

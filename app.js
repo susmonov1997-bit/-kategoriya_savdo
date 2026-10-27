@@ -1491,6 +1491,13 @@ async function refreshMeta() {
   ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
   drop.addEventListener('drop', e => { const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) uploadFile(f); });
   $('upRefresh').onclick = loadHistory;
+  const exp = (id, path) => { const b = $(id); b.onclick = async () => {
+    const html0 = b.innerHTML; b.disabled = true; b.innerHTML = 'Tayyorlanmoqda…';
+    try { await api(path, {}); b.innerHTML = '✅ Botga yuborildi<small>chatni oching</small>'; try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred('success'); } catch (e) {} }
+    catch (e) { b.innerHTML = `❌ ${esc(e.message)}`; }
+    setTimeout(() => { b.innerHTML = html0; b.disabled = false; }, 4000);
+  }; };
+  exp('expProducts', 'export/products'); exp('expPending', 'export/pending');
 })();
 
 async function init() {

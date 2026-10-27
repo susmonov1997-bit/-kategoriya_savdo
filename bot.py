@@ -89,6 +89,7 @@ async def start(m: Message, pool: asyncpg.Pool) -> None:
         if acc.can_upload:
             text += WELCOME_UPLOAD
             text += "\n/kutayotgan — spravochnikda yo'qligi uchun kutayotgan barcha savdo (Excel)"
+            text += "\n/spravochnik — bazadagi umumiy tovar spravochnigi (Excel)"
         text += "\n\n/status — bazadagi ma'lumotlar holati\n/attrs — kategoriyalar va xususiyatlar"
         text += "\n/kurs — dollar kursi (front marja uchun)"
         text += "\n/qoldiq ART-12 — tovar qayerda qancha bor"
@@ -423,6 +424,29 @@ async def pending_cb(c: CallbackQuery, pool: asyncpg.Pool) -> None:
         return
     await c.answer("Tayyorlanmoqda…")
     await _send_pending(pool, c.message)
+
+
+# ---------------------------------------------------------------------------
+# /spravochnik — bazadagi umumiy tovar spravochnigi (yuklash formatida, bitta Excel)
+@router.message(Command("spravochnik"))
+async def products_cmd(m: Message, pool: asyncpg.Pool) -> None:
+    if not (await get_access(pool, m.from_user.id)).can_upload:
+        await m.answer("⛔ Bu buyruq faqat fayl yuklovchilar uchun.")
+        return
+    from export_products import products_export
+    wait = await m.answer("⏳ Spravochnik tayyorlanmoqda…")
+    async with pool.acquire() as con:
+        res = await products_export(con)
+    try:
+        await wait.delete()
+    except Exception:  # noqa: BLE001
+        pass
+    if res is None:
+        await m.answer("Bazada hali tovar spravochnigi yo'q.")
+        return
+    data, fname, text = res
+    await send_long(m, text)
+    await m.answer_document(BufferedInputFile(data, filename=fname))
 
 
 @router.message(Command("status"))
