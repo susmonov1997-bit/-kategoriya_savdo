@@ -29,14 +29,14 @@ from zoneinfo import ZoneInfo
 import asyncpg
 import pandas as pd
 
-from loaders_common import EXCEL_ENGINE, LoaderError, clean_text, name_key, read_sheet_with_header
+from loaders_common import EXCEL_ENGINE, LoaderError, clean_text, name_key, read_sheet_with_header, update_product_names
 
 # --- filial qoldig'i ---
 B_BRANCH, B_ID, B_QTY = "Filial", "Tovar Id", "Qoldiq"
 B_REGION, B_COST, B_CUR = "Hudud", "Kirim narxi", "Valyutasi"
-B_NAME, B_CAT, B_BRAND = "Tovar Variant nomi", "Tovar kategoriyasi", "Brand"
+B_NAME, B_NAME0, B_CAT, B_BRAND = "Tovar Variant nomi", "Tovar nomi", "Tovar kategoriyasi", "Brand"
 B_REQ = [B_BRANCH, B_ID, B_QTY]
-B_OPT = [B_REGION, B_COST, B_CUR, B_NAME, B_CAT, B_BRAND]   # «Sotish narxi» o'qilmaydi
+B_OPT = [B_REGION, B_COST, B_CUR, B_NAME, B_NAME0, B_CAT, B_BRAND]   # «Sotish narxi» o'qilmaydi
 
 # --- ombor qoldig'i ---
 W_ID, W_WH, W_QTY = "ID", "Омбор", "Мижоз учун қолдиқ"
@@ -162,6 +162,7 @@ class StockReport:
     by_loc: list[dict] = field(default_factory=list)       # [{name, qty, skus, value, parts}]
     replaced: dict = field(default_factory=dict)
     pending: dict = field(default_factory=dict)            # {rows, qty, skus}
+    names_updated: int = 0                                 # tovar nomi (variant nomi) yangilangan SKU soni
     unknown_skus: int = 0
     new_branches: list[dict] = field(default_factory=list)  # [{name, region, rows, qty}]
     unknown_parts: list[dict] = field(default_factory=list)  # [{name, key, rows, qty}]
@@ -253,8 +254,9 @@ def _parse_branch(data: bytes) -> tuple[pd.DataFrame, int, list[str], int]:
     df["cost_usd"] = (df["qty"] * cost).where(~is_sum)
     df["cost_sum"] = (df["qty"] * cost).where(is_sum)
     df["price_uzs"] = float("nan")                        # sotish narxi ishlatilmaydi (bazada NULL)
-    for c in (B_REGION, B_NAME, B_CAT, B_BRAND):
+    for c in (B_REGION, B_NAME, B_NAME0, B_CAT, B_BRAND):
         df[c] = df[c].map(clean_text) if c in df.columns else None
+    df[B_NAME] = df[B_NAME].where(df[B_NAME].notna(), df[B_NAME0])    # variant nomi bo'lmasa — «Tovar nomi»
     df["br_name"] = df[B_BRANCH].map(clean_text)
     g = (df.groupby(["br_key", "pid"], sort=False)
            .agg(qty=("qty", "sum"), cost_usd=("cost_usd", "sum"), usd_n=("cost_usd", "count"),
@@ -296,6 +298,9 @@ async def load_branch_stock(pool: asyncpg.Pool, data: bytes, file_name: str | No
                 prods = {r["product_id"] for r in await con.fetch("SELECT product_id FROM products")}
                 g["bid"] = g["br_key"].map(lambda k: brs[k][0] if k in brs else None)
                 g["known_p"] = g["pid"].isin(prods)
+                # tovar nomi = «Tovar Variant nomi» (bo'lmasa «Tovar nomi»)
+                rep.names_updated = await update_product_names(
+                    con, g[g["known_p"]].groupby("pid")["name"].first().to_dict())
                 scope = _scope_mask(g["cat"], g["known_p"], await _own_keys(con))
                 rep.out_of_scope_rows = int((~scope).sum())
                 g_all, g = g, g[scope]
@@ -405,6 +410,8 @@ async def load_wh_stock(pool: asyncpg.Pool, data: bytes, file_name: str | None =
                 df["wid"] = df["wh_name"].map(lambda n: res[n][0])
                 df["loc_key"] = df["wh_name"].map(lambda n: res[n][1])
                 df["known_p"] = df["pid"].isin(prods)
+                rep.names_updated = await update_product_names(      # «Товар» ustunidagi to'liq nom
+                    con, df[df["known_p"]].groupby("pid")[W_NAME].first().to_dict()) if W_NAME in df.columns else 0
                 scope = _scope_mask(df[W_CAT], df["known_p"], await _own_keys(con))
                 rep.out_of_scope_rows = int((~scope).sum())
                 df_all, df = df, df[scope]
@@ -513,6 +520,8 @@ def format_report(r: StockReport, max_items: int = 15) -> str:
         out += [f"  • {esc(x['name'])} — {_fmt(x['rows'])} qator, {_fmt(x['qty'])} dona" for x in r.unknown_parts[:max_items]]
     if r.out_of_scope_rows:
         out.append(f"\nℹ️ Boshqa kategoriyalar (yuklanmadi): {_fmt(r.out_of_scope_rows)} qator")
+    if r.names_updated:
+        out.append(f"✏️ Tovar nomi yangilandi (variant nomi): {_fmt(r.names_updated)} SKU")
     if r.zero_rows:
         out.append(f"\nℹ️ Qoldig'i 0 bo'lgan {_fmt(r.zero_rows)} qator o'tkazib yuborildi")
     if r.errors:

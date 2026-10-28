@@ -27,7 +27,7 @@ import asyncpg
 import pandas as pd
 
 from fact import refresh_dates
-from loaders_common import LoaderError, clean_text, name_key, read_sheet_with_header
+from loaders_common import LoaderError, clean_text, name_key, read_sheet_with_header, update_product_names
 
 COL_BRANCH = "Филиал"
 COL_CAT = "Категория"
@@ -116,6 +116,7 @@ class SalesLoadReport:
     fx: list[dict] = field(default_factory=list)   # fayl sanalariga qo'llangan kurslar
     company: dict = field(default_factory=dict)    # kompaniya jami: amount, rows, k_excluded, unknown_branch_rows
     pending: dict = field(default_factory=dict)    # kutayotgan savdo: rows, amount, skus
+    names_updated: int = 0                         # tovar nomi (variant nomi) yangilangan SKU soni
 
 
 def _fmt_mln(v: float) -> str:
@@ -320,6 +321,9 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
                 columns=["sale_date", "branch_key", "branch_name", "qty", "amount", "cost", "cost_usd", "cost_uzs",
                          "cost_split", "upload_id"])
         await refresh_dates(con, file_dates)          # tayyor hisob-kitob jadvali (sales_fact) — shu sanalar
+        # tovar nomi = «Товар Вариант номи» (bo'lmasa «Товар номи»); bir SKU bir necha kunda — eng oxirgi sanadagisi
+        known = sc[sc["prod_cat"].notna()].sort_values("d")
+        names_updated = await update_product_names(con, known.groupby("pid")["_pname"].last().to_dict())
         by_cat = await con.fetch(
             """SELECT c.name category, sum(e.amount) amount, sum(e.qty) qty,
                       sum(e.qty) FILTER (WHERE e.is_bonus) bonus_qty,
@@ -354,6 +358,7 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
         fx=[{"from": max(r["valid_from"], file_dates[0]).isoformat(), "rate": float(r["rate"])} for r in fx],
         company=company_info,
         pending=pending_info,
+        names_updated=names_updated,
     )
 
 
@@ -395,6 +400,8 @@ def format_report(r: SalesLoadReport, max_items: int = 15) -> str:
         out.append(f"\n♻️ Shu sanalardagi eski ma'lumot almashtirildi: {r.replaced['rows']} qator, "
                    f"{_fmt_mln(r.replaced['amount'])} mln")
     out.append(f"\nℹ️ Boshqa kategoriyalar (yuklanmadi): {r.out_of_scope_rows} qator")
+    if r.names_updated:
+        out.append(f"✏️ Tovar nomi yangilandi (variant nomi): {r.names_updated} SKU")
 
     if r.unknown_skus:
         out.append(f"\n⚠️ <b>Spravochnikda yo'q SKU: {len(r.unknown_skus)}</b> (yuklanmadi)")

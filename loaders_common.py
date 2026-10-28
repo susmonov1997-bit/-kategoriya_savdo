@@ -133,3 +133,22 @@ def _read_selected(buf, must_have: Iterable[str], scan_rows: int, usecols: Itera
     data_cols = [c for c in df.columns if c != "_excel_row"]
     df = df.dropna(how="all", subset=data_cols)
     return df.reset_index(drop=True), header_idx + 1
+
+
+async def update_product_names(con, names: dict[int, str]) -> int:
+    """Fayldagi tovar nomi (variant nomi) bilan spravochnikdagi nomni yangilaydi — faqat bazada bor SKU'lar,
+    faqat farq qilsa. Qaytaradi: nomi o'zgargan SKU soni."""
+    ids, vals = [], []
+    for pid, n in names.items():
+        n = clean_text(n)
+        if n and pid is not None:
+            ids.append(int(pid))
+            vals.append(n)
+    if not ids:
+        return 0
+    r = await con.fetchval(
+        """WITH u AS (UPDATE products p SET name = t.n
+                      FROM unnest($1::bigint[], $2::text[]) AS t(id, n)
+                      WHERE p.product_id = t.id AND p.name IS DISTINCT FROM t.n RETURNING 1)
+           SELECT count(*) FROM u""", ids, vals)
+    return int(r or 0)

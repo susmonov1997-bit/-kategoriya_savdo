@@ -2,7 +2,7 @@
 
 Kutilgan ustunlar (nomi bo'yicha qidiriladi, joylashuvi muhim emas):
   majburiy : Категория, Товар Ид, Товар номи, Бренд
-  ixtiyoriy: Группа, Статус
+  ixtiyoriy: Группа, Статус, Товар Вариант номи (bo'lsa — tovar nomi shundan olinadi)
   xususiyat: QOLGAN BARCHA ustunlar. Ustun nomi = xususiyat nomi, qavsda birlik bo'lishi mumkin:
              "Turi", "Balandlik (sm)", "Umumiy hajm (l)", "Rang" ...
              Eski format ("Подкатегория", "1-Субкатегория", ...) ham qabul qilinadi — u holda nom
@@ -34,6 +34,7 @@ COL_GROUP = "Группа"
 COL_CAT = "Категория"
 COL_ID = "Товар Ид"
 COL_NAME = "Товар номи"
+COL_VAR = "Товар Вариант номи"       # bo'lsa — tovar nomi shundan olinadi
 COL_BRAND = "Бренд"
 COL_STATUS = "Статус"
 REQUIRED = [COL_CAT, COL_ID, COL_NAME, COL_BRAND]
@@ -44,7 +45,7 @@ NUMERIC_SHARE_FOR_AUTO = 0.9      # yangi xususiyat: qiymatlarning 90%+ son bo'l
 
 _SUB_RE = re.compile(r"^(\d+)-Субкатегория$", re.IGNORECASE)
 _UNIT_RE = re.compile(r"^(.*?)\s*[\(\[]\s*([^\)\]]*?)\s*[\)\]]\s*$")
-META_COLS = {"Группа", "Категория", "Товар Ид", "Товар номи", "Бренд", "Статус", "_excel_row"}
+META_COLS = {"Группа", "Категория", "Товар Ид", "Товар номи", "Товар Вариант номи", "Бренд", "Статус", "_excel_row"}
 
 
 def split_name_unit(col: str) -> tuple[str, str | None]:
@@ -120,7 +121,8 @@ def parse_products(data: bytes) -> ProductsParseResult:
         if pid is None or not isinstance(pid, int) or pid <= 0:
             res.errors.append(f"{r}-qator: «Товар Ид» noto'g'ri ({rec.get(COL_ID)!r})")
             continue
-        name, cat, brand = clean_text(rec.get(COL_NAME)), clean_text(rec.get(COL_CAT)), clean_text(rec.get(COL_BRAND))
+        name = clean_text(rec.get(COL_VAR)) or clean_text(rec.get(COL_NAME))      # variant nomi ustun
+        cat, brand = clean_text(rec.get(COL_CAT)), clean_text(rec.get(COL_BRAND))
         empty = [n for n, v in ((COL_NAME, name), (COL_CAT, cat), (COL_BRAND, brand)) if not v]
         if empty:
             res.errors.append(f"{r}-qator (Ид {pid}): bo'sh — {', '.join(empty)}")
