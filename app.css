@@ -296,6 +296,7 @@ button.x{border:0;background:none;font-size:20px;line-height:1;color:var(--muted
 .opt.zero{color:var(--muted)}
 .pgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .opt2{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:12px;padding:10px 8px;font-size:14px;text-align:center}
+.opt2.wide{grid-column:1/-1}
 .opt2.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:600}
 .dates2{display:flex;gap:8px;align-items:center}
 .dates2 input{flex:1;min-width:0;font:inherit;padding:8px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink)}

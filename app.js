@@ -66,7 +66,7 @@ async function api(path, body) {
 // ---------------------------------------------------------------- holat
 let META = null;
 const st = {
-  cat: null, from: null, to: null, preset: '30', compare: 'mom',
+  cat: null, from: null, to: null, preset: 'month', compare: 'mom',
   f: {},                 // dim -> Set(key)   (kalitlar API'dagidek matn)
   mode: 'tree',          // tree (daraxt) | pivot (kesma)
   rows: 'region', cols: 'attr:0', sort: 'amount',
@@ -173,10 +173,10 @@ function cmpRange() {
 // ---------------------------------------------------------------- yuqori panel (A variant)
 const PERIODS = [
   ['1', 'Kecha'], ['7', 'Oxirgi 7 kun'], ['14', 'Oxirgi 14 kun'], ['30', 'Oxirgi 30 kun'],
-  ['week', 'Shu hafta'], ['lweek', "O'tgan hafta"], ['month', 'Shu oy'], ['lmonth', "O'tgan oy"]];
+  ['week', 'Shu hafta'], ['lweek', "O'tgan hafta"], ['month', 'Shu oy'], ['lmonth', "O'tgan oy"], ['year', 'Shu yil']];
 const PERIOD_NAME = Object.fromEntries(PERIODS);
 const PERIOD_SHORT = {'1': 'Kecha', '7': '7 kun', '14': '14 kun', '30': '30 kun', week: 'Shu hafta',
-                      lweek: "O'tgan hafta", month: 'Shu oy', lmonth: "O'tgan oy"};
+                      lweek: "O'tgan hafta", month: 'Shu oy', lmonth: "O'tgan oy", year: 'Shu yil'};
 const CMP_NAME = {mom: "O'tgan oy", prev: "Oldingi kunlar", yoy: "O'tgan yil", none: "Yo'q"};
 const CMP_SHORT = {mom: "o'tgan oy", prev: 'oldingi kunlar', yoy: "o'tgan yil", none: ''};
 function presetRange(k) {
@@ -185,6 +185,7 @@ function presetRange(k) {
   if (k === 'week') return [clamp(addDays(to, -dow)), to];
   if (k === 'lweek') { const mon = addDays(to, -dow - 7); return [clamp(mon), addDays(mon, 6)]; }
   if (k === 'month') return [clamp(to.slice(0, 8) + '01'), to];
+  if (k === 'year') return [clamp(to.slice(0, 5) + '01-01'), to];
   if (k === 'lmonth') { const last = addDays(to.slice(0, 8) + '01', -1); return [last.slice(0, 8) + '01', last]; }
   return [clamp(addDays(to, -(+k - 1))), to];
 }
@@ -282,7 +283,7 @@ function openCatSheet() {
 function openPeriodSheet() {
   let dPreset = st.preset, dFrom = st.from, dTo = st.to, dCmp = st.compare;
   const body = () => `
-    <div class="pgrid">${PERIODS.map(([k, t]) => `<button class="opt2 ${dPreset === k ? 'on' : ''}" data-k="${k}">${t}</button>`).join('')}</div>
+    <div class="pgrid">${PERIODS.map(([k, t]) => `<button class="opt2 ${dPreset === k ? 'on' : ''} ${k === 'year' ? 'wide' : ''}" data-k="${k}">${t}</button>`).join('')}</div>
     <div class="lbl">Ixtiyoriy davr <span class="hint">(ma'lumot: ${dm(META.data_from)}–${dm(META.data_to)})</span></div>
     <div class="dates2"><input type="date" id="pF" value="${dFrom}" min="${META.data_from}" max="${META.data_to}" aria-label="Boshlanish">
       <span>—</span><input type="date" id="pT" value="${dTo}" min="${META.data_from}" max="${META.data_to}" aria-label="Tugash"></div>
@@ -291,7 +292,11 @@ function openPeriodSheet() {
   const host = openSheetBox('Davr', body(), `<button class="btn primary" id="pApply">Qo'llash</button>`);
   const wire = () => {
     const sb = host.querySelector('.sbody');
-    sb.querySelectorAll('.opt2[data-k]').forEach(b => b.onclick = () => { dPreset = b.dataset.k; [dFrom, dTo] = presetRange(dPreset); sb.innerHTML = body(); wire(); });
+    sb.querySelectorAll('.opt2[data-k]').forEach(b => b.onclick = () => {
+      const was = dPreset; dPreset = b.dataset.k; [dFrom, dTo] = presetRange(dPreset);
+      if (dPreset === 'year' && dCmp !== 'none') dCmp = 'yoy';                 // yil — o'tgan yil bilan solishtiriladi
+      else if (was === 'year' && dCmp === 'yoy') dCmp = 'mom';
+      sb.innerHTML = body(); wire(); });
     sb.querySelectorAll('.opt2[data-c]').forEach(b => b.onclick = () => { dCmp = b.dataset.c; sb.innerHTML = body(); wire(); });
     sb.querySelector('#pF').onchange = e => { if (e.target.value) { dFrom = e.target.value; dPreset = ''; if (dFrom > dTo) dTo = dFrom; sb.innerHTML = body(); wire(); } };
     sb.querySelector('#pT').onchange = e => { if (e.target.value) { dTo = e.target.value; dPreset = ''; if (dTo < dFrom) dFrom = dTo; sb.innerHTML = body(); wire(); } };
