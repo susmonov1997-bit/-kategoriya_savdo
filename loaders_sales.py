@@ -42,8 +42,11 @@ COL_AMOUNT = "Жами(Чиқим нархи)"
 COL_UNIT = "Кирим нархи"
 COL_CUR = "Кирим нархи(Валюта тури)"
 COL_BRAND = "Бранд"
+COL_SUPPLIER = "Таъминотчи"
+COL_SHOP = "Дукон номи"
+EXCLUDE_COLS = [COL_SUPPLIER, COL_SHOP]   # shu ustunlardan birida biror qiymat bo'lsa — qator umuman hisobga olinmaydi
 USD_MAX_UNIT = 10_000    # «Доллар» deb yozilgan, lekin kirim narxi bundan katta — so'm deb olinadi (fayldagi xato)
-OPTIONAL = [COL_BONUS, COL_UNIT, COL_CUR, COL_BRAND, COL_VAR]
+OPTIONAL = [COL_BONUS, COL_UNIT, COL_CUR, COL_BRAND, COL_VAR] + EXCLUDE_COLS
 _USD = {"доллар", "долл", "dollar", "usd", "$", "у.е.", "уе"}
 _UZS = {"сум", "сўм", "сом", "so'm", "som", "sum", "uzs"}
 
@@ -118,6 +121,7 @@ class SalesLoadReport:
     company: dict = field(default_factory=dict)    # kompaniya jami: amount, rows, k_excluded, unknown_branch_rows
     pending: dict = field(default_factory=dict)    # kutayotgan savdo: rows, amount, skus
     names_updated: int = 0                         # tovar nomi (variant nomi) yangilangan SKU soni
+    excluded: dict = field(default_factory=dict)   # «Таъминотчи»/«Дукон номи» to'ldirilgan, hisobga olinmagan: rows, amount
     cur_fixed: dict = field(default_factory=dict)  # «Доллар» → so'm tuzatilgan qatorlar: rows, skus, examples
 
 
@@ -158,6 +162,18 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
     keep = REQUIRED + [c for c in OPTIONAL if c in df.columns] + ["_excel_row"]
     df = df[keep].copy()
     rows_total = len(df)
+    # «Таъминотчи» yoki «Дукон номи» to'ldirilgan qatorlar — savdo emas: na bizning savdoga, na kompaniya jamiga kiradi
+    excl = pd.Series(False, index=df.index)
+    for c in EXCLUDE_COLS:
+        if c in df.columns:
+            excl |= df[c].map(lambda v: clean_text(v) is not None)
+    excluded = {}
+    if excl.any():
+        excluded = {"rows": int(excl.sum()),
+                    "amount": float(pd.to_numeric(df.loc[excl, COL_AMOUNT], errors="coerce").fillna(0).sum())}
+        df = df[~excl].copy()
+        if df.empty:
+            raise LoaderError("Fayldagi hamma qatorda «Таъминотчи» yoki «Дукон номи» to'ldirilgan — yuklanadigan savdo yo'q")
     # nom: «Товар Вариант номи» (bo'lsa), aks holda «Товар номи»
     df["_pname"] = df[COL_VAR].map(clean_text) if COL_VAR in df.columns else None
     df["_pname"] = df["_pname"].fillna(df[COL_NAME].map(clean_text)) if COL_VAR in df.columns else df[COL_NAME].map(clean_text)
@@ -371,6 +387,7 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
         pending=pending_info,
         names_updated=names_updated,
         cur_fixed=cur_fixed,
+        excluded=excluded,
     )
 
 
@@ -417,6 +434,9 @@ def format_report(r: SalesLoadReport, max_items: int = 15) -> str:
         out.append(f"\n♻️ Shu sanalardagi eski ma'lumot almashtirildi: {r.replaced['rows']} qator, "
                    f"{_fmt_mln(r.replaced['amount'])} mln")
     out.append(f"\nℹ️ Boshqa kategoriyalar (yuklanmadi): {r.out_of_scope_rows} qator")
+    if r.excluded.get("rows"):
+        out.append(f"🚫 «Таъминотчи» yoki «Дукон номи» to'ldirilgan — hisobga olinmadi: {r.excluded['rows']} qator · "
+                   f"{_fmt_mln(r.excluded['amount'])} mln")
     if r.names_updated:
         out.append(f"✏️ Tovar nomi yangilandi (variant nomi): {r.names_updated} SKU")
 
