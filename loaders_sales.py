@@ -42,6 +42,7 @@ COL_AMOUNT = "Жами(Чиқим нархи)"
 COL_UNIT = "Кирим нархи"
 COL_CUR = "Кирим нархи(Валюта тури)"
 COL_BRAND = "Бранд"
+USD_MAX_UNIT = 10_000    # «Доллар» deb yozilgan, lekin kirim narxi bundan katta — so'm deb olinadi (fayldagi xato)
 OPTIONAL = [COL_BONUS, COL_UNIT, COL_CUR, COL_BRAND, COL_VAR]
 _USD = {"доллар", "долл", "dollar", "usd", "$", "у.е.", "уе"}
 _UZS = {"сум", "сўм", "сом", "so'm", "som", "sum", "uzs"}
@@ -117,6 +118,7 @@ class SalesLoadReport:
     company: dict = field(default_factory=dict)    # kompaniya jami: amount, rows, k_excluded, unknown_branch_rows
     pending: dict = field(default_factory=dict)    # kutayotgan savdo: rows, amount, skus
     names_updated: int = 0                         # tovar nomi (variant nomi) yangilangan SKU soni
+    cur_fixed: dict = field(default_factory=dict)  # «Доллар» → so'm tuzatilgan qatorlar: rows, skus, examples
 
 
 def _fmt_mln(v: float) -> str:
@@ -152,6 +154,7 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
         raise LoaderError("Majburiy ustun(lar) yo'q: " + ", ".join(missing))
 
     split = COL_UNIT in df.columns and COL_CUR in df.columns
+    cur_fixed: dict = {}
     keep = REQUIRED + [c for c in OPTIONAL if c in df.columns] + ["_excel_row"]
     df = df[keep].copy()
     rows_total = len(df)
@@ -169,6 +172,14 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
         df["unit"] = pd.to_numeric(df[COL_UNIT], errors="coerce")
         cache = {v: norm_currency(v) for v in df[COL_CUR].dropna().unique()}
         df["cur"] = df[COL_CUR].map(lambda v: cache.get(v) if v is not None and v == v else None)
+        # valyuta «Доллар», lekin kirim narxi USD_MAX_UNIT dan katta — fayldagi xato: aslida so'mda
+        wrong = (df["cur"] == "USD") & (df["unit"] > USD_MAX_UNIT)
+        if wrong.any():
+            df.loc[wrong, "cur"] = "UZS"
+            ex = df[wrong].drop_duplicates("pid").head(5)
+            cur_fixed = {"rows": int(wrong.sum()), "skus": int(df.loc[wrong, "pid"].nunique()),
+                         "examples": [f"{int(r['pid']) if r['pid'] == r['pid'] else '—'} · {r['_pname'] or ''} — {r['unit']:,.0f}".replace(",", " ")
+                                      for _, r in ex.iterrows()]}
     df["cat_key"] = df[COL_CAT].map(name_key)
     df["br_key"] = df[COL_BRANCH].map(name_key)
 
@@ -359,6 +370,7 @@ async def _load(con: asyncpg.Connection, data: bytes, upload_id: int) -> SalesLo
         company=company_info,
         pending=pending_info,
         names_updated=names_updated,
+        cur_fixed=cur_fixed,
     )
 
 
@@ -394,6 +406,11 @@ def format_report(r: SalesLoadReport, max_items: int = 15) -> str:
         rates = ", ".join(f"{x['rate']:,.0f}".replace(",", " ") + (f" ({x['from']} dan)" if len(r.fx) > 1 else "")
                           for x in r.fx)
         out.append(f"💱 Tannarx: Сони × Кирим нархи × kurs ({rates} so'm/$)")
+        if r.cur_fixed.get("rows"):
+            lim = f"{USD_MAX_UNIT:,}".replace(",", " ")
+            out.append(f"🔧 Valyuta tuzatildi: «Доллар» yozilgan, lekin kirim narxi {lim} dan katta — so'm deb olindi: "
+                       f"{r.cur_fixed['rows']} qator · {r.cur_fixed['skus']} SKU")
+            out += [f"   • {esc(x)}" for x in r.cur_fixed.get("examples", [])]
     else:
         out.append("⚠️ Faylda «Кирим нархи» / «Кирим нархи(Валюта тури)» yo'q — tannarx Жами(Кирим нархи) dan olindi")
     if r.replaced.get("rows"):
