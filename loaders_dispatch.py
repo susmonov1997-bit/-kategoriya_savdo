@@ -16,7 +16,7 @@ import loaders_sales as sales
 import loaders_stock as stock
 from fact import ensure_fact
 from pending import format_resolved, resolve_pending
-from loaders_common import LoaderError, read_headers
+from loaders_common import LoaderError, read_headers, release_memory
 
 log = logging.getLogger(__name__)
 
@@ -54,12 +54,17 @@ async def load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int 
                       finalize: bool = True) -> tuple[str, str, int]:
     """Faylni yuklaydi. Qaytaradi: (tur, HTML hisobot, upload_id). LoaderError tashqariga chiqadi.
     finalize=True — yuklashdan keyin sales_fact kerak bo'lsa qayta quriladi (tekshiruvda — yo'q)."""
-    res = await _load_any_ex(pool, data, file_name, tg_user_id)
+    try:
+        res = await _load_any_ex(pool, data, file_name, tg_user_id)
+    finally:
+        release_memory()                 # o'qilgan Excel/DataFrame xotirasi — tizimga qaytariladi
     if finalize:
         try:
             await ensure_fact(pool)
         except Exception:  # noqa: BLE001
             log.exception("sales_fact qayta qurilmadi — API keyingi so'rovda quradi")
+        finally:
+            release_memory()
     return res
 
 

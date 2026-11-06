@@ -152,3 +152,15 @@ async def update_product_names(con, names: dict[int, str]) -> int:
                       WHERE p.product_id = t.id AND p.name IS DISTINCT FROM t.n RETURNING 1)
            SELECT count(*) FROM u""", ids, vals)
     return int(r or 0)
+
+
+def release_memory() -> None:
+    """Katta fayl o'qilgandan keyin bo'shagan xotirani operatsion tizimga qaytaradi.
+    Python/pandas xotirani o'zida ushlab qoladi — Railway esa band xotira uchun daqiqalab haq oladi."""
+    import ctypes
+    import gc
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:  # noqa: BLE001 — glibc bo'lmagan tizimda (Windows/macOS) shunchaki o'tkaziladi
+        pass
