@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 import config
 from api_auth import User, current_user
-from loaders_common import LoaderError
+from loaders_common import LoaderError, release_memory
 from loaders_dispatch import KIND_NAMES, detect_kind, load_any_ex
 from notify import broadcast_upload
 from bot_stock import prompt_new
@@ -107,11 +107,12 @@ async def _check(pool, job: dict) -> None:
             try:
                 _, text, uid = await load_any_ex(_OneConnection(con), data, job["file_name"], job["user_id"],
                                                  finalize=False)
-                if kind == "sales":            # spravochnikda yo'qlar — rollback'dan oldin Excel'ga olinadi
-                    rep = await report_of(con, uid)
-                    if has_missing(rep):
+                if kind in ("sales", "stock_branch", "stock_wh"):   # spravochnikda yo'qlar — rollback'dan oldin
+                    from export_missing import missing_for
+                    rep = await missing_for(con, kind, uid)
+                    if rep:
                         job["missing_xlsx"] = await build_missing_xlsx(con, rep)
-                        job["missing_report"] = {k: rep.get(k) for k in ("dates", "unknown_skus", "unknown_branches")}
+                        job["missing_report"] = {k: rep.get(k) for k in ("dates", "unknown_skus", "unknown_branches", "stock")}
             finally:
                 await tr.rollback()            # tekshiruv — hech narsa saqlanmaydi
         job.update(status="checked", report=_preview_text(text, kind))
@@ -121,6 +122,7 @@ async def _check(pool, job: dict) -> None:
         log.exception("Tekshiruvda xato")
         job.update(status="failed", error=f"Kutilmagan xato: {e}")
     job["elapsed"] = round(time.time() - t0, 1)
+    release_memory()                                # fayl va DataFrame xotirasi tizimga qaytariladi
 
 
 async def _load(pool, job: dict) -> None:
@@ -144,12 +146,13 @@ async def _load(pool, job: dict) -> None:
             if kind in ("stock_branch", "stock_wh"):
                 from stock_notify import schedule_summary
                 schedule_summary(pool)
-            if kind == "sales":
+            if kind in ("sales", "stock_branch", "stock_wh"):
+                from export_missing import missing_for
                 async with pool.acquire() as con:
-                    rep = await report_of(con, upload_id)
-                    if has_missing(rep):
+                    rep = await missing_for(con, kind, upload_id)
+                    if rep:
                         job["missing_xlsx"] = await build_missing_xlsx(con, rep)
-                        job["missing_report"] = {k: rep.get(k) for k in ("dates", "unknown_skus", "unknown_branches")}
+                        job["missing_report"] = {k: rep.get(k) for k in ("dates", "unknown_skus", "unknown_branches", "stock")}
                         await _send_missing(job["user_id"], job["missing_xlsx"], job["missing_report"])
                     else:
                         job.pop("missing_xlsx", None)
@@ -163,6 +166,7 @@ async def _load(pool, job: dict) -> None:
     finally:
         Path(job["path"]).unlink(missing_ok=True)
     job["elapsed"] = round(time.time() - t0, 1)
+    release_memory()                                # fayl va DataFrame xotirasi tizimga qaytariladi
 
 
 async def _notify(chat_id: int, text: str) -> None:

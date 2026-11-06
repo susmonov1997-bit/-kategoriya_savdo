@@ -128,7 +128,8 @@ async def build_missing_xlsx(con: asyncpg.Connection, report: dict) -> bytes | N
     if cum:
         wi.append(["Barcha kutayotganlar", f"{report.get('asof', '')} holati (hamma yuklangan fayllardan)"])
     else:
-        wi.append(["Savdo fayli", ", ".join(filter(None, [d[0] if d else None, d[-1] if len(d) > 1 else None]))])
+        wi.append(["Qoldiq fayli" if report.get("stock") else "Savdo fayli",
+                   ", ".join(filter(None, [d[0] if d else None, d[-1] if len(d) > 1 else None]))])
     wi.append(["Spravochnikda yo'q SKU", len(skus), "summa", round(sum(s.get("amount") or 0 for s in skus))])
     wi.append(["Spravochnikda yo'q filial", len(brs), "summa", round(sum(b.get("amount") or 0 for b in brs))])
     wi.append([])
@@ -139,13 +140,14 @@ async def build_missing_xlsx(con: asyncpg.Connection, report: dict) -> bytes | N
     wi.append(["4. Savdo faylini qayta yuklash shart emas — bu SKU/filiallar savdosi saqlab qo'yilgan va spravochnik yuklanishi bilan avtomatik qo'shiladi."])
     wi.append([])
     wi.append(["Tur", "Товар Ид / Филиал", "Nomi", "Категория", "Qator", "Dona", "Summa"]
-              + (["Birinchi sana", "Oxirgi sana", "Necha kun sotilgan"] if cum else []))
+              + (["Birinchi sana", "Oxirgi sana", "Necha kun sotilgan", "Manba", "Qoldiq, dona"] if cum else []))
     for c in wi[wi.max_row]:
         c.font, c.fill = BOLD, HEAD_FILL
-    for s in sorted(skus, key=lambda x: -(x.get("amount") or 0)):
+    for s in sorted(skus, key=lambda x: (-(x.get("amount") or 0), -(x.get("stock_qty") or 0))):
         wi.append(["SKU", s.get("product_id"), s.get("name"), s.get("category"), s.get("rows"),
                    s.get("qty"), round(s.get("amount") or 0)]
-                  + ([_d(s.get("first")), _d(s.get("last")), s.get("days")] if cum else []))
+                  + ([_d(s.get("first")), _d(s.get("last")), s.get("days"), s.get("src"), s.get("stock_qty") or None]
+                     if cum else []))
     for b in sorted(brs, key=lambda x: -(x.get("amount") or 0)):
         wi.append(["Filial", b.get("name"), None, None, b.get("rows"), None, round(b.get("amount") or 0)]
                   + ([_d(b.get("first")), _d(b.get("last")), b.get("days")] if cum else []))
@@ -158,7 +160,7 @@ async def build_missing_xlsx(con: asyncpg.Connection, report: dict) -> bytes | N
             for c in row[7:9]:
                 c.number_format = "DD.MM.YYYY"
     wi.column_dimensions["A"].width = 26
-    for col in "BCDEFGHIJ":
+    for col in "BCDEFGHIJKL":
         wi.column_dimensions[col].width = 18
     wi.column_dimensions["C"].width = 45
     for row in wi.iter_rows(min_row=5, max_row=9):
@@ -188,9 +190,10 @@ def missing_caption(report: dict) -> str:
         parts.append(f"{n_s} ta SKU")
     if n_b:
         parts.append(f"{n_b} ta filial")
+    what = "qoldig'i" if report.get("stock") else "savdosi"
     return (f"📎 Spravochnikda yo'q: {', '.join(parts)}.\n"
-            "«Tovarlar» varag'ini to'ldirib botga yuboring — ularning savdosi avtomatik qo'shiladi, "
-            "savdo faylini qayta yuklash shart emas.")
+            f"«Tovarlar» varag'ini to'ldirib botga yuboring — ularning {what} avtomatik qo'shiladi, "
+            "faylni qayta yuklash shart emas.")
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +221,28 @@ async def pending_report(con: asyncpg.Connection) -> dict:
                    FROM sales_pending sp
                    WHERE NOT EXISTS (SELECT 1 FROM products p WHERE p.product_id = sp.product_id)
                    GROUP BY sp.product_id ORDER BY sum(sp.amount) DESC""")]
+    # qoldiqda yo'q SKU'lar — har tur (filial/ombor) bo'yicha oxirgi qoldiq sanasidan
+    by_id = {x["product_id"]: x for x in skus}
+    for x in skus:
+        x["src"] = "savdo"
+    for r in await con.fetch(
+            """WITH last AS (SELECT kind, max(snap_date) d FROM stock_pending GROUP BY kind)
+               SELECT sp.product_id pid, max(sp.product_name) name, max(sp.category) cat, max(sp.brand) brand,
+                      sum(sp.qty) FILTER (WHERE sp.kind = 'b') qb, sum(sp.qty) FILTER (WHERE sp.kind = 'w') qw
+               FROM stock_pending sp JOIN last l ON l.kind = sp.kind AND l.d = sp.snap_date
+               WHERE NOT EXISTS (SELECT 1 FROM products p WHERE p.product_id = sp.product_id)
+               GROUP BY sp.product_id"""):
+        pid = int(r["pid"])
+        src = ", ".join(t for t, q in (("filial qoldig'i", r["qb"]), ("ombor qoldig'i", r["qw"])) if q)
+        stock = float((r["qb"] or 0) + (r["qw"] or 0))
+        x = by_id.get(pid)
+        if x is None:
+            x = {"product_id": pid, "name": r["name"], "category": r["cat"], "brand": r["brand"],
+                 "rows": 0, "qty": 0.0, "amount": 0.0, "first": None, "last": None, "days": 0, "src": src}
+            skus.append(x)
+        elif src:
+            x["src"] += ", " + src
+        x["stock_qty"] = stock
     brs = [{"name": r["name"], "rows": int(r["n"]), "amount": float(r["amount"]),
             "first": r["d1"].isoformat(), "last": r["d2"].isoformat(), "days": int(r["days"])}
            for r in await con.fetch(
@@ -236,18 +261,54 @@ def pending_text(rep: dict, top: int = 5) -> str:
     mln = lambda v: (f"{v / 1e9:,.2f} mlrd" if abs(v) >= 1e9 else f"{v / 1e6:,.1f} mln").replace(",", " ").replace(".", ",")  # noqa: E731
     skus, brs = rep.get("unknown_skus") or [], rep.get("unknown_branches") or []
     if not skus and not brs:
-        return "✅ Kutayotgan savdo yo'q — hamma SKU va filiallar spravochnikda bor."
-    out = ["⏳ <b>Spravochnikda yo'qligi uchun kutayotgan savdo</b>",
+        return "✅ Kutayotgan savdo va qoldiq yo'q — hamma SKU va filiallar spravochnikda bor."
+    out = ["⏳ <b>Spravochnikda yo'qligi uchun kutayotgan savdo va qoldiq</b>",
            f"<i>hamma yuklangan fayllardan, {esc(rep.get('asof'))} holati</i>", ""]
-    if skus:
-        d1, d2 = min(s["first"] for s in skus), max(s["last"] for s in skus)
-        out.append(f"SKU: <b>{len(skus)} ta</b> · {mln(sum(s['amount'] for s in skus))} so'm · "
+    sold = [s for s in skus if s.get("rows")]
+    only_stock = [s for s in skus if not s.get("rows")]
+    if sold:
+        d1, d2 = min(s["first"] for s in sold), max(s["last"] for s in sold)
+        out.append(f"Savdoda: <b>{len(sold)} ta SKU</b> · {mln(sum(s['amount'] for s in sold))} so'm · "
                    f"{d1[8:10]}.{d1[5:7]} — {d2[8:10]}.{d2[5:7]}")
+    if only_stock:
+        q = sum(s.get("stock_qty") or 0 for s in only_stock)
+        out.append(f"Faqat qoldiqda (sotilmagan): <b>{len(only_stock)} ta SKU</b> · {q:,.0f} dona".replace(",", " "))
     if brs:
         out.append(f"Filial: <b>{len(brs)} ta</b> · {mln(sum(b['amount'] for b in brs))} so'm")
-    if skus:
-        out += ["", f"Eng katta {min(top, len(skus))} ta:"]
-        for i, s in enumerate(skus[:top], 1):
+    if sold:
+        out += ["", f"Savdosi eng katta {min(top, len(sold))} ta:"]
+        for i, s in enumerate(sold[:top], 1):
             out.append(f"{i}. {esc(s['name'] or s['product_id'])} · {esc(s['category'])} — {mln(s['amount'])} ({s['days']} kun)")
-    out += ["", "📎 Excel'ni to'ldirib botga yuboring — savdo avtomatik qo'shiladi."]
+    if only_stock:
+        big = sorted(only_stock, key=lambda x: -(x.get("stock_qty") or 0))[:top]
+        out += ["", f"Qoldig'i eng ko'p {len(big)} ta:"]
+        for i, s in enumerate(big, 1):
+            out.append(f"{i}. {esc(s['name'] or s['product_id'])} · {esc(s['category'])} — {s.get('stock_qty') or 0:,.0f} dona".replace(",", " "))
+    out += ["", "📎 Excel'ni to'ldirib botga yuboring — savdo va qoldiq avtomatik qo'shiladi."]
     return "\n".join(out)
+
+
+async def stock_missing_report(con: asyncpg.Connection, upload_id: int) -> dict | None:
+    """Qoldiq yuklashi bo'yicha spravochnikda yo'q SKU'lar (kunlik «spravochnikda yo'q» Excel'i uchun)."""
+    rows = await con.fetch(
+        """SELECT sp.product_id pid, max(sp.product_name) name, max(sp.category) cat, max(sp.brand) brand,
+                  count(*) n, sum(sp.qty) qty, max(sp.snap_date) d
+           FROM stock_pending sp
+           WHERE sp.upload_id = $1 AND NOT EXISTS (SELECT 1 FROM products p WHERE p.product_id = sp.product_id)
+           GROUP BY sp.product_id ORDER BY sum(sp.qty) DESC""", upload_id)
+    if not rows:
+        return None
+    return {"stock": True, "dates": [rows[0]["d"].isoformat()],
+            "unknown_skus": [{"product_id": int(r["pid"]), "name": r["name"], "category": r["cat"], "brand": r["brand"],
+                              "rows": int(r["n"]), "qty": float(r["qty"]), "amount": 0.0} for r in rows],
+            "unknown_branches": []}
+
+
+async def missing_for(con: asyncpg.Connection, kind: str, upload_id: int) -> dict | None:
+    """Yuklash turi bo'yicha «spravochnikda yo'q» hisoboti: savdo — upload hisobotidan, qoldiq — stock_pending dan."""
+    if kind == "sales":
+        rep = await report_of(con, upload_id)
+        return rep if has_missing(rep) else None
+    if kind in ("stock_branch", "stock_wh"):
+        return await stock_missing_report(con, upload_id)
+    return None

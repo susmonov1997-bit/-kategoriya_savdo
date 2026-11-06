@@ -22,7 +22,7 @@ import config
 from access import ROLE_NAMES, get_access, invalidate
 from db import create_pool, migrate
 from fact import ensure_fact
-from loaders_common import LoaderError
+from loaders_common import LoaderError, release_memory
 from loaders_dispatch import load_any, load_any_ex
 import bot_stock
 from bot_stock import prompt_new
@@ -504,6 +504,8 @@ async def on_document(m: Message, bot: Bot, pool: asyncpg.Pool) -> None:
     except Exception:  # noqa: BLE001
         log.exception("Yuklashda xato")
         text = "❌ Kutilmagan xato. Loglarni tekshiring — ma'lumot o'zgartirilmadi."
+    data = buf = None                   # katta fayl baytlari — xotirani bo'shatish uchun
+    release_memory()
     try:
         await wait.delete()
     except Exception:  # noqa: BLE001
@@ -518,12 +520,13 @@ async def on_document(m: Message, bot: Bot, pool: asyncpg.Pool) -> None:
             _bg(prompt_new(pool, bot))
         if kind in ("stock_branch", "stock_wh"):
             schedule_summary(pool)       # qoldiq xulosasi — oxirgi qoldiq yuklashidan ~2,5 daqiqa keyin bitta
-    if kind == "sales" and upload_id:
-        # spravochnikda yo'q SKU/filiallar — to'ldirish uchun tayyor Excel shablon
+    if kind in ("sales", "stock_branch", "stock_wh") and upload_id:
+        # spravochnikda yo'q SKU/filiallar (savdo yoki qoldiq) — to'ldirish uchun tayyor Excel shablon
         try:
+            from export_missing import missing_for
             async with pool.acquire() as con:
-                rep = await report_of(con, upload_id)
-                xlsx = await build_missing_xlsx(con, rep) if has_missing(rep) else None
+                rep = await missing_for(con, kind, upload_id)
+                xlsx = await build_missing_xlsx(con, rep) if rep else None
             if xlsx:
                 await m.answer_document(BufferedInputFile(xlsx, filename=missing_file_name(rep)),
                                         caption=missing_caption(rep), reply_markup=all_pending_kb())
