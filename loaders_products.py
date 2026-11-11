@@ -107,10 +107,11 @@ def parse_products(data: bytes) -> ProductsParseResult:
     if not attr_cols:
         raise LoaderError("Xususiyat ustunlari topilmadi — majburiy ustunlardan keyin xususiyat ustunlari "
                           "bo'lishi kerak (masalan: Turi, Balandlik (sm), Rang)")
-    names = [_norm(split_name_unit(c)[0]) for c in attr_cols]
-    dup = sorted({c for c, n in zip(attr_cols, names) if names.count(n) > 1})
-    if dup:
-        raise LoaderError("Bir xil nomli xususiyat ustunlari: " + ", ".join(dup))
+    # bir xil nomli ustunlar (masalan «Хажми (л)» va «Хажми (кг)») — har xil kategoriyalarniki bo'lsa muammo yo'q;
+    # faqat BITTA kategoriyada ikkalasi ham to'ldirilgan bo'lsa — xato (qaysi biri ekani noaniq)
+    base_of = {c: _norm(split_name_unit(c)[0]) for c in attr_cols}
+    names = list(base_of.values())
+    dup_cols = {c for c, n in base_of.items() if names.count(n) > 1}
 
     res = ProductsParseResult(products={}, attr_cols=attr_cols, rows_total=len(df))
     seen_rows: dict[int, list[ParsedProduct]] = {}
@@ -142,6 +143,23 @@ def parse_products(data: bytes) -> ProductsParseResult:
             raw_attrs=raw_attrs, excel_row=r,
         )
         seen_rows.setdefault(pid, []).append(p)
+
+    if dup_cols:
+        clash: dict[str, set[str]] = {}
+        # kategoriya bo'yicha: bir xil nomli ikki ustun to'ldirilgan bo'lsa (bitta yoki turli SKU'larda) — noaniq
+        per_cat: dict[str, dict[str, set[str]]] = {}
+        for rows in seen_rows.values():
+            for p in rows:
+                for c in p.raw_attrs:
+                    if c in dup_cols:
+                        per_cat.setdefault(p.category, {}).setdefault(base_of[c], set()).add(c)
+        for cat, d in per_cat.items():
+            for cols in d.values():
+                if len(cols) > 1:
+                    clash.setdefault(cat, set()).update(cols)
+        if clash:
+            raise LoaderError("Bir kategoriyada bir xil nomli xususiyat ustunlari to'ldirilgan: " + "; ".join(
+                f"{cat} — {', '.join(sorted(cols))}" for cat, cols in sorted(clash.items())))
 
     for pid, rows in seen_rows.items():
         if len(rows) == 1:
@@ -180,6 +198,7 @@ class ProductsLoadReport:
     errors: list[str]
     duplicates: list[dict]
     by_category: dict[str, int]
+    waiting: list[str] = field(default_factory=list)   # yangi SKU, xususiyati to'liq emas — kutayotganda qoldi
 
     def as_json(self) -> dict:
         return self.__dict__.copy()
@@ -218,7 +237,49 @@ async def load_products(
         return report
 
 
+async def _incomplete_new(con: asyncpg.Connection, prods: list[ParsedProduct]) -> list[ParsedProduct]:
+    """Yangi SKU (bazada yo'q) kutayotganda qoladi, agar kategoriyasining xususiyatlaridan birortasi to'ldirilmagan
+    bo'lsa. Kategoriya xususiyatlari = bazadagi (Mini App'da ko'rinadigan) + shu faylda shu kategoriyada to'ldirilgan
+    ustunlar. Xususiyati umuman yo'q kategoriya (bazada ham, faylda ham) — SKU kutadi.
+    Bazada bor SKU'lar odatdagidek yangilanadi."""
+    known = {r["product_id"] for r in await con.fetch(
+        "SELECT product_id FROM products WHERE product_id = ANY($1::bigint[])", [p.product_id for p in prods])}
+    db_req: dict[str, list[tuple[str, str, int | None]]] = {}
+    for r in await con.fetch("""SELECT c.name cat, a.slot, a.name, a.source_col FROM category_attributes a
+                                JOIN categories c ON c.id = a.category_id WHERE a.is_filter"""):
+        db_req.setdefault(r["cat"], []).append((_norm(r["name"]), _norm(r["source_col"]), r["slot"]))
+    file_cols: dict[str, set[str]] = {}                 # kategoriya → faylda to'ldirilgan ustunlar
+    for p in prods:
+        file_cols.setdefault(p.category, set()).update(p.raw_attrs)
+    out = []
+    for p in prods:
+        if p.product_id in known:
+            continue
+        filled_names = {_norm(split_name_unit(c)[0]) for c in p.raw_attrs}
+        filled_cols = {_norm(c) for c in p.raw_attrs}
+        filled_slots = {s for c in p.raw_attrs if (s := attr_slot(c)) is not None}
+        need_db = db_req.get(p.category, [])
+        need_file = file_cols.get(p.category, set())
+        if not need_db and not need_file:
+            out.append(p)                                # kategoriyada birorta xususiyat yo'q
+            continue
+        miss_db = any(n not in filled_names and sc not in filled_cols and sl not in filled_slots
+                      for n, sc, sl in need_db)
+        miss_file = any(c not in p.raw_attrs for c in need_file)
+        if miss_db or miss_file:
+            out.append(p)
+    return out
+
+
 async def _write(con: asyncpg.Connection, parsed: ProductsParseResult, upload_id: int) -> ProductsLoadReport:
+    # yangi SKU'ning xususiyatlari to'liq bo'lmasa — qabul qilinmaydi, kutayotganda qoladi
+    wait = await _incomplete_new(con, list(parsed.products.values()))
+    if wait:
+        skip = {p.product_id for p in wait}
+        parsed.products = {k: v for k, v in parsed.products.items() if k not in skip}
+        if not parsed.products:
+            raise LoaderError(f"Fayldagi {len(wait)} ta yangi SKU'ning birortasida ham xususiyatlar to'liq "
+                              "to'ldirilmagan — hech narsa yuklanmadi, ular kutayotganda qoldi")
     prods = list(parsed.products.values())
     async with con.transaction():
         # --- kategoriyalar ---
@@ -390,6 +451,7 @@ async def _write(con: asyncpg.Connection, parsed: ProductsParseResult, upload_id
         errors=parsed.errors,
         duplicates=parsed.duplicates,
         by_category=dict(sorted(by_cat.items(), key=lambda kv: -kv[1])),
+        waiting=[f"{p.product_id} · {p.name} ({p.category})" for p in wait],
     )
 
 
@@ -405,10 +467,14 @@ def format_report(r: ProductsLoadReport, max_items: int = 15) -> str:
         f"✅ <b>Tovar spravochnigi yuklandi</b> (#{r.upload_id})",
         f"Qatorlar: {r.rows_total} → yuklandi: <b>{r.loaded}</b> SKU",
         f"Yangi: {r.inserted} · O'zgargan: {r.updated} · O'zgarmagan: {r.unchanged}",
+        *([f"⏳ Xususiyati to'liq to'ldirilmagan yangi SKU — kutayotganda qoldi: <b>{len(r.waiting)}</b>"]
+          if r.waiting else []),
         "",
         "<b>Kategoriyalar:</b>",
         *[f"  • {html.escape(c)}: {n}" for c, n in r.by_category.items()],
     ]
+    if r.waiting:
+        out += ["\n⏳ <b>Kutayotganda qoldi</b> (xususiyatlari to'liq emas — to'ldirib qayta yuboring):", lst(r.waiting)]
     if r.missing_in_file:
         out.append(f"\nℹ️ Bazada bor, faylda yo'q SKU: {r.missing_in_file} (o'chirilmadi)")
     if r.new_categories:
