@@ -861,8 +861,20 @@ function attrNode(d, item) {
 }
 function attrBlock(b) {
   const d = b.dim, sel = st.f[d] || new Set(), hasCmp = !!cmpRange();
-  const items = b.items;
-  items.forEach(i => remember(d, i.key, i.label));
+  b.items.forEach(i => remember(d, i.key, i.label));
+  // blokning o'z filtri berilgan bo'lsa — faqat tanlanganlar, ulush ular ichida (100%)
+  const focus = sel.size > 0;
+  let items = b.items;
+  if (focus) {
+    const pv = k => (k ? (MQ() ? k.qty : k.amount) || 0 : 0);
+    items = b.items.filter(i => sel.has(i.key)).map(i => ({...i}));
+    const tc = items.reduce((t, i) => t + mval(i.current), 0), tp = items.reduce((t, i) => t + pv(i.previous), 0);
+    items.forEach(i => {
+      i.share = tc ? mval(i.current) / tc * 100 : null;
+      const ps = hasCmp && tp ? pv(i.previous) / tp * 100 : null;
+      i.share_pp = i.share != null && ps != null ? i.share - ps : null;
+    });
+  }
   const byVal = items.slice().sort((x, y) => mval(y.current) - mval(x.current));
   const rank = new Map(byVal.map((i, n) => [i.key, n]));
   const color = i => rank.get(i.key) < SLOTS ? `var(--s${rank.get(i.key) + 1})` : 'var(--so)';
@@ -893,7 +905,7 @@ function attrBlock(b) {
   const lead = byVal[0];
   return `<div class="ablock ${isOpen ? 'open' : ''}">
     <button class="ah" data-d="${d}" aria-expanded="${isOpen}"><h3><span class="c">${isOpen ? '▾' : '▸'}</span>${esc(b.title)}${b.unit ? ` <span class="u">${esc(b.unit)}</span>` : ''}</h3>
-      <span class="hint num">${items.length} ta${sel.size ? ` · tanlangan ${sel.size}` : !isOpen && lead ? ` · ${esc(lead.label)} ${pct(lead.share)}` : ''}</span></button>
+      <span class="hint num">${focus ? `tanlangan ${items.length} ta · ulush ular ichida` : `${items.length} ta${sel.size ? ` · tanlangan ${sel.size}` : !isOpen && lead ? ` · ${esc(lead.label)} ${pct(lead.share)}` : ''}`}</span></button>
     ${items.length ? `<div class="strip">${byVal.map(i => `<span style="width:${i.share || 0}%;background:${color(i)}" title="${esc(i.label)}: ${pct(i.share)}"></span>`).join('')}</div>` : `<div class="empty">Savdo yo'q</div>`}
     ${isOpen ? `<div class="arows">${rows}
     ${rest.length ? `<button class="more amore" data-d="${d}">Yana ${rest.length} ta (${pct(restShare)}) — ko'rsatish</button>` : ''}
