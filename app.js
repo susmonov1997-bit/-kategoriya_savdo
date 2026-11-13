@@ -336,29 +336,36 @@ async function openFilterSheet() {
         ${list.length > 200 ? `<div class="hint" style="padding:6px 16px">Yana ${list.length - 200} ta — qidiruvdan foydalaning</div>` : ''}</div>` : ''}
     </div>`;
   };
-  const body = () => {
+  // ro'yxat qismi alohida chiziladi: qidiruv maydoni qayta yaratilmaydi, oyna balandligi o'zgarmaydi — sakramaydi
+  const listHtml = () => {
     const loc = LOC_DIMS.map(dimBlock).join(''), prod = prodDims().map(dimBlock).join('');
-    return `<input type="search" id="fQ" placeholder="Qidirish: hudud, filial, brend, qiymat…" autocomplete="off" value="${esc(q)}">
-      ${loc ? `<div class="fsec">📍 Joy</div>${loc}` : ''}${prod ? `<div class="fsec">📦 Tovar</div>${prod}` : ''}
+    return `${loc ? `<div class="fsec">📍 Joy</div>${loc}` : ''}${prod ? `<div class="fsec">📦 Tovar</div>${prod}` : ''}
       ${!loc && !prod ? `<div class="empty">Hech narsa topilmadi</div>` : ''}`;
   };
-  host.querySelector('.sbody').innerHTML = body();
+  const sb = host.querySelector('.sbody');
+  sb.innerHTML = `<input type="search" id="fQ" class="fq" placeholder="Qidirish: hudud, filial, brend, qiymat…" autocomplete="off">
+    <div id="fList" class="flist">${listHtml()}</div>`;
+  host.querySelector('.sheet').classList.add('tall');
   host.querySelector('.sheet').insertAdjacentHTML('beforeend',
     `<footer><button class="btn" id="fClr">Tozalash</button><button class="btn primary" id="fApply">Ko'rsatish</button></footer>`);
-  const wire = () => {
-    const sb = host.querySelector('.sbody');
-    const qi = sb.querySelector('#fQ');
-    qi.oninput = () => { q = fold(qi.value.trim()); sb.innerHTML = body(); wire(); const n = sb.querySelector('#fQ'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
-    sb.querySelectorAll('.fgrp-h').forEach(b => b.onclick = () => { const d = b.dataset.d; open.has(d) ? open.delete(d) : open.add(d); sb.innerHTML = body(); wire(); });
-    sb.querySelectorAll('input[type=checkbox]').forEach(i => i.onchange = () => {
+  const fl = sb.querySelector('#fList');
+  const redraw = () => { fl.innerHTML = listHtml(); wireList(); };
+  const wireList = () => {
+    fl.querySelectorAll('.fgrp-h').forEach(b => b.onclick = () => { const d = b.dataset.d; open.has(d) ? open.delete(d) : open.add(d); redraw(); });
+    fl.querySelectorAll('input[type=checkbox]').forEach(i => i.onchange = () => {
       const d = i.dataset.d, k = i.dataset.k; draft[d] = draft[d] || new Set();
       i.checked ? draft[d].add(k) : draft[d].delete(k);
       const h = i.closest('.fgrp').querySelector('.fgrp-h .s');
       h.textContent = `${draft[d].size ? `${draft[d].size} tanlangan · ` : ''}${(opts[d] || []).length} ta ▾`;
     });
   };
-  wire();
-  host.querySelector('#fClr').onclick = () => { for (const d in draft) draft[d].clear(); host.querySelector('.sbody').innerHTML = body(); wire(); };
+  let qt = null;
+  sb.querySelector('#fQ').oninput = e => {
+    clearTimeout(qt);
+    qt = setTimeout(() => { q = fold(e.target.value.trim()); redraw(); sb.scrollTop = 0; }, 150);   // har harfda emas
+  };
+  wireList();
+  host.querySelector('#fClr').onclick = () => { for (const d in draft) draft[d].clear(); redraw(); };
   host.querySelector('#fApply').onclick = () => {
     st.f = {}; for (const d in draft) if (draft[d].size) st.f[d] = new Set(draft[d]);
     closeSheet(); resetView(); load();
