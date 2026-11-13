@@ -307,6 +307,11 @@ function openPeriodSheet() {
   };
 }
 
+// Filtr qidiruvi: kirill → lotin, apostrof va registr farqi yo'q, h≈x, q≈k («қўқон» = «qo'qon» = «Qoʻqon»)
+const CYR = {а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'yo',ж:'j',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',
+  с:'s',т:'t',у:'u',ф:'f',х:'x',ц:'ts',ч:'ch',ш:'sh',щ:'sh',ъ:'',ы:'i',ь:'',э:'e',ю:'yu',я:'ya',ў:'o',қ:'q',ғ:'g',ҳ:'h'};
+const fold = v => String(v ?? '').toLowerCase().replace(/[а-яёўқғҳ]/g, c => CYR[c] ?? c)
+  .replace(/[ʻʼ’‘'`]/g, '').replace(/h/g, 'x').replace(/q/g, 'k').replace(/\s+/g, ' ');
 async function openFilterSheet() {
   const host = openSheetBox('Filtr', `<div class="empty">Yuklanmoqda…</div>`);
   const box = host.firstChild;                // kutish paytida yopilsa yoki boshqa oyna ochilsa — chizmaymiz
@@ -320,7 +325,7 @@ async function openFilterSheet() {
   for (const d in draft) for (const k of draft[d]) if (opts[d] && !opts[d].some(o => o.key === k)) opts[d].push({key: k, label: labels[d + '|' + k] || k, amount: 0});
   let q = '';
   const dimBlock = d => {
-    const list = (opts[d] || []).filter(o => !q || String(o.label).toLowerCase().includes(q));
+    const list = (opts[d] || []).filter(o => !q || fold(o.label).includes(q));
     const sel = draft[d] || new Set();
     if (q && !list.length) return '';
     const isOpen = q ? true : open.has(d);
@@ -343,7 +348,7 @@ async function openFilterSheet() {
   const wire = () => {
     const sb = host.querySelector('.sbody');
     const qi = sb.querySelector('#fQ');
-    qi.oninput = () => { q = qi.value.trim().toLowerCase(); sb.innerHTML = body(); wire(); const n = sb.querySelector('#fQ'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
+    qi.oninput = () => { q = fold(qi.value.trim()); sb.innerHTML = body(); wire(); const n = sb.querySelector('#fQ'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
     sb.querySelectorAll('.fgrp-h').forEach(b => b.onclick = () => { const d = b.dataset.d; open.has(d) ? open.delete(d) : open.add(d); sb.innerHTML = body(); wire(); });
     sb.querySelectorAll('input[type=checkbox]').forEach(i => i.onchange = () => {
       const d = i.dataset.d, k = i.dataset.k; draft[d] = draft[d] || new Set();
