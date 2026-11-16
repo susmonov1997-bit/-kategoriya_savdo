@@ -1647,6 +1647,7 @@ function noStock() {
 async function loadStockTab() {
   STALE.Qoldiq = false;
   QS.sig = QS.map = QS.ov = null;
+  if (QS.detail) QS.detail.data = null;      // ochiq ro'yxat/karta ham yangi filtr va davr bilan qayta olinadi
   renderStock();
 }
 function renderStock() {
