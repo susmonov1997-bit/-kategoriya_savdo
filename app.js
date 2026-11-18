@@ -1974,7 +1974,7 @@ document.querySelectorAll('#qSeg button').forEach(b => b.onclick = () => {
 
 // ============================================================ MATRITSA
 // Google Sheet «Матрица КБТ» (har kuni 06:00) × filial qoldig'i: bajarilish, yo'q/kam, vitrina, omborda bor.
-const MX = {data: null, reg: null, br: null, bd: null, seq: 0, lim: 40, open: {}, exLim: 15, y: 0};
+const MX = {data: null, g: 'f', reg: null, br: null, bd: null, seq: 0, lim: 40, open: {}, exLim: 15, y: 0};
 const mxCol = p => (p == null ? 'var(--so)' : p < 70 ? 'var(--bad)' : p < 85 ? 'var(--warn)' : 'var(--good)');
 const mxPp = d => (d == null || !isFinite(d) ? '' : `<span class="pp ${sgn(d)}">${sgn(d) === 'up' ? '▲' : sgn(d) === 'dn' ? '▼' : '•'}${nf1.format(Math.abs(d))}</span>`);
 const mxDt = s => { if (!s) return ''; const d = new Date(s); return d.toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent'}).replace(',', ''); };
@@ -1999,12 +1999,17 @@ async function renderMxList(host) {
     return;
   }
   if (!d.snap.b) { host.innerHTML = noStock(); return; }
-  const K = d.kpi, regs = d.regions || [];
+  const KB = d.kpi_by || {f: d.kpi, m: null};
+  const two = KB.f && KB.m && KB.f.branches && KB.m.branches;
+  if (!two) MX.g = KB.f && KB.f.branches ? 'f' : 'm';
+  const K = KB[MX.g] || {}, regs = (d.regions && d.regions[MX.g]) || [];
   if (MX.reg && !regs.some(r => r.id === MX.reg)) MX.reg = null;
-  const list = d.branches.filter(b => !MX.reg || b.region_id === MX.reg);
+  const list = d.branches.filter(b => (b.g || 'f') === MX.g && (!MX.reg || b.region_id === MX.reg));
   const ub = d.sync.unbound;
   const vp = K.vit_total ? K.vit_full / K.vit_total * 100 : null;
-  host.innerHTML = `<div class="hint">matritsa ${mxDt(d.sync.at)} · qoldiq ${dm(d.snap.b)}${d.prev ? ` · ▲▼ — ${dm(d.prev)} ga nisbatan` : ''}</div>
+  host.innerHTML = `${two ? `<div class="seg big" id="mxSeg" role="group" aria-label="Filial turi">
+      <button data-g="f" aria-pressed="${MX.g === 'f'}">Filiallar · ${KB.f.branches}</button><button data-g="m" aria-pressed="${MX.g === 'm'}">Mini do'konlar · ${KB.m.branches}</button></div>` : ''}
+    <div class="hint">matritsa ${mxDt(d.sync.at)} · qoldiq ${dm(d.snap.b)}${d.prev ? ` · ▲▼ — ${dm(d.prev)} ga nisbatan` : ''}</div>
     <div class="kpis">
       <div class="kpi mxhero"><span class="l">Matritsa bajarilishi</span><span class="v num">${pct(K.pct)} ${K.d != null ? `<small>${mxPp(K.d)}</small>` : ''}</span>
         <span class="p num">${nf0.format(K.ok)} / ${nf0.format(K.pos)} pozitsiya</span></div>
@@ -2017,7 +2022,7 @@ async function renderMxList(host) {
     </div>
     ${ub && (ub.branches || ub.skus) ? `<div class="mxwarn">Bog'lanmagan: ${ub.branches ? `<b>${ub.branches}</b> filial` : ''}${ub.branches && ub.skus ? ' · ' : ''}${ub.skus ? `<b>${ub.skus}</b> SKU` : ''} — botda /matritsa → «⬇ Bog'lanish Excel»</div>` : ''}
     ${regs.length > 1 ? `<div class="qchips mxchips"><button data-r="" aria-pressed="${!MX.reg}">Hammasi</button>${regs.map(r => `<button data-r="${r.id}" aria-pressed="${MX.reg === r.id}">${esc(r.name)}</button>`).join('')}</div>` : ''}
-    <div class="sec"><h2>Filiallar</h2><span class="hint">eng past bajarilish tepada</span></div>
+    <div class="sec"><h2>${MX.g === 'm' ? "Mini do'konlar" : 'Filiallar'}</h2><span class="hint">eng past bajarilish tepada</span></div>
     <div class="card mxlist">${list.slice(0, MX.lim).map(b => b.nodata
       ? `<div class="mxrow nd"><span class="n">${esc(b.name)}</span><span class="pc">—</span>
           <span class="s">${esc(b.region)} · qoldiq faylida yo'q (${nf0.format(b.pos)} pozitsiya)</span></div>`
@@ -2026,6 +2031,7 @@ async function renderMxList(host) {
           <span class="s num">${mxPp(b.d)}<span>${esc(b.region)}${b.cluster ? ' · ' + esc(b.cluster) : ''}</span><span>yo'q <b>${nf0.format(b.miss)}</b></span><span>kam <b>${nf0.format(b.low)}</b></span><span>vitrina ${b.vit_full}/${b.vit_total}</span></span></button>`).join('')
       || `<div class="empty">Bu tanlovda matritsa pozitsiyasi yo'q</div>`}</div>
     ${list.length > MX.lim ? `<button class="more" id="mxMore">Yana ${nf0.format(list.length - MX.lim)} ta filial ▾</button>` : ''}`;
+  host.querySelectorAll('#mxSeg [data-g]').forEach(b => b.onclick = () => { if (MX.g === b.dataset.g) return; MX.g = b.dataset.g; MX.reg = null; MX.lim = 40; renderMxList(host); });
   host.querySelectorAll('[data-r]').forEach(b => b.onclick = () => { MX.reg = b.dataset.r ? +b.dataset.r : null; MX.lim = 40; renderMxList(host); });
   host.querySelectorAll('[data-b]').forEach(b => b.onclick = () => { MX.y = window.scrollY; MX.br = +b.dataset.b; MX.bd = null; MX.open = {}; MX.exLim = 15; renderMx(); syncBack(); window.scrollTo(0, 0); });
   const mo = $('mxMore'); if (mo) mo.onclick = () => { MX.lim += 40; renderMxList(host); };
@@ -2039,10 +2045,10 @@ function mxItem(it) {
 async function renderMxBranch(host) {
   const seq = ++MX.seq;
   if (!MX.bd) {
-    host.innerHTML = `<button class="tchip back" id="mxBack">‹ Filiallar</button><div class="empty">Yuklanmoqda…</div>`;
+    host.innerHTML = `<button class="tchip back" id="mxBack">‹ ${MX.g === 'm' ? "Mini do'konlar" : 'Filiallar'}</button><div class="empty">Yuklanmoqda…</div>`;
     $('mxBack').onclick = mxBack;
     try { const d = await api('matrix/branch', {...filters(), branch_id: MX.br}); if (seq !== MX.seq) return; MX.bd = d; }
-    catch (e) { if (seq === MX.seq) host.innerHTML = `<button class="tchip back" id="mxBack">‹ Filiallar</button><div class="errbox">${esc(e.message)}</div>`; $('mxBack').onclick = mxBack; return; }
+    catch (e) { if (seq === MX.seq) host.innerHTML = `<button class="tchip back" id="mxBack">‹ ${MX.g === 'm' ? "Mini do'konlar" : 'Filiallar'}</button><div class="errbox">${esc(e.message)}</div>`; $('mxBack').onclick = mxBack; return; }
   }
   const d = MX.bd, b = d.branch;
   const ov = MX.data && MX.data.branches ? MX.data.branches.find(x => x.id === b.id) : null;
@@ -2065,7 +2071,7 @@ async function renderMxBranch(host) {
         <span class="s num">${esc(x.cat)} · tannarx ${money(x.cost)} · 30 kun savdo ${nf0.format(x.s30)}</span></div>`).join('')}
       ${Math.min(ex.items.length, ex.n) > MX.exLim ? `<button class="more" id="mxExMore">Yana ${Math.min(ex.items.length, ex.n) - MX.exLim} ta ▾</button>` : ''}
       ${ex.n > ex.items.length ? `<span class="hint">eng qimmat ${ex.items.length} tasi ko'rsatildi</span>` : ''}</div>` : '';
-  host.innerHTML = `<button class="tchip back" id="mxBack">‹ Filiallar</button>
+  host.innerHTML = `<button class="tchip back" id="mxBack">‹ ${MX.g === 'm' ? "Mini do'konlar" : 'Filiallar'}</button>
     <div class="tot mxtot"><div class="r1"><b>${esc(b.name)}</b><span class="v num">${pct(p)}</span></div>
       <span class="l num">${ov && ov.d != null ? mxPp(ov.d) + ' · ' : ''}${esc(b.region)}${b.cluster ? ' · ' + esc(b.cluster) : ''} · ombor: ${esc(b.wh || '—')} · yo'q ${miss} · kam ${low}</span></div>
     ${d.nodata ? `<div class="mxwarn">Bu filial ${dm(d.snap.b)} qoldiq faylida yo'q — hamma pozitsiya «yo'q» ko'rinadi.</div>` : ''}

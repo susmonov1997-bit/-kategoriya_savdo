@@ -17,6 +17,7 @@ POST /api/matrix/branch     filial tafsiloti: kategoriyalar, yetishmagan SKU'lar
 from __future__ import annotations
 
 import json
+import re
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -25,6 +26,14 @@ from api_auth import User, current_user
 from api_schemas import Filters
 
 router = APIRouter(prefix="/api/matrix")
+
+
+_MINI = re.compile(r"\b(mini|мини)\b", re.I)
+
+
+def is_mini(name: str | None) -> bool:
+    """Mini do'kon — nomida «mini» / «мини» so'zi bor («Andijon-Navro'z-Mall mini do'koni»)."""
+    return bool(_MINI.search(name or ""))
 
 
 def _M():
@@ -140,17 +149,23 @@ FROM j GROUP BY 1, 2""", *params)
         for k in ("pos", "ok", "miss", "low", "inwh"):
             a[k] += r[k]
         a["cats"].add(r["category_id"])
-    K = {"pos": 0, "ok": 0, "miss": 0, "low": 0, "inwh": 0, "vit_full": 0, "vit_total": 0, "ppos": 0, "pok": 0}
-    branches, regions = [], {}
+    KZ = lambda: {"pos": 0, "ok": 0, "miss": 0, "low": 0, "inwh": 0, "vit_full": 0, "vit_total": 0,  # noqa: E731
+                  "ppos": 0, "pok": 0, "branches": 0, "nodata": 0}
+    KS = {"f": KZ(), "m": KZ()}
+    branches, regions = [], {"f": {}, "m": {}}
     for bid, a in agg.items():
         b = meta.get(bid)
         if not b:
             continue
-        x = {"id": bid, "name": b["name"], "region_id": b["region_id"], "region": b["region"],
+        g = "m" if is_mini(b["name"]) else "f"
+        K = KS[g]
+        x = {"id": bid, "name": b["name"], "region_id": b["region_id"], "region": b["region"], "g": g,
              "cluster": b["cluster"], "wh": b["wh"], "pos": a["pos"]}
-        regions[b["region_id"]] = b["region"]
+        regions[g][b["region_id"]] = b["region"]
+        K["branches"] += 1
         if bid not in cov:
             x["nodata"] = True
+            K["nodata"] += 1
             branches.append(x)
             continue
         vf = sum(1 for c in a["cats"] if (v := vit.get((bid, c))) and v[0] and v[1] >= v[0])
@@ -167,10 +182,12 @@ FROM j GROUP BY 1, 2""", *params)
         K["vit_total"] += vt
         branches.append(x)
     branches.sort(key=lambda x: (x.get("nodata", False), x.get("pct") if x.get("pct") is not None else 999, x["name"]))
-    K["pct"] = K["ok"] / K["pos"] * 100 if K["pos"] else None
-    K["d"] = (K["pct"] - K["pok"] / K["ppos"] * 100) if K["ppos"] and K["pct"] is not None else None
-    out.update(kpi=K, branches=branches, prev=prev_d.isoformat() if prev_d else None,
-               regions=[{"id": k, "name": v} for k, v in sorted(regions.items(), key=lambda kv: kv[1])])
+    for K in KS.values():
+        K["pct"] = K["ok"] / K["pos"] * 100 if K["pos"] else None
+        K["d"] = (K["pct"] - K["pok"] / K["ppos"] * 100) if K["ppos"] and K["pct"] is not None else None
+    out.update(kpi=KS["f"], kpi_by=KS, branches=branches, prev=prev_d.isoformat() if prev_d else None,
+               regions={g: [{"id": k, "name": v} for k, v in sorted(r.items(), key=lambda kv: kv[1])]
+                        for g, r in regions.items()})
     return out
 
 
