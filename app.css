@@ -540,3 +540,17 @@ button.whh b{color:var(--ink);font-size:14px}
 .mxfill{border-top:1px solid var(--line);padding:9px 14px;font-size:12.5px;line-height:1.45;background:var(--card-2)}
 #mxView{background:var(--card)}
 #mxView{display:flex;padding:4px;border-radius:14px}#mxView button{flex:1}
+/* ixcham: Qirqim jami kartasi, segmentlar, matritsa kartochkalari */
+#brMode,#mxSeg,#mxView{display:flex;width:100%;padding:4px;border-radius:14px;background:var(--card);box-shadow:var(--shadow)}
+#brMode button,#mxSeg button,#mxView button{flex:1 1 0;padding:7px 8px;font-size:13px;border-radius:10px}
+.tot.cmp{padding:12px;gap:2px;border-radius:18px}
+.tot.cmp .v{font-size:22px}
+.tot.cmp .g{gap:6px;margin-top:4px}
+.tot.cmp .g>span{padding:6px 8px;border-radius:10px}
+.tot.cmp .x{font-size:13.5px}.tot.cmp .y{font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tot.cmp .ft{margin-top:2px}
+.kpis.mxk{gap:8px}
+.mxk .kpi{padding:10px 12px;gap:1px;border-radius:16px}
+.mxk .kpi .v{font-size:19px}.mxk .kpi.mxhero .v{font-size:21px}
+.mxk .kpi .p{font-size:11.5px}
+.mxkb{border:0;text-align:left;font:inherit;color:inherit;cursor:pointer}.mxkb.on{outline:2px solid var(--warn)}

@@ -748,10 +748,10 @@ function renderTree() {
   const d = (SUM && SUM.delta) || {}, hasCmp = !!cmpRange();
   const cs = compShare(T, sumPrev(TREE.raw), TREE.company);
   const tc = (k, x, y) => `<span><span class="k">${k}</span><span class="x">${x}</span><span class="y">${y || '&nbsp;'}</span></span>`;
-  const out = [`<button class="tot" data-s="${esc(nsig(TREE))}" aria-expanded="${!!TREE.open}">
+  const out = [`<button class="tot cmp" data-s="${esc(nsig(TREE))}" aria-expanded="${!!TREE.open}">
       <span class="r1"><span class="l">Jami ${MQ() ? 'dona' : 'savdo'}</span>${hasCmp ? pill(mdelta(d)) : ''}</span>
       <span class="v">${mfmt(T)}</span>
-      <span class="g">${tc('Gross marja', money(T.margin), `${pct(T.margin_pct)}${hasCmp && d.margin_pct_pp != null ? ' · ' + ppPlain(d.margin_pct_pp) : ''}`)}${tc('Front marja', money(T.gross), `${pct(T.gross_pct)}${hasCmp && d.gross_pct_pp != null ? ' · ' + ppPlain(d.gross_pct_pp) : ''}`)}${cs
+      <span class="g">${tc('Gross', money(T.margin), `${pct(T.margin_pct)}${hasCmp && d.margin_pct_pp != null ? ' · ' + ppPlain(d.margin_pct_pp) : ''}`)}${tc('Front', money(T.gross), `${pct(T.gross_pct)}${hasCmp && d.gross_pct_pp != null ? ' · ' + ppPlain(d.gross_pct_pp) : ''}`)}${cs
         ? tc(cap(locScopeWord()), pct(cs.s), `${hasCmp && cs.pp != null ? ppPlain(cs.pp) + ' · ' : ''}front ${pct(cs.g)}`)
         : tc(MQ() ? 'Savdo' : 'Dona', MQ() ? money(T.amount) : nf0.format(T.qty), T.avg_price ? `o'rt. ${money(T.avg_price)}` : '')}</span>
       ${stockLine(TREE.stock)}
@@ -2057,43 +2057,42 @@ async function renderMxList(host) {
   const gName = MX.g === 'm' ? "Mini do'konlar" : 'Filiallar';
   const kpis = vit ? `
       <div class="kpi mxhero"><span class="l">Vitrina to'lishi</span><span class="v num">${pct(K.fill)}</span>
-        <span class="p">turgan / sig'im (ortig'i hisobga olinmaydi)</span></div>
-      <div class="kpi"><span class="l">To'liq vitrina</span><span class="v num">${pct(K.pairs ? K.full / K.pairs * 100 : null)}</span>
-        <span class="p num">${nf0.format(K.full)} / ${nf0.format(K.pairs)} filial×kategoriya</span></div>
+        <span class="p num">turgan / sig'im · ${nf0.format(K.fon)} / ${nf0.format(K.cap)}</span></div>
       <div class="kpi"><span class="l">Bo'sh joy</span><span class="v num" style="color:var(--bad)">${nf0.format(K.empty)}</span>
-        <span class="p num">model · omborda bor matritsa SKU bilan: <b>${nf0.format(K.emptyW)}</b></span></div>
+        <span class="p num">omborda bor: <b>${nf0.format(K.emptyW)}</b></span></div>
       <div class="kpi"><span class="l">Matritsadan tashqari</span><span class="v num" style="color:var(--mxx2)">${pct(K.xs)}</span>
-        <span class="p num">vitrinadagi modellarning · ${nf0.format(K.x)} model</span></div>` : `
+        <span class="p num">${nf0.format(K.x)} model</span></div>
+      <button class="kpi mxkb${MX.over ? ' on' : ''}" id="mxOver"><span class="l">Sig'imdan ortiq ${MX.over ? '· ✓ filtr' : '›'}</span><span class="v num" style="color:var(--warn)">${nf0.format(K.over)}</span>
+        <span class="p num">model · ${nf0.format(K.overPairs)} vitrinada</span></button>` : `
       <div class="kpi mxhero"><span class="l">Matritsa bajarilishi</span><span class="v num">${pct(K.pct)} ${K.d != null ? `<small>${mxPp(K.d)}</small>` : ''}</span>
-        <span class="p num">${nf0.format(K.ok)} / ${nf0.format(K.pos)} pozitsiya</span></div>
-      <div class="kpi"><span class="l">Vitrina to'liq</span><span class="v num">${pct(K.pairs ? K.full / K.pairs * 100 : null)}</span>
-        <span class="p num">${nf0.format(K.full)} / ${nf0.format(K.pairs)} filial×kategoriya</span></div>
+        <span class="p num">${nf0.format(K.ok)} / ${nf0.format(K.pos)} poz.</span></div>
+      <div class="kpi"><span class="l">Vitrina to'lishi</span><span class="v num">${pct(K.fill)}</span>
+        <span class="p num">turgan / sig'im</span></div>
       <div class="kpi"><span class="l">Yo'q pozitsiya</span><span class="v num" style="color:var(--bad)">${nf0.format(K.miss)}</span>
-        <span class="p num">kam (turishidan oz): <b>${nf0.format(K.low)}</b></span></div>
+        <span class="p num">kam: <b>${nf0.format(K.low)}</b></span></div>
       <div class="kpi"><span class="l">Omborda bor</span><span class="v num" style="color:var(--good)">${nf0.format(K.inwh)}</span>
-        <span class="p">yo'q/kam pozitsiyadan — ombordan to'ldirsa bo'ladi</span></div>`;
+        <span class="p">ombordan to'ldirsa bo'ladi</span></div>`;
   const catRow = c => {
     const A = c.A, on = MX.cat === c.id;
     return vit
       ? `<button class="mxrow cr${on ? ' on' : ''}" data-c="${c.id}"><span class="n">${esc(c.name)}</span><span class="pc num" style="color:${mxFillCol(A.fill)}">${pct(A.fill)}</span>
-          ${mxBar2(A.onm, A.x, A.cap)}<span class="s num"><span>to'liq <b>${A.full}/${A.pairs}</b> filial</span><span>bo'sh <b>${nf0.format(A.empty)}</b></span><span>ortiqcha <b>${nf0.format(A.over)}</b></span></span></button>`
+          ${mxBar2(A.onm, A.x, A.cap)}<span class="s num"><span>turgan <b>${nf0.format(A.on)}/${nf0.format(A.cap)}</b></span><span>bo'sh <b>${nf0.format(A.empty)}</b></span><span>ortiqcha <b>${nf0.format(A.over)}</b></span></span></button>`
       : `<button class="mxrow cr${on ? ' on' : ''}" data-c="${c.id}"><span class="n">${esc(c.name)}</span><span class="pc num" style="color:${mxCol(A.pct)}">${pct(A.pct)}</span>
           ${mxBar(A.pct)}<span class="s num">${mxPp(A.d)}<span>${nf0.format(A.ok)}/${nf0.format(A.pos)}</span><span>yo'q <b>${nf0.format(A.miss)}</b></span><span>kam <b>${nf0.format(A.low)}</b></span><span>omborda <b>${nf0.format(A.inwh)}</b></span></span></button>`;
   };
   const brRow = ({b, A}) => vit
     ? `<button class="mxrow" data-b="${b.id}"><span class="n">${esc(b.name)} ›</span><span class="pc num" style="color:${mxFillCol(A.fill)}">${pct(A.fill)}</span>
-        ${mxBar2(A.onm, A.x, A.cap)}<span class="s num"><span>${esc(b.region)}</span><span>turgan <b>${nf0.format(A.on)}/${nf0.format(A.cap)}</b></span><span>bo'sh <b>${nf0.format(A.empty)}</b></span>${A.over ? `<span>ortiq <b>${nf0.format(A.over)}</b></span>` : ''}<span>to'liq ${A.full}/${A.pairs}</span></span></button>`
+        ${mxBar2(A.onm, A.x, A.cap)}<span class="s num"><span>${esc(b.region)}</span><span>turgan <b>${nf0.format(A.on)}/${nf0.format(A.cap)}</b></span><span>bo'sh <b>${nf0.format(A.empty)}</b></span>${A.over ? `<span>ortiq <b>${nf0.format(A.over)}</b></span>` : ''}</span></button>`
     : `<button class="mxrow" data-b="${b.id}"><span class="n">${esc(b.name)} ›</span><span class="pc num" style="color:${mxCol(A.pct)}">${pct(A.pct)}</span>
-        ${mxBar(A.pct)}<span class="s num">${mxPp(A.d)}<span>${esc(b.region)}${b.cluster ? ' · ' + esc(b.cluster) : ''}</span><span>yo'q <b>${nf0.format(A.miss)}</b></span><span>kam <b>${nf0.format(A.low)}</b></span><span>vitrina ${A.full}/${A.pairs}</span></span></button>`;
-  host.innerHTML = `${two ? `<div class="seg big" id="mxSeg" role="group" aria-label="Filial turi">
-      <button data-g="f" aria-pressed="${MX.g === 'f'}">Filiallar · ${KB.f.branches}</button><button data-g="m" aria-pressed="${MX.g === 'm'}">Mini do'konlar · ${KB.m.branches}</button></div>` : ''}
+        ${mxBar(A.pct)}<span class="s num">${mxPp(A.d)}<span>${esc(b.region)}${b.cluster ? ' · ' + esc(b.cluster) : ''}</span><span>yo'q <b>${nf0.format(A.miss)}</b></span><span>kam <b>${nf0.format(A.low)}</b></span><span>vitrina ${pct(A.fill)}</span></span></button>`;
+  host.innerHTML = `${two ? `<div class="seg" id="mxSeg" role="group" aria-label="Filial turi">
+      <button data-g="f" aria-pressed="${MX.g === 'f'}">Filial · ${KB.f.branches}</button><button data-g="m" aria-pressed="${MX.g === 'm'}">Mini do'kon · ${KB.m.branches}</button></div>` : ''}
     <div class="seg" id="mxView" role="group" aria-label="Ko'rinish"><button data-v="mx" aria-pressed="${!vit}">Matritsa bajarilishi</button><button data-v="vit" aria-pressed="${vit}">Vitrina</button></div>
     <div class="hint">matritsa ${mxDt(d.sync.at)} · qoldiq ${dm(d.snap.b)}${!vit && d.prev ? ` · ▲▼ — ${dm(d.prev)} ga nisbatan` : ''}${MX.cat ? ` · <b>${esc(catName[MX.cat])}</b>` : ''}</div>
-    <div class="kpis">${kpis}</div>
-    ${vit && K.overPairs ? `<button class="mxwarn mxover${MX.over ? ' on' : ''}" id="mxOver">⚠️ Sig'imdan ortiq: <b>${nf0.format(K.overPairs)}</b> filial×kategoriya · <b>${nf0.format(K.over)}</b> model ortiqcha — ${MX.over ? 'hammasini ko\'rsatish' : 'faqat shularni ko\'rsatish'}</button>` : ''}
+    <div class="kpis mxk">${kpis}</div>
     ${!vit && ub && (ub.branches || ub.skus) ? `<div class="mxwarn">Bog'lanmagan: ${ub.branches ? `<b>${ub.branches}</b> filial` : ''}${ub.branches && ub.skus ? ' · ' : ''}${ub.skus ? `<b>${ub.skus}</b> SKU` : ''} — botda /matritsa → «⬇ Bog'lanish Excel»</div>` : ''}
     ${regs.length > 1 ? `<div class="qchips mxchips"><button data-r="" aria-pressed="${!MX.reg}">Hammasi</button>${regs.map(r => `<button data-r="${r.id}" aria-pressed="${MX.reg === r.id}">${esc(r.name)}</button>`).join('')}</div>` : ''}
-    ${cats.length > 1 ? `<div class="sec"><h2>Kategoriyalar bo'yicha</h2><span class="hint">bosing — ${MX.cat ? 'qayta bossangiz filtr olinadi' : 'pastdagi ro\'yxat shu kategoriya bo\'yicha'}</span></div>
+    ${cats.length > 1 ? `<div class="sec"><h2>Kategoriyalar bo'yicha</h2><span class="hint">${MX.cat ? 'qayta bosing — filtr olinadi' : 'bosing — filtr'}</span></div>
     <div class="card mxlist">${cats.map(catRow).join('')}
       ${vit ? `<div class="mxleg"><span><i style="background:var(--accent)"></i>matritsa SKU</span><span><i style="background:var(--mxx)"></i>matritsadan tashqari</span><span><i class="e"></i>bo'sh</span></div>` : ''}</div>` : ''}
     <div class="sec"><h2>${gName}${MX.cat ? ' · ' + esc(catName[MX.cat]) : ''}</h2><span class="hint">${vit ? (MX.over ? "eng ko'p ortiqcha tepada" : "eng bo'sh vitrina tepada") : 'eng past bajarilish tepada'}</span></div>
@@ -2123,7 +2122,7 @@ function renderMxVitBranch(host) {
   }).join('');
   host.innerHTML = `<button class="tchip back" id="mxBack">‹ ${MX.g === 'm' ? "Mini do'konlar" : 'Filiallar'}</button>
     <div class="tot mxtot"><div class="r1"><b>${esc(b.name)}</b><span class="v num">${pct(A.fill)}</span></div>
-      <span class="l num">vitrina to'lishi · turgan ${nf0.format(A.on)}/${nf0.format(A.cap)} · bo'sh ${nf0.format(A.empty)}${A.over ? ` · ortiq ${nf0.format(A.over)}` : ''} · to'liq ${A.full}/${A.pairs} kategoriya</span></div>
+      <span class="l num">vitrina to'lishi · turgan ${nf0.format(A.on)}/${nf0.format(A.cap)} · bo'sh ${nf0.format(A.empty)}${A.over ? ` · ortiq ${nf0.format(A.over)}` : ''}</span></div>
     ${cards || `<div class="card"><div class="empty">Ma'lumot yo'q</div></div>`}
     <button class="btn ghost" id="mxToMx">Yetishmagan SKU ro'yxati — «Matritsa bajarilishi»</button>`;
   $('mxBack').onclick = mxBack;
