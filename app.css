@@ -492,3 +492,36 @@ button.whh b{color:var(--ink);font-size:14px}
 .sheet.tall .sbody{flex:1 1 auto;min-height:0}
 .sheet .sbody .fq{position:sticky;top:-12px;z-index:2;box-shadow:0 -12px 0 var(--card)}
 .flist{display:flex;flex-direction:column;gap:10px}
+
+/* ============ MATRITSA ============ */
+.mxhero{background:var(--hero);color:var(--hero-ink)}
+.mxhero .l,.mxhero .p{color:var(--hero-ink);opacity:.88}
+.mxhero .v small{font-size:13px}.mxhero .pp{color:var(--hero-ink)}
+.mxwarn{background:var(--warn-soft);color:var(--warn);border-radius:12px;padding:9px 12px;font-size:12.5px;line-height:1.4}
+.mxchips{flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px}
+.mxchips button{flex:0 0 auto;white-space:nowrap}
+.mxchips button[aria-pressed="true"]{background:var(--ink);color:var(--card)}
+.mxlist{padding:0;overflow:hidden}
+.mxrow{width:100%;border:0;border-top:1px solid var(--line);background:none;color:var(--ink);padding:11px 14px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;text-align:left;font:inherit}
+.mxrow:first-child{border-top:0}
+.mxrow .n{font-size:14.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mxrow .pc{font-size:15px;font-weight:800}
+.mxrow .s{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:2px 12px;font-size:12px;color:var(--muted)}
+.mxrow .s b{color:var(--ink)}
+.mxrow.nd{opacity:.65}
+.mxbar{grid-column:1/-1;height:5px;background:var(--card-2);border-radius:3px;overflow:hidden;display:block}
+.mxbar i{display:block;height:100%;border-radius:3px}
+.mxtot .v{font-size:24px;font-weight:800}
+.mxtot .pp{color:var(--hero-ink)}
+.mxcat{padding:0;overflow:hidden;display:flex;flex-direction:column}
+.mxcat>.h{display:flex;justify-content:space-between;gap:8px;align-items:baseline;padding:11px 14px 6px;font-size:14.5px}
+.mxcat>.h span{font-size:12.5px;font-weight:700;white-space:nowrap}
+.mxcat>.mxbar{margin:0 14px;height:6px}
+.mxcat>.hint{padding:5px 14px 9px}
+.mxit{border-top:1px solid var(--line);padding:9px 14px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;align-items:center}
+.mxit .n{font-size:13px;font-weight:600;line-height:1.3}
+.mxit .q{font-size:13px;font-weight:700}
+.mxit .s{grid-column:1/-1;font-size:12px;color:var(--muted)}
+.mxit .tg{font-size:11.5px;font-weight:700;padding:3px 8px;border-radius:999px;white-space:nowrap}
+.mxit .tg.ok{background:var(--good-soft);color:var(--good)}.mxit .tg.no{background:var(--bad-soft);color:var(--bad)}
+.tabbar button{min-width:0}

@@ -681,6 +681,8 @@ WEBAPP_FILES = {"": ("index.html", "text/html"), "index.html": ("index.html", "t
 # Qoldiq API (api_stock.py importda shu moduldagi scope_ctx va cached dan foydalanadi)
 from api_stock import router as stock_router  # noqa: E402
 app.include_router(stock_router)
+from api_matrix import router as matrix_router  # noqa: E402
+app.include_router(matrix_router)
 
 
 @app.get("/", include_in_schema=False)

@@ -260,6 +260,11 @@ async def sync(pool: asyncpg.Pool, trigger: str = "auto", user_id: int | None = 
             del values
             async with pool.acquire() as con:
                 stats = await bind_and_store(con, rows)
+                try:                                   # ▲▼ uchun bugungi bajarilish tarixi
+                    from api_matrix import refresh_daily
+                    await refresh_daily(con, await con.fetchval("SELECT max(snap_date) FROM stock_branch"))
+                except Exception:  # noqa: BLE001
+                    log.exception("matrix_daily yozilmadi")
             await pool.execute("""UPDATE matrix_syncs SET status='ok', finished_at=now(), rows=$2, stats=$3::jsonb
                                   WHERE id=$1""", sid, stats["rows"], json.dumps(stats, ensure_ascii=False))
             stats["at"] = datetime.now(TZ)

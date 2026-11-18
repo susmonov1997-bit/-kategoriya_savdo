@@ -1083,11 +1083,11 @@ function showError(e) {
 }
 // Tablar bo'yicha yuklash: Umumiy (KPI, grafik, kategoriyalar) har doim; Qirqim va Tovarlar — faqat ochilganda.
 // Filtr/davr o'zgarsa ikkalasi "eskirgan" deb belgilanadi va ochilganda qayta olinadi.
-const STALE = {Qirqim: true, Tovarlar: true, Qoldiq: true};
+const STALE = {Qirqim: true, Tovarlar: true, Qoldiq: true, Matritsa: true};
 let LIST = null;
 async function load() {
   renderHeader();
-  STALE.Qirqim = STALE.Tovarlar = STALE.Qoldiq = true;
+  STALE.Qirqim = STALE.Tovarlar = STALE.Qoldiq = STALE.Matritsa = true;
   const F = filters(), seq = ++reqSeq.main;
   const secs = ['kpis', 'chart', 'catList'].map($);
   secs.forEach(s => s.classList.add('loading'));
@@ -1136,6 +1136,8 @@ async function loadTab(t) {
     finally { if (cur()) host.classList.remove('loading'); }
   } else if (t === 'Qoldiq') {
     loadStockTab();
+  } else if (t === 'Matritsa') {
+    loadMatrixTab();
   } else if (t === 'Tovarlar') {
     const secs = ['ablocks', 'top'].map($); secs.forEach(s => s.classList.add('loading'));
     if (!$('ablocks').firstChild) $('ablocks').innerHTML = `<div class="empty">Yuklanmoqda…</div>`;
@@ -1166,7 +1168,7 @@ function syncBack() {
     if (prev) nb.textContent = `‹ ${prev.name}`;
   }
   if (!(tg && tg.BackButton)) return;
-  const qd = typeof QS !== 'undefined' && QS.detail && TAB === 'Qoldiq';
+  const qd = (typeof QS !== 'undefined' && QS.detail && TAB === 'Qoldiq') || (typeof MX !== 'undefined' && MX.br && TAB === 'Matritsa');
   (sheetOpen() || VIEW === 'upload' || qd || (NAV.length && VIEW === 'analytics')) ? tg.BackButton.show() : tg.BackButton.hide();
 }
 function navBack() {
@@ -1177,7 +1179,8 @@ function navBack() {
 $('navBack').onclick = navBack;
 if (tg && tg.BackButton) tg.BackButton.onClick(() => {
   if (sheetOpen()) closeSheet(); else if (VIEW === 'upload') setView('analytics');
-  else if (TAB === 'Qoldiq' && QS.detail) closeDetail(); else if (NAV.length) navBack(); });
+  else if (TAB === 'Qoldiq' && QS.detail) closeDetail(); else if (TAB === 'Matritsa' && MX.br) mxBack();
+  else if (NAV.length) navBack(); });
 document.querySelectorAll('#chartMetric button').forEach(b => b.onclick = () => {
   st.chartMetric = b.dataset.m;
   document.querySelectorAll('#chartMetric button').forEach(x => x.setAttribute('aria-pressed', x === b));
@@ -1368,7 +1371,8 @@ async function loadPlan(year) {
 let TAB = 'Umumiy';
 function setTab(t) {
   TAB = t;
-  ['Umumiy', 'Qirqim', 'Tovarlar', 'Qoldiq', 'Reja'].forEach(x => { $('pane' + x).hidden = x !== t; });
+  ['Umumiy', 'Qirqim', 'Tovarlar', 'Qoldiq', 'Reja', 'Matritsa'].forEach(x => { $('pane' + x).hidden = x !== t; });
+  $('perBtn').hidden = $('metricSeg').hidden = t === 'Matritsa';   // matritsa — joriy holat, davrga bog'liq emas
   const rj = t === 'Reja';                            // reja — kategoriya/davr/filtrga bog'liq emas
   $('catBtn').hidden = rj; $('topAnalytics').hidden = rj; $('upTitle').hidden = !rj;
   if (rj) { $('upTitle').textContent = 'Reja bajarilishi'; $('tmeta').textContent = META.data_to ? `ma'lumot ${dm(META.data_to)} gacha` : ''; }
@@ -1967,6 +1971,109 @@ document.querySelectorAll('#qSeg button').forEach(b => b.onclick = () => {
   if (QS.view === b.dataset.v && !QS.detail) return;
   QS.view = b.dataset.v; QS.detail = null; renderStock(); syncBack();
 });
+
+// ============================================================ MATRITSA
+// Google Sheet «Матрица КБТ» (har kuni 06:00) × filial qoldig'i: bajarilish, yo'q/kam, vitrina, omborda bor.
+const MX = {data: null, reg: null, br: null, bd: null, seq: 0, lim: 40, open: {}, exLim: 15, y: 0};
+const mxCol = p => (p == null ? 'var(--so)' : p < 70 ? 'var(--bad)' : p < 85 ? 'var(--warn)' : 'var(--good)');
+const mxPp = d => (d == null || !isFinite(d) ? '' : `<span class="pp ${sgn(d)}">${sgn(d) === 'up' ? '▲' : sgn(d) === 'dn' ? '▼' : '•'}${nf1.format(Math.abs(d))}</span>`);
+const mxDt = s => { if (!s) return ''; const d = new Date(s); return d.toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent'}).replace(',', ''); };
+const mxBar = (p, c) => `<span class="mxbar"><i style="width:${Math.max(0, Math.min(100, p || 0))}%;background:${c || mxCol(p)}"></i></span>`;
+function loadMatrixTab() {
+  STALE.Matritsa = false;
+  MX.data = null; MX.bd = null;
+  renderMx();
+}
+function renderMx() { return MX.br ? renderMxBranch($('mxBody')) : renderMxList($('mxBody')); }
+function mxBack() { MX.br = null; MX.bd = null; renderMx(); syncBack(); window.scrollTo(0, MX.y || 0); }
+async function renderMxList(host) {
+  const seq = ++MX.seq;
+  if (!MX.data) {
+    host.innerHTML = `<div class="empty">Yuklanmoqda…</div>`;
+    try { const d = await api('matrix/overview', filters()); if (seq !== MX.seq) return; MX.data = d; }
+    catch (e) { if (seq === MX.seq) host.innerHTML = `<div class="errbox">${esc(e.message)}</div>`; return; }
+  }
+  const d = MX.data;
+  if (!d.has) {
+    host.innerHTML = `<div class="card"><div class="empty">Matritsa hali o'qilmagan.<br>${META.is_admin ? "Botga <b>/matritsa</b> deb yozing — Google Sheet'dan o'qiydi. Keyin har kuni 06:00 da o'zi yangilanadi." : "Administrator matritsani ulashini kuting."}</div></div>`;
+    return;
+  }
+  if (!d.snap.b) { host.innerHTML = noStock(); return; }
+  const K = d.kpi, regs = d.regions || [];
+  if (MX.reg && !regs.some(r => r.id === MX.reg)) MX.reg = null;
+  const list = d.branches.filter(b => !MX.reg || b.region_id === MX.reg);
+  const ub = d.sync.unbound;
+  const vp = K.vit_total ? K.vit_full / K.vit_total * 100 : null;
+  host.innerHTML = `<div class="hint">matritsa ${mxDt(d.sync.at)} · qoldiq ${dm(d.snap.b)}${d.prev ? ` · ▲▼ — ${dm(d.prev)} ga nisbatan` : ''}</div>
+    <div class="kpis">
+      <div class="kpi mxhero"><span class="l">Matritsa bajarilishi</span><span class="v num">${pct(K.pct)} ${K.d != null ? `<small>${mxPp(K.d)}</small>` : ''}</span>
+        <span class="p num">${nf0.format(K.ok)} / ${nf0.format(K.pos)} pozitsiya</span></div>
+      <div class="kpi"><span class="l">Vitrina to'liq</span><span class="v num">${pct(vp)}</span>
+        <span class="p num">${nf0.format(K.vit_full)} / ${nf0.format(K.vit_total)} filial×kategoriya</span></div>
+      <div class="kpi"><span class="l">Yo'q pozitsiya</span><span class="v num" style="color:var(--bad)">${nf0.format(K.miss)}</span>
+        <span class="p num">kam (turishidan oz): <b>${nf0.format(K.low)}</b></span></div>
+      <div class="kpi"><span class="l">Omborda bor</span><span class="v num" style="color:var(--good)">${nf0.format(K.inwh)}</span>
+        <span class="p">yo'q/kam pozitsiyadan — ombordan to'ldirsa bo'ladi</span></div>
+    </div>
+    ${ub && (ub.branches || ub.skus) ? `<div class="mxwarn">Bog'lanmagan: ${ub.branches ? `<b>${ub.branches}</b> filial` : ''}${ub.branches && ub.skus ? ' · ' : ''}${ub.skus ? `<b>${ub.skus}</b> SKU` : ''} — botda /matritsa → «⬇ Bog'lanish Excel»</div>` : ''}
+    ${regs.length > 1 ? `<div class="qchips mxchips"><button data-r="" aria-pressed="${!MX.reg}">Hammasi</button>${regs.map(r => `<button data-r="${r.id}" aria-pressed="${MX.reg === r.id}">${esc(r.name)}</button>`).join('')}</div>` : ''}
+    <div class="sec"><h2>Filiallar</h2><span class="hint">eng past bajarilish tepada</span></div>
+    <div class="card mxlist">${list.slice(0, MX.lim).map(b => b.nodata
+      ? `<div class="mxrow nd"><span class="n">${esc(b.name)}</span><span class="pc">—</span>
+          <span class="s">${esc(b.region)} · qoldiq faylida yo'q (${nf0.format(b.pos)} pozitsiya)</span></div>`
+      : `<button class="mxrow" data-b="${b.id}"><span class="n">${esc(b.name)} ›</span><span class="pc num" style="color:${mxCol(b.pct)}">${pct(b.pct)}</span>
+          ${mxBar(b.pct)}
+          <span class="s num">${mxPp(b.d)}<span>${esc(b.region)}${b.cluster ? ' · ' + esc(b.cluster) : ''}</span><span>yo'q <b>${nf0.format(b.miss)}</b></span><span>kam <b>${nf0.format(b.low)}</b></span><span>vitrina ${b.vit_full}/${b.vit_total}</span></span></button>`).join('')
+      || `<div class="empty">Bu tanlovda matritsa pozitsiyasi yo'q</div>`}</div>
+    ${list.length > MX.lim ? `<button class="more" id="mxMore">Yana ${nf0.format(list.length - MX.lim)} ta filial ▾</button>` : ''}`;
+  host.querySelectorAll('[data-r]').forEach(b => b.onclick = () => { MX.reg = b.dataset.r ? +b.dataset.r : null; MX.lim = 40; renderMxList(host); });
+  host.querySelectorAll('[data-b]').forEach(b => b.onclick = () => { MX.y = window.scrollY; MX.br = +b.dataset.b; MX.bd = null; MX.open = {}; MX.exLim = 15; renderMx(); syncBack(); window.scrollTo(0, 0); });
+  const mo = $('mxMore'); if (mo) mo.onclick = () => { MX.lim += 40; renderMxList(host); };
+}
+function mxItem(it) {
+  const w = it.wh > 0;
+  return `<div class="mxit"><span class="n">${esc(it.name)}</span>
+    <span class="tg ${w ? 'ok' : 'no'}">${w ? 'ombordan yuborish' : 'zakazga'}</span>
+    <span class="s num">turishi ${nf0.format(it.need)} · bor ${nf0.format(it.have)} · omborda ${nf0.format(it.wh)} · 30 kun savdo ${nf0.format(it.s30)}</span></div>`;
+}
+async function renderMxBranch(host) {
+  const seq = ++MX.seq;
+  if (!MX.bd) {
+    host.innerHTML = `<button class="tchip back" id="mxBack">‹ Filiallar</button><div class="empty">Yuklanmoqda…</div>`;
+    $('mxBack').onclick = mxBack;
+    try { const d = await api('matrix/branch', {...filters(), branch_id: MX.br}); if (seq !== MX.seq) return; MX.bd = d; }
+    catch (e) { if (seq === MX.seq) host.innerHTML = `<button class="tchip back" id="mxBack">‹ Filiallar</button><div class="errbox">${esc(e.message)}</div>`; $('mxBack').onclick = mxBack; return; }
+  }
+  const d = MX.bd, b = d.branch;
+  const ov = MX.data && MX.data.branches ? MX.data.branches.find(x => x.id === b.id) : null;
+  const pos = d.cats.reduce((s, c) => s + c.pos, 0), ok = d.cats.reduce((s, c) => s + c.ok, 0);
+  const miss = d.cats.reduce((s, c) => s + c.miss, 0), low = d.cats.reduce((s, c) => s + c.low, 0);
+  const p = pos ? ok / pos * 100 : null;
+  const cats = d.cats.map(c => {
+    const vc = c.cap ? (c.on >= c.cap ? 'var(--good)' : c.on / c.cap >= 0.75 ? 'var(--warn)' : 'var(--bad)') : 'var(--muted)';
+    const n = MX.open[c.id] || 8;
+    const rest = [c.miss ? `${c.miss} yo'q` : '', c.low ? `${c.low} kam` : ''].filter(Boolean).join(' · ') || "to'liq ✓";
+    return `<div class="card mxcat"><div class="h"><b>${esc(c.name)}</b><span class="num" style="color:${vc}">vitrina ${nf0.format(c.on)}/${c.cap == null ? '—' : nf0.format(c.cap)}</span></div>
+      ${mxBar(c.pct)}<span class="hint num">matritsa ${c.ok}/${c.pos} · ${rest}</span>
+      ${c.items.slice(0, n).map(mxItem).join('')}
+      ${c.items.length > n ? `<button class="more" data-more="${c.id}">Yana ${c.items.length - n} ta ▾</button>` : ''}</div>`;
+  }).join('');
+  const ex = d.extra;
+  const exHtml = ex && ex.n ? `<div class="card mxcat"><div class="h"><b>Matritsadan tashqari qoldiq</b><span class="num" style="color:var(--s7)">${nf0.format(ex.qty)} dona</span></div>
+      <span class="hint num">filialda turibdi, lekin matritsada yo'q · ${ex.n} SKU · tannarxi ${money(ex.cost)}</span>
+      ${ex.items.slice(0, MX.exLim).map(x => `<div class="mxit"><span class="n">${esc(x.name)}</span><span class="q num">${nf0.format(x.qty)} dona</span>
+        <span class="s num">${esc(x.cat)} · tannarx ${money(x.cost)} · 30 kun savdo ${nf0.format(x.s30)}</span></div>`).join('')}
+      ${Math.min(ex.items.length, ex.n) > MX.exLim ? `<button class="more" id="mxExMore">Yana ${Math.min(ex.items.length, ex.n) - MX.exLim} ta ▾</button>` : ''}
+      ${ex.n > ex.items.length ? `<span class="hint">eng qimmat ${ex.items.length} tasi ko'rsatildi</span>` : ''}</div>` : '';
+  host.innerHTML = `<button class="tchip back" id="mxBack">‹ Filiallar</button>
+    <div class="tot mxtot"><div class="r1"><b>${esc(b.name)}</b><span class="v num">${pct(p)}</span></div>
+      <span class="l num">${ov && ov.d != null ? mxPp(ov.d) + ' · ' : ''}${esc(b.region)}${b.cluster ? ' · ' + esc(b.cluster) : ''} · ombor: ${esc(b.wh || '—')} · yo'q ${miss} · kam ${low}</span></div>
+    ${d.nodata ? `<div class="mxwarn">Bu filial ${dm(d.snap.b)} qoldiq faylida yo'q — hamma pozitsiya «yo'q» ko'rinadi.</div>` : ''}
+    ${cats || `<div class="card"><div class="empty">Bu tanlovda matritsa pozitsiyasi yo'q</div></div>`}${exHtml}`;
+  $('mxBack').onclick = mxBack;
+  host.querySelectorAll('[data-more]').forEach(x => x.onclick = () => { const k = x.dataset.more; MX.open[k] = (MX.open[k] || 8) + 20; renderMxBranch(host); });
+  const em = $('mxExMore'); if (em) em.onclick = () => { MX.exLim += 30; renderMxBranch(host); };
+}
 
 init();
 })();
