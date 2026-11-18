@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="app.css?v=20261119c">
+<link rel="stylesheet" href="app.css?v=20261119d">
 </head>
 <body>
 <div id="gate" hidden></div>
@@ -81,19 +81,19 @@
 
   <!-- ============ 2. QIRQIM ============ -->
   <div class="pane" id="paneQirqim" hidden>
-    <div class="seg" id="brMode" role="group" aria-label="Ko'rinish">
-      <button data-m="tree" aria-pressed="true"><span aria-hidden="true">☰</span> Ro'yxat</button>
-      <button data-m="pivot" aria-pressed="false"><span aria-hidden="true">▦</span> Jadval</button>
-    </div>
-    <div class="ctl sortrow">
-      <label class="sortl">Saralash <select id="sortBy">
-        <option value="amount">summa</option>
-        <option value="margin">gross marja</option>
-        <option value="margin_pct">gross marja %</option>
-        <option value="qty">dona</option>
-        <option value="delta">o'zgarish</option>
-        <option value="name">nomi</option>
-      </select></label>
+    <div class="qrow">
+      <div class="seg" id="brMode" role="group" aria-label="Ko'rinish">
+        <button data-m="tree" aria-pressed="true"><span aria-hidden="true">☰</span> Ro'yxat</button>
+        <button data-m="pivot" aria-pressed="false"><span aria-hidden="true">▦</span> Jadval</button>
+      </div>
+      <select id="sortBy" class="sortsel" aria-label="Saralash">
+        <option value="amount">↕ summa</option>
+        <option value="margin">↕ gross marja</option>
+        <option value="margin_pct">↕ gross marja %</option>
+        <option value="qty">↕ dona</option>
+        <option value="delta">↕ o'zgarish</option>
+        <option value="name">↕ nomi</option>
+      </select>
     </div>
     <div class="ctl" id="pvCtl" hidden><label>Qatorlar <select id="rowsDim"></select></label> <label>Ustun <select id="colsDim"></select></label></div>
     <div class="hint" id="brHint"></div>
@@ -143,6 +143,6 @@
   <button data-t="Matritsa" aria-pressed="false"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>Matritsa</button>
 </nav>
 <div id="sheetHost"></div>
-<script src="app.js?v=20261119c"></script>
+<script src="app.js?v=20261119d"></script>
 </body>
 </html>

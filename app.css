@@ -565,3 +565,22 @@ button.whh b{color:var(--ink);font-size:14px}
 .mxzt.head span:last-child{color:var(--accent)}
 .mxmore{display:block;padding:8px 14px 12px;border-top:1px solid var(--line)}
 .mxzx{background:var(--ink);color:var(--card);border:0;border-radius:14px;padding:13px;font-size:15px;font-weight:700;width:100%}
+/* ixcham 2 */
+.app{gap:10px}
+.top{padding-bottom:6px}
+#topAnalytics.mxhide{display:none}
+.qrow{display:flex;gap:8px;align-items:center}
+.qrow>.seg{flex:1 1 auto;min-width:0}
+.sortsel{flex:0 0 auto;max-width:42%;border:0;background:var(--card);box-shadow:var(--shadow);border-radius:12px;padding:9px 8px;font:inherit;font-size:13px;color:var(--ink)}
+.mxfil{flex:0 0 auto;padding:9px 12px}
+.mxfil.on{background:var(--ink);color:var(--card)}
+#qSeg{padding:4px;border-radius:14px;gap:4px}
+#qSeg button{min-height:0;padding:7px 6px;font-size:13px;border-radius:10px}
+.qsum{gap:6px}
+.qsum button{padding:7px 9px;border-radius:12px;font-size:11px}
+.qsum button b{font-size:17px}
+.qmapctl{flex-wrap:nowrap}
+.qcat{flex:1 1 auto;min-width:0;border:0;background:var(--card);box-shadow:var(--shadow);border-radius:12px;padding:8px;font:inherit;font-size:13px;color:var(--ink)}
+.tot.cmp .r1{align-items:center}
+.tot.cmp .lv{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.tot.cmp .lv .l{font-size:12px}

@@ -749,8 +749,7 @@ function renderTree() {
   const cs = compShare(T, sumPrev(TREE.raw), TREE.company);
   const tc = (k, x, y) => `<span><span class="k">${k}</span><span class="x">${x}</span><span class="y">${y || '&nbsp;'}</span></span>`;
   const out = [`<button class="tot cmp" data-s="${esc(nsig(TREE))}" aria-expanded="${!!TREE.open}">
-      <span class="r1"><span class="l">Jami ${MQ() ? 'dona' : 'savdo'}</span>${hasCmp ? pill(mdelta(d)) : ''}</span>
-      <span class="v">${mfmt(T)}</span>
+      <span class="r1"><span class="lv"><span class="l">Jami ${MQ() ? 'dona' : 'savdo'}</span><span class="v">${mfmt(T)}</span></span>${hasCmp ? pill(mdelta(d)) : ''}</span>
       <span class="g">${tc('Gross', money(T.margin), `${pct(T.margin_pct)}${hasCmp && d.margin_pct_pp != null ? ' · ' + ppPlain(d.margin_pct_pp) : ''}`)}${tc('Front', money(T.gross), `${pct(T.gross_pct)}${hasCmp && d.gross_pct_pp != null ? ' · ' + ppPlain(d.gross_pct_pp) : ''}`)}${cs
         ? tc(cap(locScopeWord()), pct(cs.s), `${hasCmp && cs.pp != null ? ppPlain(cs.pp) + ' · ' : ''}front ${pct(cs.g)}`)
         : tc(MQ() ? 'Savdo' : 'Dona', MQ() ? money(T.amount) : nf0.format(T.qty), T.avg_price ? `o'rt. ${money(T.avg_price)}` : '')}</span>
@@ -1373,6 +1372,7 @@ function setTab(t) {
   TAB = t;
   ['Umumiy', 'Qirqim', 'Tovarlar', 'Qoldiq', 'Reja', 'Matritsa'].forEach(x => { $('pane' + x).hidden = x !== t; });
   $('perBtn').hidden = $('metricSeg').hidden = t === 'Matritsa';   // matritsa — joriy holat, davrga bog'liq emas
+  $('topAnalytics').classList.toggle('mxhide', t === 'Matritsa');     // matritsada Filtr — ko'rinish qatorida
   const rj = t === 'Reja';                            // reja — kategoriya/davr/filtrga bog'liq emas
   $('catBtn').hidden = rj; $('topAnalytics').hidden = rj; $('upTitle').hidden = !rj;
   if (rj) { $('upTitle').textContent = 'Reja bajarilishi'; $('tmeta').textContent = META.data_to ? `ma'lumot ${dm(META.data_to)} gacha` : ''; }
@@ -1641,7 +1641,7 @@ function snapNote(s) {
   const parts = [];
   if (s.b) parts.push(`filial ${dm(s.b)}`);
   if (s.w) parts.push(`ombor ${dm(s.w)}`);
-  return `qoldiq: ${parts.join(' · ')} holati · savdo — 30 va 7 kunlik sur'at`;
+  return `qoldiq ${parts.join(' · ')} · savdo 30/7 kun`;
 }
 function noStock() {
   return `<div class="card"><div class="empty">Qoldiq hali yuklanmagan.<br>${META.can_upload
@@ -1724,8 +1724,8 @@ async function renderMap(host) {
   const d = QS.map;
   if (!d.snap || (!d.snap.b && !d.snap.w)) { host.innerHTML = noStock(); return; }
   const rk = [['w', 'Omborlar'], ['region', 'Hududlar'], ['b', 'Filiallar']];
-  const cats = d.categories.length > 1 ? `<label class="sortl">Kategoriya <select id="qCat">${d.categories.map(c =>
-    `<option value="${c.id}" ${c.id === d.category ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>` : `<b>${esc(d.category_name || '')}</b>`;
+  const cats = d.categories.length > 1 ? `<select id="qCat" class="qcat" aria-label="Kategoriya">${d.categories.map(c =>
+    `<option value="${c.id}" ${c.id === d.category ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>` : `<b>${esc(d.category_name || '')}</b>`;
   const head = `<tr><th></th>${d.brands.map(b => `<th title="${esc(b)}">${esc(b)}</th>`).join('')}</tr>`;
   const qv = QS.mapVal === 'qty';
   const cv = (row, b) => qv ? (row.qty && row.qty[b] != null ? nf0.format(row.qty[b]) : '—') : hmTxt(row.cells[b]);
@@ -1734,7 +1734,7 @@ async function renderMap(host) {
   const tot = `<tr class="tot2"><td class="n"><b>Jami</b></td>${d.brands.map(b => `<td class="${hmCls(d.total.cells[b])}">${cv(d.total, b)}</td>`).join('')}</tr>`;
   host.innerHTML = `<div class="hint">${snapNote(d.snap)}</div>
     <div class="qchips">${rk.map(([k, l]) => `<button data-rows="${k}" aria-pressed="${QS.rows === k && !(k === 'b' && QS.wid)}">${l}</button>`).join('')}</div>
-    <div class="ctl">${cats}<span class="seg mini" id="qMv"><button data-mv="days" aria-pressed="${!qv}">Kun</button><button data-mv="qty" aria-pressed="${qv}">Dona</button></span></div>
+    <div class="ctl qmapctl">${cats}<span class="seg mini" id="qMv"><button data-mv="days" aria-pressed="${!qv}">Kun</button><button data-mv="qty" aria-pressed="${qv}">Dona</button></span></div>
     ${QS.wid ? `<div class="bc2"><button class="tchip back" id="qWidBack">‹ Omborlar</button><span>${esc(d.wh_name || '')} filiallari</span></div>` : ''}
     ${d.rows.length && d.brands.length ? `<div class="card hmw"><table class="hm">${head}${rows}${tot}</table></div>` : `<div class="card"><div class="empty">Bu kategoriyada qoldiq yo'q</div></div>`}
     <div class="lg"><span><i class="h0"></i>&lt;3 kun</span><span><i class="h1"></i>3–7</span><span><i class="h2"></i>8–14</span><span><i class="h3"></i>me'yorda</span><span><i class="h5"></i>sotilmaydi</span></div>
@@ -2019,9 +2019,12 @@ function mxRows(d, withCat) {
   const G = MX.G;
   return d.bc.filter(r => G[r[0]] && G[r[0]].g === MX.g && (!MX.reg || G[r[0]].region_id === MX.reg) && (!withCat || !MX.cat || r[1] === MX.cat));
 }
-const mxViewSeg = () => `<div class="seg" id="mxView" role="group" aria-label="Ko'rinish">${[['mx', 'Matritsa'], ['vit', 'Vitrina'], ['zak', 'Zakaz']]
-  .map(([k, l]) => `<button data-v="${k}" aria-pressed="${MX.view === k}">${l}</button>`).join('')}</div>`;
+const mxFcount = () => Object.values(st.f).reduce((n, v) => n + (v && v.size ? 1 : 0), 0);
+const mxViewSeg = () => `<div class="qrow"><div class="seg" id="mxView" role="group" aria-label="Ko'rinish">${[['mx', 'Matritsa'], ['vit', 'Vitrina'], ['zak', 'Zakaz']]
+  .map(([k, l]) => `<button data-v="${k}" aria-pressed="${MX.view === k}">${l}</button>`).join('')}</div>
+  <button class="tchip mxfil${mxFcount() ? ' on' : ''}" id="mxFil">Filtr${mxFcount() ? ' · ' + mxFcount() : ''}</button></div>`;
 function mxWireView(host) {
+  const fb = $('mxFil'); if (fb) fb.onclick = openFilterSheet;
   host.querySelectorAll('#mxView [data-v]').forEach(b => b.onclick = () => { if (MX.view === b.dataset.v) return; MX.view = b.dataset.v; MX.lim = 40; renderMxList(host); });
 }
 async function renderMxOrder(host, d) {
@@ -2130,9 +2133,9 @@ async function renderMxList(host) {
         ${mxBar2(A.onm, A.x, A.cap)}<span class="s num"><span>${esc(b.region)}</span><span>turgan <b>${nf0.format(A.on)}/${nf0.format(A.cap)}</b></span><span>bo'sh <b>${nf0.format(A.empty)}</b></span>${A.over ? `<span>ortiq <b>${nf0.format(A.over)}</b></span>` : ''}</span></button>`
     : `<button class="mxrow" data-b="${b.id}"><span class="n">${esc(b.name)} ›</span><span class="pc num" style="color:${mxCol(A.pct)}">${pct(A.pct)}</span>
         ${mxBar(A.pct)}<span class="s num">${mxPp(A.d)}<span>${esc(b.region)}${b.cluster ? ' · ' + esc(b.cluster) : ''}</span><span>yo'q <b>${nf0.format(A.miss)}</b></span><span>kam <b>${nf0.format(A.low)}</b></span><span>vitrina ${pct(A.fill)}</span></span></button>`;
-  host.innerHTML = `${two ? `<div class="seg" id="mxSeg" role="group" aria-label="Filial turi">
+  host.innerHTML = `${mxViewSeg()}
+    ${two ? `<div class="seg" id="mxSeg" role="group" aria-label="Filial turi">
       <button data-g="f" aria-pressed="${MX.g === 'f'}">Filial · ${KB.f.branches}</button><button data-g="m" aria-pressed="${MX.g === 'm'}">Mini do'kon · ${KB.m.branches}</button></div>` : ''}
-    ${mxViewSeg()}
     <div class="hint">matritsa ${mxDt(d.sync.at)} · qoldiq ${dm(d.snap.b)}${!vit && d.prev ? ` · ▲▼ — ${dm(d.prev)} ga nisbatan` : ''}${MX.cat ? ` · <b>${esc(catName[MX.cat])}</b>` : ''}</div>
     <div class="kpis mxk">${kpis}</div>
     ${!vit && ub && (ub.branches || ub.skus) ? `<div class="mxwarn">Bog'lanmagan: ${ub.branches ? `<b>${ub.branches}</b> filial` : ''}${ub.branches && ub.skus ? ' · ' : ''}${ub.skus ? `<b>${ub.skus}</b> SKU` : ''} — botda /matritsa → «⬇ Bog'lanish Excel»</div>` : ''}
