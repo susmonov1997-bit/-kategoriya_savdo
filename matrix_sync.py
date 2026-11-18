@@ -452,6 +452,9 @@ def digest_text(s: dict, dg: dict | None) -> str:
         lines += ["", f"🛒 <b>Zakaz: {_n(int(T['pos']))} poz · {_n(round(T['z']))} dona</b>"
                   + (f" · ≈ {_usd(T.get('usd') or 0)}" if T.get("usd") else ""),
                   " · ".join(f"{e(w['short'])} {_n(round(w['z']))}" for w in od["whs"] if w["z"] > 0)]
+        if T.get("zm"):
+            lines.append(f"   shundan faqat matritsa uchun: {_n(round(T['zm']))} dona"
+                         + (f" · ≈ {_usd(T.get('usdm') or 0)}" if T.get("usdm") else ""))
     elif T is not None:
         lines += ["", "🛒 Zakaz kerak emas — omborlardagi qoldiq yetarli."]
     return "\n".join(lines)

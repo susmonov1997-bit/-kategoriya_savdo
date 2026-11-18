@@ -44,6 +44,7 @@ def _M():
 
 class MxReq(Filters):
     days: Literal[7, 10, 14, 21, 30] = 14          # zakaz: necha kunlik savdo zahirasi
+    mode: Literal["full", "mx"] = "full"          # zakaz turi: matritsa + zahira | faqat matritsa
     branch_id: int | None = None
 
 
@@ -387,12 +388,12 @@ async def unit_prices(con, sn: dict, pids: list[int]) -> dict[int, tuple[float, 
     return out
 
 
-async def order_data(con, q, days: int = ORDER_DAYS) -> dict:
+async def order_data(con, q, days: int = ORDER_DAYS, mode: str = "full") -> dict:
     """q — _flt() natijasi (tovar va filial filtrlari bilan).
     Zahira = kunlik savdo × days; kunlik savdo — oxirgi 30 kunlik va 7 kunlik o'rtachaning kattasi
     (7 kunda kamida MIN_Q7 dona sotilgan bo'lsa), qoldiq tabidagi qoida bilan bir xil."""
     sn = await _snaps(con)
-    out = {"snap": {k: (v.isoformat() if v else None) for k, v in sn.items()}, "whs": [], "days": days}
+    out = {"snap": {k: (v.isoformat() if v else None) for k, v in sn.items()}, "whs": [], "days": days, "mode": mode}
     if not sn["b"]:
         return out
     s_to = sn["s"] or sn["b"]
@@ -436,10 +437,16 @@ JOIN products p ON p.product_id = mp.product_id JOIN categories c ON c.id = p.ca
                                              "short": names.get(r["warehouse_id"], "?").replace(" омбори", ""),
                                              "branches": nbr.get(r["warehouse_id"], 0),
                                              "m": 0.0, "s": 0.0, "h": 0.0, "z": 0.0, "usd": 0.0, "nop": 0,
+                                             "zm": 0.0, "usdm": 0.0,
                                              "pos": 0, "items": []})
         rate = max(r["q30"] / 30, r["q7"] / 7 if r["q7"] >= MIN_Q7 else 0.0)   # kunlik savdo
-        sv = rate * days
+        sv = rate * days if mode == "full" else 0.0     # «faqat matritsa» — zahirasiz
         z = max(0.0, round(r["m"] + sv - r["h"]))
+        zm = max(0.0, round(r["m"] - r["h"]))              # ma'lumot uchun: faqat matritsani to'ldirishga
+        if zm > 0:
+            pm = price.get(r["product_id"], (None, None))[0]
+            w["zm"] = w.get("zm", 0.0) + zm
+            w["usdm"] = w.get("usdm", 0.0) + (zm * pm if pm is not None else 0.0)
         w["m"] += r["m"]
         w["s"] += sv
         w["h"] += min(r["h"], r["m"] + sv)               # zakazni kamaytirgan qismi
@@ -477,7 +484,7 @@ JOIN products p ON p.product_id = mp.product_id JOIN categories c ON c.id = p.ca
             b["skus"] = sorted(b["skus"].values(), key=lambda k: -k["z"])
         c["brands"] = sorted(c["brands"].values(), key=lambda b: -b["z"])
     out["cats"] = sorted(C.values(), key=lambda c: -c["z"])
-    out["total"] = {k: sum(w[k] for w in W.values()) for k in ("m", "s", "h", "z", "pos", "usd", "nop")}
+    out["total"] = {k: sum(w[k] for w in W.values()) for k in ("m", "s", "h", "z", "pos", "usd", "nop", "zm", "usdm")}
     return out
 
 
@@ -569,7 +576,10 @@ def order_xlsx(d: dict, ship: list) -> bytes:
                                 "Filialda bor", "Yuborish, dona"], ship)
     ws = wb.create_sheet("Izoh")
     s = d.get("sales") or ["", ""]
-    for line in [f"Zakaz = matritsa uchun + {n} kunlik zahira − ombor qoldig'i (manfiy bo'lsa — 0)",
+    mx_only = d.get("mode") == "mx"
+    for line in [("ZAKAZ TURI: FAQAT MATRITSA — zakaz = matritsa uchun − ombor qoldig'i (zahirasiz)" if mx_only else
+                  f"ZAKAZ TURI: MATRITSA + {n} KUNLIK ZAHIRA"),
+                 f"Zakaz = matritsa uchun + {n} kunlik zahira − ombor qoldig'i (manfiy bo'lsa — 0)",
                  f"{n} kunlik zahira = kunlik savdo × {n}; kunlik savdo — oxirgi 30 kunlik va 7 kunlik o'rtachaning "
                  f"kattasi (7 kunda kamida {MIN_Q7} dona sotilgan bo'lsa)",
                  "Matritsa uchun = shu ombor filiallarida Turishi − filial qoldig'i (yetishmagan qismi)",
@@ -600,7 +610,7 @@ async def all_flt(con):
 async def order(req: MxReq, request: Request, user: User = Depends(current_user)):
     async def run():
         async with request.app.state.pool.acquire() as con:
-            d = await order_data(con, await _flt(con, req, user), req.days)
+            d = await order_data(con, await _flt(con, req, user), req.days, req.mode)
             for w in d["whs"]:                        # Mini App'ga har ombordan eng katta 100 tasi
                 w["more"] = max(0, len(w["items"]) - 100)
                 w["items"] = w["items"][:100]
@@ -615,7 +625,7 @@ async def order_export(req: MxReq, request: Request, user: User = Depends(curren
     from aiogram import Bot
     from aiogram.types import BufferedInputFile
     async with request.app.state.pool.acquire() as con:
-        d = await order_data(con, await _flt(con, req, user), req.days)
+        d = await order_data(con, await _flt(con, req, user), req.days, req.mode)
         ship = await send_list(con, await _flt(con, req, user))
     if not d["whs"]:
         raise HTTPException(404, "Zakaz uchun ma'lumot yo'q")
@@ -623,7 +633,7 @@ async def order_export(req: MxReq, request: Request, user: User = Depends(curren
         raise HTTPException(503, "Bot sozlanmagan")
     bot = Bot(config.BOT_TOKEN)
     try:
-        await bot.send_document(user.id, BufferedInputFile(order_xlsx(d, ship), filename=order_fname()),
+        await bot.send_document(user.id, BufferedInputFile(order_xlsx(d, ship), filename=order_fname(d.get("mode", "full"))),
                                 caption="🛒 Zakaz: har ombor alohida varaq + «Ombordan yuborish»")
     except Exception as e:  # noqa: BLE001
         raise HTTPException(503, f"Botga yuborib bo'lmadi — botga /start bosilganini tekshiring ({e})")
@@ -632,9 +642,9 @@ async def order_export(req: MxReq, request: Request, user: User = Depends(curren
     return {"ok": True}
 
 
-def order_fname() -> str:
+def order_fname(mode: str = "full") -> str:
     from datetime import datetime, timezone
-    return f"zakaz_{datetime.now(timezone(timedelta(hours=5))):%d.%m.%Y}.xlsx"
+    return f"zakaz{'_matritsa' if mode == 'mx' else ''}_{datetime.now(timezone(timedelta(hours=5))):%d.%m.%Y}.xlsx"
 
 
 async def bot_digest(con) -> dict:
@@ -643,5 +653,6 @@ async def bot_digest(con) -> dict:
     u = User(id=0, is_admin=True, level="admin")
     f = MxReq(scope="a:", date_from=date.today(), date_to=date.today())
     ov = await _overview(con, f, u)
-    od = await order_data(con, await _flt(con, f, u)) if ov.get("snap", {}).get("b") else {"whs": [], "total": None}
+    has = ov.get("snap", {}).get("b")
+    od = await order_data(con, await _flt(con, f, u)) if has else {"whs": [], "total": None}
     return {"ov": ov, "order": od}
