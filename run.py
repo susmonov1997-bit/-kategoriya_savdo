@@ -16,6 +16,7 @@ import config
 from api_main import app as api_app
 from bot import run_bot
 from db import create_pool, migrate
+from matrix_sync import daily_loop as matrix_daily
 
 log = logging.getLogger("app.run")
 
@@ -60,9 +61,11 @@ async def main() -> None:
         bot_task = asyncio.create_task(supervise_bot(pool), name="bot")
     else:
         log.warning("BOT_TOKEN yo'q — faqat API ishga tushdi")
+    mx_task = asyncio.create_task(matrix_daily(pool), name="matrix")   # har kuni 06:00 — matritsa
     try:
         await server.serve()          # jarayon API ishlaguncha yashaydi
     finally:
+        mx_task.cancel()
         if bot_task:
             bot_task.cancel()
         await pool.close()

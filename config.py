@@ -39,3 +39,9 @@ WEBAPP_URL: str = _webapp_url(os.environ.get("WEBAPP_URL", ""))
 ON_RAILWAY: bool = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_ENVIRONMENT_NAME"))
 PORT: int = int(os.environ.get("PORT", "8000"))
 MAX_UPLOAD_MB: int = int(os.environ.get("MAX_UPLOAD_MB", "100"))   # Mini App orqali yuklash limiti
+
+# --- Matritsa (Google Sheet «Матрица КБТ») ---
+GOOGLE_SA_JSON: str = os.environ.get("GOOGLE_SA_JSON", "").strip()        # servis-akkaunt kaliti (JSON matni)
+MATRIX_SHEET_ID: str = os.environ.get("MATRIX_SHEET_ID", "").strip().strip('"')   # jadval ID yoki havolasi
+MATRIX_SHEET_TAB: str = os.environ.get("MATRIX_SHEET_TAB", "Matritsa").strip() or "Matritsa"
+MATRIX_SYNC_HOUR: int = int(os.environ.get("MATRIX_SYNC_HOUR", "6"))      # Toshkent vaqti

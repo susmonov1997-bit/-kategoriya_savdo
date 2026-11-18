@@ -25,6 +25,7 @@ from fact import ensure_fact
 from loaders_common import LoaderError, release_memory
 from loaders_dispatch import load_any, load_any_ex
 import bot_stock
+import bot_matrix
 from bot_stock import prompt_new
 from stock_notify import schedule_summary
 from notify import broadcast_upload, get_setting, is_muted, period_text, send_users_update, set_setting
@@ -97,6 +98,7 @@ async def start(m: Message, pool: asyncpg.Pool) -> None:
             text += "\n/users — foydalanuvchilar va kirish so'rovlari"
             text += "\n/xabar — yuklashdan keyingi xabarlarni o'chirish/yoqish"
             text += "\n/yangi — yangi filial va ombor bo'limlarini to'ldirish"
+            text += "\n/matritsa — matritsani Google Sheet'dan hozir o'qish"
         await m.answer(text, reply_markup=_app_kb())
         return
     if acc.status == "pending":
@@ -557,6 +559,7 @@ async def run_bot(pool: asyncpg.Pool) -> None:
         _DP = Dispatcher()
         _DP.include_router(router)
         _DP.include_router(bot_stock.router)
+        _DP.include_router(bot_matrix.router)
         _DP.errors.register(_on_error)
     dp = _DP
     dp["pool"] = pool
