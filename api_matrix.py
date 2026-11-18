@@ -17,6 +17,7 @@ POST /api/matrix/branch     filial tafsiloti: kategoriyalar, yetishmagan SKU'lar
 from __future__ import annotations
 
 import json
+from typing import Literal
 import re
 from datetime import timedelta
 
@@ -42,6 +43,7 @@ def _M():
 
 
 class MxReq(Filters):
+    days: Literal[7, 10, 14, 21, 30] = 14          # zakaz: necha kunlik savdo zahirasi
     branch_id: int | None = None
 
 
@@ -344,7 +346,8 @@ async def branch(req: MxReq, request: Request, user: User = Depends(current_user
 #   matritsa uchun = Σ filiallar (shu ombor) max(0, Turishi − filial qoldig'i)   — qoldiq fayli bor filiallar
 #   2 hafta savdo  = shu ombor filiallarining oxirgi 14 kunlik savdosi (oxirgi savdo sanasigacha)
 #   zakaz          = max(0, matritsa uchun + 2 hafta savdo − ombor qoldig'i)
-ORDER_DAYS = 14
+ORDER_DAYS = 14          # zahira (kun), standart
+MIN_Q7 = 3               # 7 kunda kamida shuncha sotilsa — 7 kunlik sur'at hisobga olinadi (qoldiq tabidagidek)
 
 
 USD_MAX_UNIT = 10_000   # birlik narxi bundan katta bo'lsa — so'mda yozilgan deb olinadi (savdo faylidagi qoida kabi)
@@ -384,17 +387,19 @@ async def unit_prices(con, sn: dict, pids: list[int]) -> dict[int, tuple[float, 
     return out
 
 
-async def order_data(con, q) -> dict:
-    """q — _flt() natijasi (tovar va filial filtrlari bilan)."""
+async def order_data(con, q, days: int = ORDER_DAYS) -> dict:
+    """q — _flt() natijasi (tovar va filial filtrlari bilan).
+    Zahira = kunlik savdo × days; kunlik savdo — oxirgi 30 kunlik va 7 kunlik o'rtachaning kattasi
+    (7 kunda kamida MIN_Q7 dona sotilgan bo'lsa), qoldiq tabidagi qoida bilan bir xil."""
     sn = await _snaps(con)
-    out = {"snap": {k: (v.isoformat() if v else None) for k, v in sn.items()}, "whs": [], "days": ORDER_DAYS}
+    out = {"snap": {k: (v.isoformat() if v else None) for k, v in sn.items()}, "whs": [], "days": days}
     if not sn["b"]:
         return out
     s_to = sn["s"] or sn["b"]
-    s_from = s_to - timedelta(days=ORDER_DAYS - 1)
+    s_from = s_to - timedelta(days=29)
     out["sales"] = [s_from.isoformat(), s_to.isoformat()]
     w_ = q.ctes()
-    D, W, S1, S2 = q.p(sn["b"]), q.p(sn["w"]), q.p(s_from), q.p(s_to)
+    D, W, S1, S2, S7 = q.p(sn["b"]), q.p(sn["w"]), q.p(s_from), q.p(s_to), q.p(s_to - timedelta(days=6))
     rows = await con.fetch(f"""
 WITH {w_},
 wb AS (SELECT branch_id, warehouse_id FROM bb WHERE warehouse_id IS NOT NULL),
@@ -408,12 +413,14 @@ f AS (SELECT wb.warehouse_id, m.product_id, sum(GREATEST(0, m.need - COALESCE(s.
       LEFT JOIN stock_branch s ON s.snap_date = {D} AND s.branch_id = m.branch_id AND s.product_id = m.product_id
       GROUP BY 1, 2),
 mp AS (SELECT DISTINCT wb.warehouse_id, m.product_id FROM m JOIN wb USING (branch_id)),
-sl AS (SELECT wb.warehouse_id, e.product_id, sum(e.qty) q FROM sales_fact e JOIN wb USING (branch_id)
+sl AS (SELECT wb.warehouse_id, e.product_id, sum(e.qty) q, sum(e.qty) FILTER (WHERE e.sale_date >= {S7}) q7
+       FROM sales_fact e JOIN wb USING (branch_id)
        JOIN mp ON mp.warehouse_id = wb.warehouse_id AND mp.product_id = e.product_id
        WHERE e.sale_date BETWEEN {S1} AND {S2} GROUP BY 1, 2),
 w AS (SELECT warehouse_id, product_id, qty FROM stock_wh WHERE snap_date = {W})
 SELECT mp.warehouse_id, mp.product_id, COALESCE(f.fill, 0)::float8 m, COALESCE(f.nbr, 0) nbr,
-       GREATEST(0, COALESCE(sl.q, 0))::float8 s, GREATEST(0, COALESCE(w.qty, 0))::float8 h,
+       GREATEST(0, COALESCE(sl.q, 0))::float8 q30, GREATEST(0, COALESCE(sl.q7, 0))::float8 q7,
+       GREATEST(0, COALESCE(w.qty, 0))::float8 h,
        p.name, p.brand, c.name cname
 FROM mp LEFT JOIN f USING (warehouse_id, product_id) LEFT JOIN sl USING (warehouse_id, product_id)
 LEFT JOIN w USING (warehouse_id, product_id)
@@ -430,10 +437,12 @@ JOIN products p ON p.product_id = mp.product_id JOIN categories c ON c.id = p.ca
                                              "branches": nbr.get(r["warehouse_id"], 0),
                                              "m": 0.0, "s": 0.0, "h": 0.0, "z": 0.0, "usd": 0.0, "nop": 0,
                                              "pos": 0, "items": []})
-        z = max(0.0, round(r["m"] + r["s"] - r["h"]))
+        rate = max(r["q30"] / 30, r["q7"] / 7 if r["q7"] >= MIN_Q7 else 0.0)   # kunlik savdo
+        sv = rate * days
+        z = max(0.0, round(r["m"] + sv - r["h"]))
         w["m"] += r["m"]
-        w["s"] += r["s"]
-        w["h"] += min(r["h"], r["m"] + r["s"])           # zakazni kamaytirgan qismi
+        w["s"] += sv
+        w["h"] += min(r["h"], r["m"] + sv)               # zakazni kamaytirgan qismi
         if z > 0:
             pr, src = price.get(r["product_id"], (None, None))
             w["z"] += z
@@ -443,7 +452,7 @@ JOIN products p ON p.product_id = mp.product_id JOIN categories c ON c.id = p.ca
             else:
                 w["usd"] += z * pr
             w["items"].append({"id": r["product_id"], "name": r["name"], "brand": r["brand"], "cat": r["cname"],
-                               "m": r["m"], "s": r["s"], "h": r["h"], "z": z, "nbr": r["nbr"],
+                               "m": r["m"], "s": sv, "r": rate, "h": r["h"], "z": z, "nbr": r["nbr"],
                                "p": pr, "src": src, "usd": z * pr if pr is not None else None})
     for w in W.values():
         w["items"].sort(key=lambda i: (-i["z"], i["name"]))
@@ -517,24 +526,28 @@ def order_xlsx(d: dict, ship: list) -> bytes:
         return ws
 
     n = d.get("days", ORDER_DAYS)
+    zl = f"{n} kunlik zahira"
     SRC = {"w": "ombor (A sektor)", "b": "filial (kirim)"}
-    sheet("Jami", ["Ombor", "Pozitsiya", "Matritsa uchun", f"{n} kun savdo", "Omborda (hisobga olingan)", "Zakaz, dona",
+    sheet("Jami", ["Ombor", "Pozitsiya", "Matritsa uchun", zl, "Omborda (hisobga olingan)", "Zakaz, dona",
                    "Zakaz, $", "Narxi yo'q (poz)"],
           [[w["name"], w["pos"], round(w["m"]), round(w["s"]), round(w["h"]), round(w["z"]), round(w["usd"], 2), w["nop"]]
            for w in d["whs"]], first=True)
     for w in d["whs"]:
         sheet(w["short"], ["Kategoriya", "Brend", "Tovar ID", "Tovar", "Matritsa uchun", "Filiallar (yetishmaydi)",
-                           f"{n} kun savdo", "Omborda", "Zakaz, dona", "Narx, $", "Narx manbai", "Zakaz, $"],
-              [[i["cat"], i["brand"], i["id"], i["name"], round(i["m"]), i["nbr"], round(i["s"]), round(i["h"]), round(i["z"]),
+                           "Kunlik savdo", zl, "Omborda", "Zakaz, dona", "Narx, $", "Narx manbai", "Zakaz, $"],
+              [[i["cat"], i["brand"], i["id"], i["name"], round(i["m"]), i["nbr"], round(i["r"], 2), round(i["s"]),
+                round(i["h"]), round(i["z"]),
                 round(i["p"], 2) if i["p"] is not None else None, SRC.get(i["src"], "yo'q"),
                 round(i["usd"], 2) if i["usd"] is not None else None] for i in w["items"]])
     sheet("Ombordan yuborish", ["Ombor", "Hudud", "Filial", "Kategoriya", "Brend", "Tovar ID", "Tovar", "Turishi",
                                 "Filialda bor", "Yuborish, dona"], ship)
     ws = wb.create_sheet("Izoh")
     s = d.get("sales") or ["", ""]
-    for line in ["Zakaz = matritsa uchun + " + f"{n} kunlik savdo − ombor qoldig'i (manfiy bo'lsa — 0)",
+    for line in [f"Zakaz = matritsa uchun + {n} kunlik zahira − ombor qoldig'i (manfiy bo'lsa — 0)",
+                 f"{n} kunlik zahira = kunlik savdo × {n}; kunlik savdo — oxirgi 30 kunlik va 7 kunlik o'rtachaning "
+                 f"kattasi (7 kunda kamida {MIN_Q7} dona sotilgan bo'lsa)",
                  "Matritsa uchun = shu ombor filiallarida Turishi − filial qoldig'i (yetishmagan qismi)",
-                 f"Savdo davri: {s[0]} — {s[1]} · filial qoldig'i: {d['snap'].get('b')} · ombor qoldig'i: {d['snap'].get('w')}",
+                 f"Savdo (30 kun): {s[0]} — {s[1]} · filial qoldig'i: {d['snap'].get('b')} · ombor qoldig'i: {d['snap'].get('w')}",
                  "Faqat matritsadagi SKU'lar; ombori biriktirilmagan va qoldiq faylida yo'q filiallar hisobga olinmaydi.",
                  "«Ombordan yuborish» — ombor qoldig'i yetguncha, avval ko'p sotgan filialga.",
                  "Narx, $: ombor qoldig'idagi «A сектор учун жорий сотиш нархи»; bo'lmasa — filial qoldig'idagi kirim narxi. "
@@ -561,7 +574,7 @@ async def all_flt(con):
 async def order(req: MxReq, request: Request, user: User = Depends(current_user)):
     async def run():
         async with request.app.state.pool.acquire() as con:
-            d = await order_data(con, await _flt(con, req, user))
+            d = await order_data(con, await _flt(con, req, user), req.days)
             for w in d["whs"]:                        # Mini App'ga har ombordan eng katta 100 tasi
                 w["more"] = max(0, len(w["items"]) - 100)
                 w["items"] = w["items"][:100]
@@ -576,7 +589,7 @@ async def order_export(req: MxReq, request: Request, user: User = Depends(curren
     from aiogram import Bot
     from aiogram.types import BufferedInputFile
     async with request.app.state.pool.acquire() as con:
-        d = await order_data(con, await _flt(con, req, user))
+        d = await order_data(con, await _flt(con, req, user), req.days)
         ship = await send_list(con, await _flt(con, req, user))
     if not d["whs"]:
         raise HTTPException(404, "Zakaz uchun ma'lumot yo'q")

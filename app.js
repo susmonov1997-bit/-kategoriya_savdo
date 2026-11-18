@@ -1976,7 +1976,8 @@ document.querySelectorAll('#qSeg button').forEach(b => b.onclick = () => {
 
 // ============================================================ MATRITSA
 // Google Sheet «Матрица КБТ» (har kuni 06:00) × filial qoldig'i: bajarilish, yo'q/kam, vitrina, omborda bor.
-const MX = {data: null, od: null, wOpen: new Set(), g: 'f', view: 'mx', cat: null, over: false, G: {}, reg: null, br: null, bd: null, seq: 0, lim: 40, open: {}, exLim: 15, y: 0};
+const MX_DAYS = (() => { try { const v = +localStorage.getItem('mx_days'); return [7, 10, 14, 21, 30].includes(v) ? v : 14; } catch (e) { return 14; } })();
+const MX = {data: null, od: null, days: MX_DAYS, wOpen: new Set(), g: 'f', view: 'mx', cat: null, over: false, G: {}, reg: null, br: null, bd: null, seq: 0, lim: 40, open: {}, exLim: 15, y: 0};
 const mxCol = p => (p == null ? 'var(--so)' : p < 70 ? 'var(--bad)' : p < 85 ? 'var(--warn)' : 'var(--good)');
 const mxPp = d => (d == null || !isFinite(d) ? '' : `<span class="pp ${sgn(d)}">${sgn(d) === 'up' ? '▲' : sgn(d) === 'dn' ? '▼' : '•'}${nf1.format(Math.abs(d))}</span>`);
 const mxDt = s => { if (!s) return ''; const d = new Date(s); return d.toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent'}).replace(',', ''); };
@@ -2044,7 +2045,7 @@ async function renderMxOrder(host, d) {
   const seq = MX.seq;
   if (!MX.od) {
     host.innerHTML = `${mxViewSeg()}<div class="empty">Yuklanmoqda…</div>`; mxWireView(host);
-    try { const od = await api('matrix/order', filters()); if (seq !== MX.seq) return; MX.od = od; }
+    try { const od = await api('matrix/order', {...filters(), days: MX.days}); if (seq !== MX.seq) return; MX.od = od; }
     catch (e) { if (seq === MX.seq) { host.innerHTML = `${mxViewSeg()}<div class="errbox">${esc(e.message)}</div>`; mxWireView(host); } return; }
   }
   const od = MX.od, T = od.total || {m: 0, s: 0, h: 0, z: 0, pos: 0};
@@ -2053,29 +2054,35 @@ async function renderMxOrder(host, d) {
     const open = MX.wOpen.has(w.id);
     return `<div class="card mxcat"><button class="mxwh" data-w="${w.id}"><span><b>${open ? '▾' : '▸'} ${esc(w.short)}</b>
         <span class="hint">${nf0.format(w.pos)} poz · ${w.branches} filial</span></span><span class="qq"><span class="q num">${nf0.format(Math.round(w.z))} dona</span>${w.usd ? `<span class="hint num">≈ ${usd(w.usd)}</span>` : ''}</span></button>
-      ${open ? `<div class="mxzt head"><span>SKU</span><span>matritsa</span><span>${od.days} kun</span><span>omborda</span><span>zakaz</span></div>
+      ${open ? `<div class="mxzt head"><span>SKU</span><span>matritsa</span><span>zahira</span><span>omborda</span><span>zakaz</span></div>
         ${w.items.map(i => `<div class="mxzt"><span class="n">${esc(i.name)}<small>${esc(i.cat)}${i.nbr ? ` · ${i.nbr} filialga` : ''}</small></span>
           <span class="num">${nf0.format(Math.round(i.m))}</span><span class="num">${nf0.format(Math.round(i.s))}</span><span class="num mu">${nf0.format(Math.round(i.h))}</span><span class="num z">${nf0.format(Math.round(i.z))}${i.usd != null ? `<small>${nf0.format(Math.round(i.usd))} $</small>` : ''}</span></div>`).join('')
           || `<div class="empty">Zakaz kerak emas</div>`}
         ${w.more ? `<span class="hint mxmore">Yana ${nf0.format(w.more)} ta pozitsiya — Excel'da</span>` : ''}` : ''}</div>`;
   };
   host.innerHTML = `${mxViewSeg()}
-    <div class="hint">qoldiq: filial ${dm(od.snap.b)} · ombor ${dm(od.snap.w)} · savdo ${sd}${MX.cat && d && d.cats ? '' : ''}</div>
+    <div class="hint">qoldiq: filial ${dm(od.snap.b)} · ombor ${dm(od.snap.w)} · savdo ${sd}</div>
     ${od.snap.w ? '' : `<div class="mxwarn">Ombor qoldig'i yuklanmagan — zakaz omborni hisobga olmaydi.</div>`}
     <div class="tot mxtot"><span class="l">Ta'minotchiga zakaz · ${od.whs.length} ombor</span>
       <div class="r1"><span class="v num">${nf0.format(Math.round(T.z))} dona</span>${T.usd ? `<span class="num usdv">≈ ${usd(T.usd)}</span>` : ''}</div>
       <span class="l num">${nf0.format(T.pos)} pozitsiya</span>
-      <span class="l num">matritsa uchun ${nf0.format(Math.round(T.m))} + ${od.days} kunlik savdo ${nf0.format(Math.round(T.s))} − omborda bor ${nf0.format(Math.round(T.h))}</span></div>
-    <div class="hint">Zakaz = filiallarda yetishmagan «Turishi» + ${od.days} kunlik savdo (shu ombor filiallari) − ombor qoldig'i. Manfiy bo'lsa — zakaz yo'q. Faqat matritsa SKU'lari. $ — ombordagi A sektor narxi (bo'lmasa — filial kirim narxi), so'mdagisi bot kursi bilan.${T.nop ? ` Narxi topilmagan: ${nf0.format(T.nop)} poz.` : ''}</div>
+      <span class="l num">matritsa uchun ${nf0.format(Math.round(T.m))} + ${od.days} kunlik zahira ${nf0.format(Math.round(T.s))} − omborda bor ${nf0.format(Math.round(T.h))}</span></div>
+    <div class="mxdays"><span>Zahira</span><span class="seg mini" id="mxDays">${[7, 10, 14, 21, 30].map(n => `<button data-d="${n}" aria-pressed="${MX.days === n}">${n}</button>`).join('')}</span><span>kun</span></div>
+    <div class="hint">Zakaz = filiallarda yetishmagan «Turishi» + ${od.days} kunlik zahira − ombor qoldig'i. Zahira = kunlik savdo × ${od.days}; kunlik savdo — shu ombor filiallarining 30 va 7 kunlik o'rtachasidan kattasi. Manfiy bo'lsa — zakaz yo'q. Faqat matritsa SKU'lari. $ — ombordagi A sektor narxi (bo'lmasa — filial kirim narxi), so'mdagisi bot kursi bilan.${T.nop ? ` Narxi topilmagan: ${nf0.format(T.nop)} poz.` : ''}</div>
     ${od.whs.map(whCard).join('') || `<div class="card"><div class="empty">Zakaz uchun ma'lumot yo'q</div></div>`}
     ${od.whs.length ? `<button class="btn mxzx" id="mxZx">⬇ Zakaz Excel — botga yuborish</button>
       <span class="hint" style="text-align:center">har ombor alohida varaq + «Ombordan yuborish» (filial × SKU)</span>` : ''}`;
   mxWireView(host);
+  host.querySelectorAll('#mxDays [data-d]').forEach(b => b.onclick = () => {
+    const n = +b.dataset.d; if (MX.days === n) return;
+    MX.days = n; MX.od = null; try { localStorage.setItem('mx_days', String(n)); } catch (e) {}
+    renderMxOrder(host, d);
+  });
   host.querySelectorAll('[data-w]').forEach(b => b.onclick = () => { const k = +b.dataset.w; MX.wOpen.has(k) ? MX.wOpen.delete(k) : MX.wOpen.add(k); renderMxOrder(host, d); });
   const zx = $('mxZx');
   if (zx) zx.onclick = async () => {
     zx.disabled = true; zx.textContent = '⏳ Tayyorlanmoqda…';
-    try { await api('matrix/order_export', filters()); zx.textContent = '✅ Botga yuborildi'; }
+    try { await api('matrix/order_export', {...filters(), days: MX.days}); zx.textContent = '✅ Botga yuborildi'; }
     catch (e) { zx.textContent = '❌ ' + e.message; }
     setTimeout(() => { zx.disabled = false; zx.textContent = '⬇ Zakaz Excel — botga yuborish'; }, 4000);
   };

@@ -600,3 +600,6 @@ button.whh b{color:var(--ink);font-size:14px}
 .brandrow>.mxfil{display:none}
 .mxtot .r1 .v{white-space:nowrap}
 .mxtot .usdv{font-size:17px;font-weight:800;white-space:nowrap}
+.mxdays{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);font-weight:600}
+.mxdays .seg{background:var(--card);box-shadow:var(--shadow)}
+.mxdays .seg button{padding:6px 12px}
