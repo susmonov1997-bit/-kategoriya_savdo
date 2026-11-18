@@ -128,16 +128,19 @@ j AS (SELECT m.branch_id, m.category_id, m.need, COALESCE(s.qty, 0) have, COALES
       LEFT JOIN stock_wh w ON w.snap_date = $3 AND w.warehouse_id = bb.warehouse_id AND w.product_id = m.product_id)
 SELECT branch_id, category_id, count(*) pos, count(*) FILTER (WHERE have >= need) ok,
        count(*) FILTER (WHERE have <= 0) miss, count(*) FILTER (WHERE have > 0 AND have < need) low,
-       count(*) FILTER (WHERE have < need AND whq > 0) inwh
+       count(*) FILTER (WHERE have < need AND whq > 0) inwh,
+       count(*) FILTER (WHERE have <= 0 AND whq > 0) missw, count(*) FILTER (WHERE have > 0) onm
 FROM j GROUP BY 1, 2""", *params)
     cov = {r[0] for r in await con.fetch("SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = $1", sn["b"])}
     vit = await _vitrina(con, cats, sn["b"])
     prev_d = await con.fetchval("SELECT max(snap_date) FROM matrix_daily WHERE snap_date < $1", sn["b"])
-    prev = {}
+    prev, pc = {}, {}
     if prev_d:
-        for r in await con.fetch("""SELECT branch_id, sum(pos) pos, sum(ok) ok FROM matrix_daily
-                                    WHERE snap_date = $1 AND category_id = ANY($2::int[]) GROUP BY 1""", prev_d, cats):
-            prev[r["branch_id"]] = (r["pos"], r["ok"])
+        for r in await con.fetch("""SELECT branch_id, category_id, pos, ok FROM matrix_daily
+                                    WHERE snap_date = $1 AND category_id = ANY($2::int[])""", prev_d, cats):
+            pc[(r["branch_id"], r["category_id"])] = (r["pos"], r["ok"])
+            o = prev.get(r["branch_id"], (0, 0))
+            prev[r["branch_id"]] = (o[0] + r["pos"], o[1] + r["ok"])
     meta = {r["id"]: r for r in await con.fetch(
         """SELECT b.id, b.name, b.region_id, rg.name region, cl.name cluster, w.name wh
            FROM branches b JOIN regions rg ON rg.id = b.region_id LEFT JOIN clusters cl ON cl.id = b.cluster_id
@@ -185,6 +188,15 @@ FROM j GROUP BY 1, 2""", *params)
     for K in KS.values():
         K["pct"] = K["ok"] / K["pos"] * 100 if K["pos"] else None
         K["d"] = (K["pct"] - K["pok"] / K["ppos"] * 100) if K["ppos"] and K["pct"] is not None else None
+    # filial × kategoriya (Mini App kategoriya kesimi va vitrina tahlili uchun):
+    # [filial, kategoriya, pos, ok, yo'q, kam, omborda(yo'q+kam), omborda(yo'q), turgan matritsa SKU,
+    #  vitrina sig'imi, turgan model, oldingi pos, oldingi ok]
+    out["bc"] = [[r["branch_id"], r["category_id"], r["pos"], r["ok"], r["miss"], r["low"], r["inwh"], r["missw"],
+                  r["onm"], *(vit.get((r["branch_id"], r["category_id"])) or (None, 0)),
+                  *(pc.get((r["branch_id"], r["category_id"])) or (None, None))]
+                 for r in rows if r["branch_id"] in cov and r["branch_id"] in meta]
+    out["cats"] = [{"id": r["id"], "name": r["name"]} for r in await con.fetch(
+        "SELECT id, name FROM categories WHERE id = ANY($1::int[]) ORDER BY name", list({r["category_id"] for r in rows}))]
     out.update(kpi=KS["f"], kpi_by=KS, branches=branches, prev=prev_d.isoformat() if prev_d else None,
                regions={g: [{"id": k, "name": v} for k, v in sorted(r.items(), key=lambda kv: kv[1])]
                         for g, r in regions.items()})

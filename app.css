@@ -525,3 +525,18 @@ button.whh b{color:var(--ink);font-size:14px}
 .mxit .tg{font-size:11.5px;font-weight:700;padding:3px 8px;border-radius:999px;white-space:nowrap}
 .mxit .tg.ok{background:var(--good-soft);color:var(--good)}.mxit .tg.no{background:var(--bad-soft);color:var(--bad)}
 .tabbar button{min-width:0}
+:root{--mxx:#A78BFA;--mxx2:#6D28D9}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--mxx:#7C5BD6;--mxx2:#C4B5FD}}
+:root[data-theme="dark"]{--mxx:#7C5BD6;--mxx2:#C4B5FD}
+.mxbar.two{display:flex}.mxbar.two i{border-radius:0}
+.mxcat>.mxbar.two{margin:0 14px;height:8px}
+.mxrow.cr .n{font-size:14px}
+.mxrow.cr.on{background:var(--accent-soft)}
+.mxleg{display:flex;gap:14px;flex-wrap:wrap;padding:9px 14px;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted)}
+.mxleg i{display:inline-block;width:10px;height:10px;border-radius:3px;vertical-align:-1px;margin-right:4px}
+.mxleg i.e{background:var(--card-2);border:1px solid var(--line)}
+.mxover{border:0;text-align:left;width:100%;font:inherit;font-size:12.5px;cursor:pointer}
+.mxover.on{outline:2px solid var(--warn)}
+.mxfill{border-top:1px solid var(--line);padding:9px 14px;font-size:12.5px;line-height:1.45;background:var(--card-2)}
+#mxView{background:var(--card)}
+#mxView{display:flex;padding:4px;border-radius:14px}#mxView button{flex:1}
