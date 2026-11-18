@@ -621,3 +621,6 @@ button.mxbr{width:100%;border:0;border-top:1px solid var(--line);background:none
 .mxbr.sku{font-size:12.5px;padding:8px 12px}
 .mxbr.sku b{font-weight:600}
 .mxtot .mxonly{margin-top:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.22);font-size:13px}
+#mxView button{padding:7px 4px;font-size:12.5px}
+.kpis.mxk .kpi.mxhero .v{font-size:19px}
+#mxView button{padding:7px 2px;font-size:12px}

@@ -1977,14 +1977,14 @@ document.querySelectorAll('#qSeg button').forEach(b => b.onclick = () => {
 // ============================================================ MATRITSA
 // Google Sheet «Матрица КБТ» (har kuni 06:00) × filial qoldig'i: bajarilish, yo'q/kam, vitrina, omborda bor.
 const MX_DAYS = (() => { try { const v = +localStorage.getItem('mx_days'); return [7, 10, 14, 21, 30].includes(v) ? v : 14; } catch (e) { return 14; } })();
-const MX = {data: null, od: null, days: MX_DAYS, mode: 'full', blk: new Set(), grp: 'reg', ropen: new Set(), zc: new Set(), zb: new Set(), wOpen: new Set(), g: 'f', view: 'mx', cat: null, over: false, G: {}, reg: null, br: null, bd: null, seq: 0, lim: 40, open: {}, exLim: 15, y: 0};
+const MX = {data: null, od: null, ou: null, tc: new Set(), tb: new Set(), tw: new Set(), tr: new Set(), days: MX_DAYS, mode: 'full', blk: new Set(), grp: 'reg', ropen: new Set(), zc: new Set(), zb: new Set(), wOpen: new Set(), g: 'f', view: 'mx', cat: null, over: false, G: {}, reg: null, br: null, bd: null, seq: 0, lim: 40, open: {}, exLim: 15, y: 0};
 const mxCol = p => (p == null ? 'var(--so)' : p < 70 ? 'var(--bad)' : p < 85 ? 'var(--warn)' : 'var(--good)');
 const mxPp = d => (d == null || !isFinite(d) ? '' : `<span class="pp ${sgn(d)}">${sgn(d) === 'up' ? '▲' : sgn(d) === 'dn' ? '▼' : '•'}${nf1.format(Math.abs(d))}</span>`);
 const mxDt = s => { if (!s) return ''; const d = new Date(s); return d.toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent'}).replace(',', ''); };
 const mxBar = (p, c) => `<span class="mxbar"><i style="width:${Math.max(0, Math.min(100, p || 0))}%;background:${c || mxCol(p)}"></i></span>`;
 function loadMatrixTab() {
   STALE.Matritsa = false;
-  MX.data = null; MX.bd = null; MX.od = null;
+  MX.data = null; MX.bd = null; MX.od = null; MX.ou = null;
   renderMx();
 }
 function renderMx() { return MX.br ? (MX.view === 'vit' && MX.data && MX.data.bc ? renderMxVitBranch($('mxBody')) : renderMxBranch($('mxBody'))) : renderMxList($('mxBody')); }
@@ -2033,7 +2033,7 @@ function mxRows(d, withCat) {
   return d.bc.filter(r => G[r[0]] && G[r[0]].g === MX.g && (!MX.reg || G[r[0]].region_id === MX.reg) && (!withCat || !MX.cat || r[1] === MX.cat));
 }
 const mxFcount = () => Object.values(st.f).reduce((n, v) => n + (v && v.size ? 1 : 0), 0);
-const mxViewSeg = () => { mxFilBtn(); return `<div class="seg" id="mxView" role="group" aria-label="Ko'rinish">${[['mx', 'Matritsa'], ['vit', 'Vitrina'], ['zak', 'Zakaz']]
+const mxViewSeg = () => { mxFilBtn(); return `<div class="seg" id="mxView" role="group" aria-label="Ko'rinish">${[['mx', 'Matritsa'], ['vit', 'Vitrina'], ['zak', 'Zakaz'], ['tash', 'Nematritsa']]
   .map(([k, l]) => `<button data-v="${k}" aria-pressed="${MX.view === k}">${l}</button>`).join('')}</div>`; };
 function mxFilBtn() {   // Matritsa tabida «Filtr» — sarlavha yonida (davr va Summa/Dona bu yerda kerak emas)
   const b = $('topFil'); if (!b) return;
@@ -2050,6 +2050,79 @@ function usd(v) {
   if (a >= 1e6) return nf2.format(v / 1e6) + ' mln $';
   if (a >= 1e3) return nf0.format(v / 1e3) + ' ming $';
   return nf0.format(v) + ' $';
+}
+async function renderMxOutside(host) {
+  const seq = MX.seq;
+  if (!MX.ou) {
+    host.innerHTML = `${mxViewSeg()}<div class="empty">Yuklanmoqda…</div>`; mxWireView(host);
+    try { const o = await api('matrix/outside', filters()); if (seq !== MX.seq) return; MX.ou = o; }
+    catch (e) { if (seq === MX.seq) { host.innerHTML = `${mxViewSeg()}<div class="errbox">${esc(e.message)}</div>`; mxWireView(host); } return; }
+  }
+  const o = MX.ou, K = o.kpi || {};
+  const qd = (q, u) => `${nf0.format(Math.round(q || 0))} dona${u ? ` · ${usd(u)}` : ''}`;
+  const whTxt = wh => Object.entries(wh || {}).filter(e => e[1] > 0).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${esc(k)} ${nf0.format(Math.round(v))}`).join(' · ');
+  const two = (x) => `<span class="qq"><span class="num">${x.bq ? `🏪 <b>${nf0.format(Math.round(x.bq))}</b>` : ''}${x.bq && x.wq ? ' · ' : ''}${x.wq ? `🏬 <b>${nf0.format(Math.round(x.wq))}</b>` : ''}</span>
+      <span class="hint num">≈ ${usd((x.busd || 0) + (x.wusd || 0))}</span></span>`;
+  const catT = c => {
+    const op = MX.tc.has(c.name);
+    return `<button class="mxwh mxzc" data-tc="${esc(c.name)}"><span><b>${op ? '▾' : '▸'} ${esc(c.name)}</b>
+        <span class="hint">${c.brands.reduce((n, b) => n + (b.nsku || b.skus.length), 0)} SKU · ${c.brands.length} brend${c.bidle + c.widle ? ` · harakatsiz ${nf0.format(Math.round(c.bidle + c.widle))}` : ''}</span></span>${two(c)}</button>
+      ${op ? `<div class="mxsub">${c.brands.map(b => {
+          const bk = c.name + '|' + b.name, bo = MX.tb.has(bk);
+          return `<button class="mxbr" data-tb="${esc(bk)}"><span><b>${bo ? '▾' : '▸'} ${esc(b.name)}</b><span class="hint">${b.nsku || b.skus.length} SKU${b.bidle + b.widle ? ` · harakatsiz ${nf0.format(Math.round(b.bidle + b.widle))}` : ''}</span></span>${two(b)}</button>
+            ${bo ? `<div class="mxsku">${b.skus.map(k => `<div class="mxbr sku"><span><b>${esc(k.name)}</b><span class="hint">${k.bq ? `${k.nbr} filialda ${nf0.format(Math.round(k.bq))}` : ''}${k.bq && k.wq ? ' · ' : ''}${k.wq ? `omborda: ${whTxt(k.wh)}` : ''} · 30 kun savdo ${nf0.format(Math.round(k.s30))}${k.s30 <= 0 ? ' · <b class="dn">harakatsiz</b>' : ''}</span></span>${two(k)}</div>`).join('')}
+              ${(b.nsku || 0) > b.skus.length ? `<span class="hint mxmore">Yana ${b.nsku - b.skus.length} ta SKU — Excel'da</span>` : ''}</div>` : ''}`;
+        }).join('')}</div>` : ''}`;
+  };
+  const whT = w => {
+    const op = MX.tw.has(w.id);
+    return `<div class="mxwhb"><button class="mxwh" data-tw="${w.id}"><span><b>${op ? '▾' : '▸'} ${esc(w.name)}</b><span class="hint">${w.nsku || w.items.length} SKU · harakatsiz ${nf0.format(Math.round(w.idle))}</span></span>
+        <span class="qq"><span class="q num">${nf0.format(Math.round(w.q))} dona</span><span class="hint num">≈ ${usd(w.usd)}</span></span></button>
+      ${op ? `${w.items.map(i => `<div class="mxbr sku"><span><b>${esc(i.name)}</b><span class="hint">${esc(i.cat)} · 30 kun savdo ${nf0.format(Math.round(i.s30))}${i.s30 <= 0 ? ' · <b class="dn">harakatsiz</b>' : ''}</span></span>
+          <span class="qq"><span class="num"><b>${nf0.format(Math.round(i.q))}</b> dona</span><span class="hint num">${nf0.format(Math.round(i.usd))} $</span></span></div>`).join('')}
+        ${(w.nsku || 0) > w.items.length ? `<span class="hint mxmore">Yana ${w.nsku - w.items.length} ta SKU — Excel'da</span>` : ''}` : ''}</div>`;
+  };
+  const R = {};
+  (o.branches || []).forEach(b => { (R[b.region_id] = R[b.region_id] || {id: b.region_id, name: b.region, q: 0, usd: 0, idle: 0, brs: []}); const g = R[b.region_id]; g.q += b.q; g.usd += b.usd; g.idle += b.idle; g.brs.push(b); });
+  const regs = Object.values(R).sort((a, b) => b.usd - a.usd);
+  const regT = g => {
+    const op = MX.tr.has(g.id);
+    return `<button class="mxwh mxzc" data-tr="${g.id}"><span><b>${op ? '▾' : '▸'} ${esc(g.name)}</b><span class="hint">${g.brs.length} filial · harakatsiz ${nf0.format(Math.round(g.idle))}</span></span>
+        <span class="qq"><span class="q num">${nf0.format(Math.round(g.q))} dona</span><span class="hint num">≈ ${usd(g.usd)}</span></span></button>
+      ${op ? `<div class="mxsub">${g.brs.map(b => `<button class="mxbr" data-b="${b.id}"><span><b>${esc(b.name)} ›</b><span class="hint">${b.skus} SKU · harakatsiz ${nf0.format(Math.round(b.idle))}</span></span>
+          <span class="qq"><span class="num"><b>${nf0.format(Math.round(b.q))}</b> dona</span><span class="hint num">${usd(b.usd)}</span></span></button>`).join('')}</div>` : ''}`;
+  };
+  const cats = o.cats || [], whs = o.whs || [];
+  host.innerHTML = `${mxViewSeg()}
+    <div class="hint">qoldiq: filial ${dm(o.snap.b)} · ombor ${dm(o.snap.w)} · savdo ${dm(o.snap.s)} gacha · faqat matritsa kategoriyalari</div>
+    <div class="kpis mxk">
+      <div class="kpi mxhero"><span class="l">🏪 Filiallarda</span><span class="v num">${nf0.format(Math.round(K.bq || 0))} dona</span>
+        <span class="p num">≈ ${usd(K.busd)} (tannarx)</span></div>
+      <div class="kpi"><span class="l">shundan harakatsiz</span><span class="v num" style="color:var(--bad)">${nf0.format(Math.round(K.bidle || 0))}</span>
+        <span class="p num">≈ ${usd(K.bidle_usd)} · 30 kunda sotilmagan</span></div>
+      <div class="kpi mxhero"><span class="l">🏬 Omborlarda</span><span class="v num">${nf0.format(Math.round(K.wq || 0))} dona</span>
+        <span class="p num">≈ ${usd(K.wusd)} (A sektor)</span></div>
+      <div class="kpi"><span class="l">shundan harakatsiz</span><span class="v num" style="color:var(--bad)">${nf0.format(Math.round(K.widle || 0))}</span>
+        <span class="p num">≈ ${usd(K.widle_usd)} · filiallarda sotilmagan</span></div>
+    </div>
+    <div class="hint">Matritsadan tashqari: filialda — shu filial matritsasida yo'q SKU; omborda — shu ombor filiallarining birortasi matritsasida yo'q SKU. 🏪 — filiallarda, 🏬 — omborlarda.</div>
+    ${cats.length ? mxBlock('tc', 'Kategoriyalar', cats.length, `eng ko'p: ${esc(cats[0].name)} <b>${usd(cats[0].busd + cats[0].wusd)}</b>`, cats.map(catT).join('')) : ''}
+    ${whs.length ? mxBlock('tw', 'Omborlar', whs.length, `eng ko'p: ${esc(whs[0].name)} <b>${usd(whs[0].usd)}</b>`, whs.map(whT).join('')) : ''}
+    ${regs.length ? mxBlock('tf', 'Filiallar', (o.branches || []).length, `hudud bo'yicha · eng ko'p: ${esc(regs[0].name)}`, regs.map(regT).join('')) : ''}
+    ${!cats.length ? `<div class="card"><div class="empty">Matritsadan tashqari qoldiq yo'q 👍</div></div>` : `<button class="btn mxzx" id="mxTx">⬇ Excel — botga yuborish</button>
+      <span class="hint" style="text-align:center">kategoriya × brend + filiallar (SKU) + omborlar (SKU), harakatsizlar belgilangan</span>`}`;
+  mxWireView(host);
+  const tg2 = (sel, set, cast) => host.querySelectorAll(`[${sel}]`).forEach(b => b.onclick = () => { const k = cast(b.getAttribute(sel)); set.has(k) ? set.delete(k) : set.add(k); renderMxOutside(host); });
+  tg2('data-tc', MX.tc, String); tg2('data-tb', MX.tb, String); tg2('data-tw', MX.tw, Number); tg2('data-tr', MX.tr, Number);
+  host.querySelectorAll('[data-blk]').forEach(b => b.onclick = () => { const k = b.dataset.blk; MX.blk.has(k) ? MX.blk.delete(k) : MX.blk.add(k); renderMxOutside(host); });
+  host.querySelectorAll('[data-b]').forEach(b => b.onclick = () => { MX.y = window.scrollY; MX.br = +b.dataset.b; MX.bd = null; MX.open = {}; MX.exLim = 15; renderMx(); syncBack(); window.scrollTo(0, 0); });
+  const tx = $('mxTx');
+  if (tx) tx.onclick = async () => {
+    tx.disabled = true; tx.textContent = '⏳ Tayyorlanmoqda…';
+    try { await api('matrix/outside_export', filters()); tx.textContent = '✅ Botga yuborildi'; }
+    catch (e) { tx.textContent = '❌ ' + e.message; }
+    setTimeout(() => { tx.disabled = false; tx.textContent = '⬇ Excel — botga yuborish'; }, 4000);
+  };
 }
 async function renderMxOrder(host, d) {
   const seq = MX.seq;
@@ -2138,6 +2211,7 @@ async function renderMxList(host) {
   }
   if (!d.snap.b) { host.innerHTML = noStock(); return; }
   if (MX.view === 'zak') return renderMxOrder(host, d);
+  if (MX.view === 'tash') return renderMxOutside(host);
   MX.G = {}; d.branches.forEach(b => { MX.G[b.id] = b; b.g = b.g || 'f'; });
   const KB = d.kpi_by || {f: d.kpi, m: null};
   const two = KB.f && KB.m && KB.f.branches && KB.m.branches;

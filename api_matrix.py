@@ -656,3 +656,237 @@ async def bot_digest(con) -> dict:
     has = ov.get("snap", {}).get("b")
     od = await order_data(con, await _flt(con, f, u)) if has else {"whs": [], "total": None}
     return {"ov": ov, "order": od}
+
+
+# ---------------------------------------------------------------------------
+# Matritsadan tashqari qoldiq (filial va ombor) — faqat matritsa kategoriyalari
+#   filial: filial qoldig'idagi SKU shu filial matritsasida yo'q;
+#   ombor:  ombor qoldig'idagi SKU shu omborga bog'langan birorta filial matritsasida yo'q.
+#   Qiymat $: filial — tannarx (so'm) ÷ kurs; ombor — A sektor narxi (10 000 dan katta bo'lsa so'm deb ÷ kurs).
+#   Harakatsiz — 30 kunda sotilmagan (filial: shu filialda; ombor: shu ombor filiallarida).
+async def outside_data(con, q) -> dict:
+    sn = await _snaps(con)
+    out = {"snap": {k: (v.isoformat() if v else None) for k, v in sn.items()}}
+    if not sn["b"] and not sn["w"]:
+        return out
+    s_to = sn["s"] or sn["b"] or sn["w"]
+    rate_b = float(await con.fetchval("SELECT rate FROM fx_periods WHERE $1 >= valid_from AND $1 < valid_to", sn["b"]) or 0) if sn["b"] else 0.0
+    rate_w = float(await con.fetchval("SELECT rate FROM fx_periods WHERE $1 >= valid_from AND $1 < valid_to", sn["w"]) or 0) if sn["w"] else 0.0
+    w_ = q.ctes()
+    D, S1, S2 = q.p(sn["b"]), q.p(s_to - timedelta(days=29)), q.p(s_to)
+    base = f"""WITH {w_},
+mc AS (SELECT DISTINCT category_id FROM matrix_rows WHERE category_id IS NOT NULL),
+pdm AS (SELECT pd.* FROM pd JOIN mc USING (category_id)),
+mx AS (SELECT DISTINCT branch_id, product_id FROM matrix_rows WHERE branch_id IS NOT NULL AND product_id IS NOT NULL)"""
+    brows = await con.fetch(base + f""",
+sl AS (SELECT branch_id, product_id, sum(qty) q FROM sales_fact WHERE sale_date BETWEEN {S1} AND {S2} GROUP BY 1, 2)
+SELECT s.branch_id, s.product_id, s.qty::float8 qty, COALESCE(s.cost_uzs, 0)::float8 cost, COALESCE(sl.q, 0)::float8 s30,
+       p.pname, p.brand, p.cname
+FROM stock_branch s JOIN bb USING (branch_id) JOIN pdm p USING (product_id)
+LEFT JOIN mx ON mx.branch_id = s.branch_id AND mx.product_id = s.product_id
+LEFT JOIN sl ON sl.branch_id = s.branch_id AND sl.product_id = s.product_id
+WHERE s.snap_date = {D} AND s.qty > 0 AND mx.product_id IS NULL""", *q.params) if sn["b"] else []
+    q2 = q.__class__(q.f, q.cats, q.attrs)
+    w2 = q2.ctes()
+    W2, T1, T2 = q2.p(sn["w"]), q2.p(s_to - timedelta(days=29)), q2.p(s_to)
+    wrows = await con.fetch(f"""WITH {w2},
+mc AS (SELECT DISTINCT category_id FROM matrix_rows WHERE category_id IS NOT NULL),
+pdm AS (SELECT pd.* FROM pd JOIN mc USING (category_id)),
+whs AS (SELECT DISTINCT warehouse_id FROM bb WHERE warehouse_id IS NOT NULL),
+wmx AS (SELECT DISTINCT b.warehouse_id, m.product_id FROM matrix_rows m JOIN branches b ON b.id = m.branch_id
+        WHERE m.product_id IS NOT NULL AND b.warehouse_id IS NOT NULL),
+sl AS (SELECT b.warehouse_id, e.product_id, sum(e.qty) q FROM sales_fact e JOIN branches b ON b.id = e.branch_id
+       WHERE e.sale_date BETWEEN {T1} AND {T2} AND b.warehouse_id IS NOT NULL GROUP BY 1, 2)
+SELECT s.warehouse_id, s.product_id, s.qty::float8 qty, s.value_usd::float8 v, COALESCE(sl.q, 0)::float8 s30,
+       p.pname, p.brand, p.cname
+FROM stock_wh s JOIN whs USING (warehouse_id) JOIN pdm p USING (product_id)
+LEFT JOIN wmx ON wmx.warehouse_id = s.warehouse_id AND wmx.product_id = s.product_id
+LEFT JOIN sl ON sl.warehouse_id = s.warehouse_id AND sl.product_id = s.product_id
+WHERE s.snap_date = {W2} AND s.qty > 0 AND wmx.product_id IS NULL""", *q2.params) if sn["w"] else []
+
+    meta = {r["id"]: r for r in await con.fetch(
+        """SELECT b.id, b.name, b.region_id, rg.name region FROM branches b JOIN regions rg ON rg.id = b.region_id""")}
+    wn = {r["id"]: r["name"].replace(" омбори", "") for r in await con.fetch("SELECT id, name FROM warehouses")}
+
+    def wusd(r):
+        if r["v"] is None or not r["qty"]:
+            return 0.0
+        u = r["v"] / r["qty"]
+        if u > USD_MAX_UNIT:
+            u = u / rate_w if rate_w else 0.0
+        return u * r["qty"]
+
+    Z = lambda: {"bq": 0.0, "busd": 0.0, "bidle": 0.0, "bidle_usd": 0.0, "wq": 0.0, "wusd": 0.0, "widle": 0.0,  # noqa: E731
+                 "widle_usd": 0.0}
+    K = Z()
+    C: dict[str, dict] = {}
+    BR: dict[int, dict] = {}
+    WH: dict[int, dict] = {}
+
+    def node(cat, brand, pid, name):
+        c = C.setdefault(cat, {"name": cat, **Z(), "brands": {}})
+        b = c["brands"].setdefault(brand or "—", {"name": brand or "—", **Z(), "skus": {}})
+        k = b["skus"].setdefault(pid, {"id": pid, "name": name, **Z(), "s30": 0.0, "nbr": 0, "wh": {}})
+        return c, b, k
+
+    for r in brows:
+        usd_ = r["cost"] / rate_b if rate_b else 0.0
+        idle = r["s30"] <= 0
+        c, b, k = node(r["cname"], r["brand"], r["product_id"], r["pname"])
+        k["nbr"] += 1
+        k["s30"] += r["s30"]
+        for x in (K, c, b, k):
+            x["bq"] += r["qty"]
+            x["busd"] += usd_
+            if idle:
+                x["bidle"] += r["qty"]
+                x["bidle_usd"] += usd_
+        m = meta.get(r["branch_id"])
+        if m:
+            x = BR.setdefault(r["branch_id"], {"id": r["branch_id"], "name": m["name"], "region_id": m["region_id"],
+                                               "region": m["region"], "g": "m" if is_mini(m["name"]) else "f",
+                                               "q": 0.0, "usd": 0.0, "idle": 0.0, "skus": 0})
+            x["q"] += r["qty"]
+            x["usd"] += usd_
+            x["skus"] += 1
+            if idle:
+                x["idle"] += r["qty"]
+    for r in wrows:
+        usd_ = wusd(r)
+        idle = r["s30"] <= 0
+        c, b, k = node(r["cname"], r["brand"], r["product_id"], r["pname"])
+        nm = wn.get(r["warehouse_id"], "?")
+        k["wh"][nm] = k["wh"].get(nm, 0.0) + r["qty"]
+        for x in (K, c, b, k):
+            x["wq"] += r["qty"]
+            x["wusd"] += usd_
+            if idle:
+                x["widle"] += r["qty"]
+                x["widle_usd"] += usd_
+        x = WH.setdefault(r["warehouse_id"], {"id": r["warehouse_id"], "name": nm, "q": 0.0, "usd": 0.0, "idle": 0.0,
+                                              "idle_usd": 0.0, "items": []})
+        x["q"] += r["qty"]
+        x["usd"] += usd_
+        if idle:
+            x["idle"] += r["qty"]
+            x["idle_usd"] += usd_
+        x["items"].append({"id": r["product_id"], "name": r["pname"], "cat": r["cname"], "q": r["qty"], "usd": usd_,
+                           "s30": r["s30"]})
+    tot = lambda x: x["busd"] + x["wusd"]  # noqa: E731
+    for c in C.values():
+        for b in c["brands"].values():
+            b["skus"] = sorted(b["skus"].values(), key=lambda k: -tot(k))
+        c["brands"] = sorted(c["brands"].values(), key=lambda b: -tot(b))
+    for w in WH.values():
+        w["items"].sort(key=lambda i: -i["usd"])
+    out.update(kpi=K, cats=sorted(C.values(), key=lambda c: -tot(c)),
+               whs=sorted(WH.values(), key=lambda w: -w["usd"]),
+               branches=sorted(BR.values(), key=lambda b: -b["usd"]), rates={"b": rate_b, "w": rate_w})
+    out["_brows"], out["_wrows"] = brows, wrows
+    return out
+
+
+def outside_xlsx(d: dict, con_meta: dict) -> bytes:
+    import io
+    from openpyxl import Workbook
+
+    from export_missing import BOLD, HEAD_FILL, _autowidth
+
+    wb = Workbook()
+
+    def sheet(title, head, rows, first=False):
+        ws = wb.active if first else wb.create_sheet(title[:31])
+        ws.title = title[:31]
+        ws.append(head)
+        for i in range(1, len(head) + 1):
+            c = ws.cell(row=1, column=i)
+            c.font, c.fill = BOLD, HEAD_FILL
+        for r in rows:
+            ws.append(list(r))
+        ws.freeze_panes = "A2"
+        if rows:
+            ws.auto_filter.ref = ws.dimensions
+        _autowidth(ws)
+
+    rb, rw = d["rates"]["b"], d["rates"]["w"]
+    cb = []
+    for c in d.get("cats", []):
+        for b in c["brands"]:
+            cb.append([c["name"], b["name"], len(b["skus"]), round(b["bq"]), round(b["busd"], 2), round(b["bidle"]),
+                       round(b["wq"]), round(b["wusd"], 2), round(b["widle"])])
+    sheet("Kategoriya × brend", ["Kategoriya", "Brend", "SKU", "Filiallarda, dona", "Filiallarda, $",
+                                 "shundan harakatsiz, dona", "Omborlarda, dona", "Omborlarda, $",
+                                 "shundan harakatsiz, dona"], cb, first=True)
+    br = con_meta["branches"]
+    sheet("Filiallar (SKU)", ["Hudud", "Filial", "Kategoriya", "Brend", "Tovar ID", "Tovar", "Qoldiq, dona", "Tannarx, $",
+                              "30 kun savdo", "Harakatsiz"],
+          [[br.get(r["branch_id"], ("", ""))[0], br.get(r["branch_id"], ("", ""))[1], r["cname"], r["brand"], r["product_id"],
+            r["pname"], r["qty"], round(r["cost"] / rb, 2) if rb else None, r["s30"], "ha" if r["s30"] <= 0 else ""]
+           for r in sorted(d["_brows"], key=lambda r: -r["cost"])])
+    wn = con_meta["whs"]
+    rows = []
+    for r in sorted(d["_wrows"], key=lambda r: -(r["v"] or 0)):
+        u = (r["v"] or 0) / r["qty"] if r["qty"] else 0
+        if u > USD_MAX_UNIT:
+            u = u / rw if rw else 0
+        rows.append([wn.get(r["warehouse_id"], "?"), r["cname"], r["brand"], r["product_id"], r["pname"], r["qty"],
+                     round(u * r["qty"], 2), r["s30"], "ha" if r["s30"] <= 0 else ""])
+    sheet("Omborlar (SKU)", ["Ombor", "Kategoriya", "Brend", "Tovar ID", "Tovar", "Qoldiq, dona", "Qiymati, $",
+                             "30 kun savdo (ombor filiallari)", "Harakatsiz"], rows)
+    ws = wb.create_sheet("Izoh")
+    for line in ["Matritsadan tashqari qoldiq — faqat matritsadagi kategoriyalar bo'yicha.",
+                 "Filial: SKU shu filial matritsasida yo'q. Qiymati — tannarx (kirim narxi) ÷ bot kursi.",
+                 "Ombor: SKU shu omborga bog'langan birorta filial matritsasida yo'q. Qiymati — A sektor narxi (so'mdagisi ÷ kurs).",
+                 "Harakatsiz — oxirgi 30 kunda sotilmagan (filial — shu filialda; ombor — shu ombor filiallarida).",
+                 f"Filial qoldig'i: {d['snap'].get('b')} · ombor qoldig'i: {d['snap'].get('w')} · savdo {d['snap'].get('s')} gacha"]:
+        ws.append([line])
+    ws.column_dimensions["A"].width = 110
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+@router.post("/outside")
+async def outside(req: MxReq, request: Request, user: User = Depends(current_user)):
+    async def run():
+        async with request.app.state.pool.acquire() as con:
+            d = await outside_data(con, await _flt(con, req, user))
+        d.pop("_brows", None)
+        d.pop("_wrows", None)
+        for c in d.get("cats", []):                   # Mini App'ga — har brenddan eng qimmat 50 SKU
+            for b in c["brands"]:
+                b["nsku"] = len(b["skus"])
+                b["skus"] = b["skus"][:50]
+        for w in d.get("whs", []):
+            w["nsku"] = len(w["items"])
+            w["items"] = w["items"][:50]
+        return d
+    payload = req.model_dump(mode="json", exclude={"date_from", "date_to", "compare", "share_by", "branch_id", "days", "mode"})
+    return await _M().cached(request, user, "mx_outside", payload, run)
+
+
+@router.post("/outside_export")
+async def outside_export(req: MxReq, request: Request, user: User = Depends(current_user)):
+    import config
+    from datetime import datetime, timezone
+    from aiogram import Bot
+    from aiogram.types import BufferedInputFile
+    async with request.app.state.pool.acquire() as con:
+        d = await outside_data(con, await _flt(con, req, user))
+        meta = {"branches": {r["id"]: (r["region"], r["name"]) for r in await con.fetch(
+                    "SELECT b.id, b.name, rg.name region FROM branches b JOIN regions rg ON rg.id = b.region_id")},
+                "whs": {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM warehouses")}}
+    if not d.get("cats"):
+        raise HTTPException(404, "Matritsadan tashqari qoldiq topilmadi")
+    if not config.BOT_TOKEN:
+        raise HTTPException(503, "Bot sozlanmagan")
+    fname = f"nematritsa_{datetime.now(timezone(timedelta(hours=5))):%d.%m.%Y}.xlsx"
+    bot = Bot(config.BOT_TOKEN)
+    try:
+        await bot.send_document(user.id, BufferedInputFile(outside_xlsx(d, meta), filename=fname),
+                                caption="📦 Nematritsa qoldiq: kategoriya × brend, filiallar va omborlar (SKU)")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(503, f"Botga yuborib bo'lmadi — botga /start bosilganini tekshiring ({e})")
+    finally:
+        await bot.session.close()
+    return {"ok": True}
