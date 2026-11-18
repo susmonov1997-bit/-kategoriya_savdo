@@ -457,6 +457,26 @@ JOIN products p ON p.product_id = mp.product_id JOIN categories c ON c.id = p.ca
     for w in W.values():
         w["items"].sort(key=lambda i: (-i["z"], i["name"]))
     out["whs"] = sorted(W.values(), key=lambda w: -w["z"])
+    # kategoriya → brend (har ombor bo'yicha dona ham)
+    C: dict[str, dict] = {}
+    for w in out["whs"]:
+        for i in w["items"]:
+            c = C.setdefault(i["cat"], {"name": i["cat"], "z": 0.0, "usd": 0.0, "pos": 0, "wh": {}, "brands": {}})
+            b = c["brands"].setdefault(i["brand"] or "—", {"name": i["brand"] or "—", "z": 0.0, "usd": 0.0, "pos": 0, "wh": {},
+                                                           "skus": {}})
+            k = b["skus"].setdefault(i["id"], {"id": i["id"], "name": i["name"], "z": 0.0, "usd": 0.0, "m": 0.0, "wh": {}})
+            k["m"] += i["m"]
+            for x in (c, b, k):
+                x["z"] += i["z"]
+                x["usd"] += i["usd"] or 0.0
+                x["wh"][w["short"]] = x["wh"].get(w["short"], 0.0) + i["z"]
+            c["pos"] += 1
+            b["pos"] += 1
+    for c in C.values():
+        for b in c["brands"].values():
+            b["skus"] = sorted(b["skus"].values(), key=lambda k: -k["z"])
+        c["brands"] = sorted(c["brands"].values(), key=lambda b: -b["z"])
+    out["cats"] = sorted(C.values(), key=lambda c: -c["z"])
     out["total"] = {k: sum(w[k] for w in W.values()) for k in ("m", "s", "h", "z", "pos", "usd", "nop")}
     return out
 
@@ -539,6 +559,12 @@ def order_xlsx(d: dict, ship: list) -> bytes:
                 round(i["h"]), round(i["z"]),
                 round(i["p"], 2) if i["p"] is not None else None, SRC.get(i["src"], "yo'q"),
                 round(i["usd"], 2) if i["usd"] is not None else None] for i in w["items"]])
+    whn = [w["short"] for w in d["whs"]]
+    cb = []
+    for c in d.get("cats", []):
+        for b in c["brands"]:
+            cb.append([c["name"], b["name"], b["pos"], round(b["z"]), round(b["usd"], 2)] + [round(b["wh"].get(x, 0)) for x in whn])
+    sheet("Kategoriya × brend", ["Kategoriya", "Brend", "Pozitsiya", "Zakaz, dona", "Zakaz, $"] + [f"{x}, dona" for x in whn], cb)
     sheet("Ombordan yuborish", ["Ombor", "Hudud", "Filial", "Kategoriya", "Brend", "Tovar ID", "Tovar", "Turishi",
                                 "Filialda bor", "Yuborish, dona"], ship)
     ws = wb.create_sheet("Izoh")

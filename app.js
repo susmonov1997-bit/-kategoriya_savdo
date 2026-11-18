@@ -1977,7 +1977,7 @@ document.querySelectorAll('#qSeg button').forEach(b => b.onclick = () => {
 // ============================================================ MATRITSA
 // Google Sheet «Матрица КБТ» (har kuni 06:00) × filial qoldig'i: bajarilish, yo'q/kam, vitrina, omborda bor.
 const MX_DAYS = (() => { try { const v = +localStorage.getItem('mx_days'); return [7, 10, 14, 21, 30].includes(v) ? v : 14; } catch (e) { return 14; } })();
-const MX = {data: null, od: null, days: MX_DAYS, blk: new Set(), grp: 'reg', ropen: new Set(), wOpen: new Set(), g: 'f', view: 'mx', cat: null, over: false, G: {}, reg: null, br: null, bd: null, seq: 0, lim: 40, open: {}, exLim: 15, y: 0};
+const MX = {data: null, od: null, days: MX_DAYS, blk: new Set(), grp: 'reg', ropen: new Set(), zc: new Set(), zb: new Set(), wOpen: new Set(), g: 'f', view: 'mx', cat: null, over: false, G: {}, reg: null, br: null, bd: null, seq: 0, lim: 40, open: {}, exLim: 15, y: 0};
 const mxCol = p => (p == null ? 'var(--so)' : p < 70 ? 'var(--bad)' : p < 85 ? 'var(--warn)' : 'var(--good)');
 const mxPp = d => (d == null || !isFinite(d) ? '' : `<span class="pp ${sgn(d)}">${sgn(d) === 'up' ? '▲' : sgn(d) === 'dn' ? '▼' : '•'}${nf1.format(Math.abs(d))}</span>`);
 const mxDt = s => { if (!s) return ''; const d = new Date(s); return d.toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent'}).replace(',', ''); };
@@ -2062,13 +2062,26 @@ async function renderMxOrder(host, d) {
   const sd = od.sales ? `${dm(od.sales[0])}–${dm(od.sales[1])}` : '';
   const whCard = w => {
     const open = MX.wOpen.has(w.id);
-    return `<div class="card mxcat"><button class="mxwh" data-w="${w.id}"><span><b>${open ? '▾' : '▸'} ${esc(w.short)}</b>
+    return `<div class="mxwhb"><button class="mxwh" data-w="${w.id}"><span><b>${open ? '▾' : '▸'} ${esc(w.short)}</b>
         <span class="hint">${nf0.format(w.pos)} poz · ${w.branches} filial</span></span><span class="qq"><span class="q num">${nf0.format(Math.round(w.z))} dona</span>${w.usd ? `<span class="hint num">≈ ${usd(w.usd)}</span>` : ''}</span></button>
       ${open ? `<div class="mxzt head"><span>SKU</span><span>matritsa</span><span>zahira</span><span>omborda</span><span>zakaz</span></div>
         ${w.items.map(i => `<div class="mxzt"><span class="n">${esc(i.name)}<small>${esc(i.cat)}${i.nbr ? ` · ${i.nbr} filialga` : ''}</small></span>
           <span class="num">${nf0.format(Math.round(i.m))}</span><span class="num">${nf0.format(Math.round(i.s))}</span><span class="num mu">${nf0.format(Math.round(i.h))}</span><span class="num z">${nf0.format(Math.round(i.z))}${i.usd != null ? `<small>${nf0.format(Math.round(i.usd))} $</small>` : ''}</span></div>`).join('')
           || `<div class="empty">Zakaz kerak emas</div>`}
         ${w.more ? `<span class="hint mxmore">Yana ${nf0.format(w.more)} ta pozitsiya — Excel'da</span>` : ''}` : ''}</div>`;
+  };
+  const whTxt = wh => Object.entries(wh).filter(e => e[1] > 0).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${esc(k)} ${nf0.format(Math.round(v))}`).join(' · ');
+  const catZ = c => {
+    const op = MX.zc.has(c.name);
+    return `<button class="mxwh mxzc" data-zc="${esc(c.name)}"><span><b>${op ? '▾' : '▸'} ${esc(c.name)}</b>
+        <span class="hint">${nf0.format(c.brands.reduce((n, b) => n + b.skus.length, 0))} SKU · ${c.brands.length} brend</span></span><span class="qq"><span class="q num">${nf0.format(Math.round(c.z))} dona</span>${c.usd ? `<span class="hint num">≈ ${usd(c.usd)}</span>` : ''}</span></button>
+      ${op ? `<div class="mxsub">${c.brands.map(b => {
+          const bk = c.name + '|' + b.name, bo = MX.zb.has(bk);
+          return `<button class="mxbr" data-zb="${esc(bk)}"><span><b>${bo ? '▾' : '▸'} ${esc(b.name)}</b><span class="hint">${nf0.format(b.skus.length)} SKU · ${whTxt(b.wh)}</span></span>
+            <span class="qq"><span class="num"><b>${nf0.format(Math.round(b.z))}</b> dona</span>${b.usd ? `<span class="hint num">${usd(b.usd)}</span>` : ''}</span></button>
+            ${bo ? `<div class="mxsku">${b.skus.map(k => `<div class="mxbr sku"><span><b>${esc(k.name)}</b><span class="hint">${k.m ? `matritsa uchun ${nf0.format(Math.round(k.m))} · ` : ''}${whTxt(k.wh)}</span></span>
+              <span class="qq"><span class="num"><b>${nf0.format(Math.round(k.z))}</b> dona</span>${k.usd ? `<span class="hint num">${nf0.format(Math.round(k.usd))} $</span>` : ''}</span></div>`).join('')}</div>` : ''}`;
+        }).join('')}</div>` : ''}`;
   };
   host.innerHTML = `${mxViewSeg()}
     <div class="hint">qoldiq: filial ${dm(od.snap.b)} · ombor ${dm(od.snap.w)} · savdo ${sd}</div>
@@ -2079,9 +2092,12 @@ async function renderMxOrder(host, d) {
       <span class="l num">matritsa uchun ${nf0.format(Math.round(T.m))} + ${od.days} kunlik zahira ${nf0.format(Math.round(T.s))} − omborda bor ${nf0.format(Math.round(T.h))}</span></div>
     <div class="mxdays"><span>Zahira</span><span class="seg mini" id="mxDays">${[7, 10, 14, 21, 30].map(n => `<button data-d="${n}" aria-pressed="${MX.days === n}">${n}</button>`).join('')}</span><span>kun</span></div>
     <div class="hint">Zakaz = filiallarda yetishmagan «Turishi» + ${od.days} kunlik zahira − ombor qoldig'i. Zahira = kunlik savdo × ${od.days}; kunlik savdo — shu ombor filiallarining 30 va 7 kunlik o'rtachasidan kattasi. Manfiy bo'lsa — zakaz yo'q. Faqat matritsa SKU'lari. $ — ombordagi A sektor narxi (bo'lmasa — filial kirim narxi), so'mdagisi bot kursi bilan.${T.nop ? ` Narxi topilmagan: ${nf0.format(T.nop)} poz.` : ''}</div>
-    ${od.whs.map(whCard).join('') || `<div class="card"><div class="empty">Zakaz uchun ma'lumot yo'q</div></div>`}
+    ${od.whs.length ? `${(od.cats || []).length ? mxBlock('zc', 'Kategoriyalar', od.cats.length,
+        `eng katta: ${esc(od.cats[0].name)} <b>${nf0.format(Math.round(od.cats[0].z))}</b> dona`, od.cats.map(catZ).join('')) : ''}
+      ${mxBlock('zw', 'Omborlar', od.whs.length, `eng katta: ${esc(od.whs[0].short)} <b>${nf0.format(Math.round(od.whs[0].z))}</b> dona`,
+        od.whs.map(whCard).join(''))}` : `<div class="card"><div class="empty">Zakaz uchun ma'lumot yo'q</div></div>`}
     ${od.whs.length ? `<button class="btn mxzx" id="mxZx">⬇ Zakaz Excel — botga yuborish</button>
-      <span class="hint" style="text-align:center">har ombor alohida varaq + «Ombordan yuborish» (filial × SKU)</span>` : ''}`;
+      <span class="hint" style="text-align:center">har ombor alohida varaq + «Kategoriya × brend» + «Ombordan yuborish»</span>` : ''}`;
   mxWireView(host);
   host.querySelectorAll('#mxDays [data-d]').forEach(b => b.onclick = () => {
     const n = +b.dataset.d; if (MX.days === n) return;
@@ -2089,6 +2105,9 @@ async function renderMxOrder(host, d) {
     renderMxOrder(host, d);
   });
   host.querySelectorAll('[data-w]').forEach(b => b.onclick = () => { const k = +b.dataset.w; MX.wOpen.has(k) ? MX.wOpen.delete(k) : MX.wOpen.add(k); renderMxOrder(host, d); });
+  host.querySelectorAll('[data-zb]').forEach(b => b.onclick = () => { const k = b.dataset.zb; MX.zb.has(k) ? MX.zb.delete(k) : MX.zb.add(k); renderMxOrder(host, d); });
+  host.querySelectorAll('[data-zc]').forEach(b => b.onclick = () => { const k = b.dataset.zc; MX.zc.has(k) ? MX.zc.delete(k) : MX.zc.add(k); renderMxOrder(host, d); });
+  host.querySelectorAll('[data-blk]').forEach(b => b.onclick = () => { const k = b.dataset.blk; MX.blk.has(k) ? MX.blk.delete(k) : MX.blk.add(k); renderMxOrder(host, d); });
   const zx = $('mxZx');
   if (zx) zx.onclick = async () => {
     zx.disabled = true; zx.textContent = '⏳ Tayyorlanmoqda…';

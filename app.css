@@ -611,3 +611,12 @@ button.whh b{color:var(--ink);font-size:14px}
 .mxreg.on{background:var(--card-2)}
 .mxsub{border-left:3px solid var(--accent-soft);margin-left:8px}
 .mxsub .mxrow{padding-left:12px}
+.mxwhb{border-top:1px solid var(--line)}.mxwhb:first-child{border-top:0}
+.mxzc{border-top:1px solid var(--line)}.mxlist>.mxzc:first-child{border-top:0}
+.mxbr{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 14px;border-top:1px solid var(--line);font-size:13.5px}
+.mxbr>span:first-child{display:flex;flex-direction:column;gap:2px;min-width:0}
+.mxbr .qq{display:flex;flex-direction:column;align-items:flex-end;gap:1px;flex:0 0 auto}
+button.mxbr{width:100%;border:0;border-top:1px solid var(--line);background:none;font:inherit;color:var(--ink);text-align:left;cursor:pointer}
+.mxsku{border-left:3px solid var(--line);margin-left:10px}
+.mxbr.sku{font-size:12.5px;padding:8px 12px}
+.mxbr.sku b{font-weight:600}
