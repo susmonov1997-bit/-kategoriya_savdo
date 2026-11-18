@@ -174,13 +174,31 @@ FROM j GROUP BY 1, 2""", *params)
     return out
 
 
+def _cap(subs: list[tuple]) -> float | None:
+    """Kategoriya vitrina sig'imi. Jadvalda sig'im ba'zan kategoriyaga (har Подкатегория qatorida bir xil son —
+    Совутгичлар 70/70/70), ba'zan Подкатегория'ga (Сплит 12, Устунли 2) yozilgan.
+    Sonlar har xil → yig'indi; hammasi bir xil → bitta son yoki yig'indidan qaysi biri matritsa
+    pozitsiyalari soniga yaqin bo'lsa (sig'im odatda pozitsiyalar soniga yaqin)."""
+    caps = [c for c, _ in subs if c is not None]
+    if not caps:
+        return None
+    total, n = sum(caps), sum(k for _, k in subs)
+    if len(caps) == 1 or len(set(caps)) > 1:
+        return total
+    one = caps[0]
+    return total if abs(total - n) < abs(one - n) else one
+
+
 async def _vitrina(con, cats: list[int], d, branch_id: int | None = None) -> dict:
     """(branch_id, category_id) → (sig'im, turgan model soni)."""
-    cap = await con.fetch(f"""
-        SELECT branch_id, category_id, sum(c)::float8 cap FROM (
-            SELECT branch_id, category_id, COALESCE(sub0, ''), max(vitrina_cap) c FROM matrix_rows
-            WHERE branch_id IS NOT NULL AND category_id = ANY($1::int[]) {'AND branch_id = $2' if branch_id else ''}
-            GROUP BY 1, 2, 3) t GROUP BY 1, 2""", *([cats, branch_id] if branch_id else [cats]))
+    sub = await con.fetch(f"""
+        SELECT branch_id, category_id, COALESCE(sub0, '') sub0, max(vitrina_cap)::float8 c, count(*) n FROM matrix_rows
+        WHERE branch_id IS NOT NULL AND category_id = ANY($1::int[]) {'AND branch_id = $2' if branch_id else ''}
+        GROUP BY 1, 2, 3""", *([cats, branch_id] if branch_id else [cats]))
+    grp: dict[tuple, list] = {}
+    for r in sub:
+        grp.setdefault((r[0], r[1]), []).append((r["c"], r["n"]))
+    cap = [(k[0], k[1], _cap(v)) for k, v in grp.items()]
     on = await con.fetch(f"""
         SELECT s.branch_id, p.category_id, count(DISTINCT s.product_id) n FROM stock_branch s
         JOIN products p USING (product_id)
