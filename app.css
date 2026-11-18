@@ -603,3 +603,11 @@ button.whh b{color:var(--ink);font-size:14px}
 .mxdays{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);font-weight:600}
 .mxdays .seg{background:var(--card);box-shadow:var(--shadow)}
 .mxdays .seg button{padding:6px 12px}
+.mxblk .mxlist{border-top:1px solid var(--line)}
+.mxblk .ah .hint{max-width:58%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mxbh{padding:8px 14px 10px;border-top:1px solid var(--line)}
+.mxgrp{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 14px}
+.mxreg .n small{font-weight:500;color:var(--muted);font-size:12px}
+.mxreg.on{background:var(--card-2)}
+.mxsub{border-left:3px solid var(--accent-soft);margin-left:8px}
+.mxsub .mxrow{padding-left:12px}

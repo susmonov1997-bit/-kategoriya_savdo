@@ -1977,7 +1977,7 @@ document.querySelectorAll('#qSeg button').forEach(b => b.onclick = () => {
 // ============================================================ MATRITSA
 // Google Sheet «Матрица КБТ» (har kuni 06:00) × filial qoldig'i: bajarilish, yo'q/kam, vitrina, omborda bor.
 const MX_DAYS = (() => { try { const v = +localStorage.getItem('mx_days'); return [7, 10, 14, 21, 30].includes(v) ? v : 14; } catch (e) { return 14; } })();
-const MX = {data: null, od: null, days: MX_DAYS, wOpen: new Set(), g: 'f', view: 'mx', cat: null, over: false, G: {}, reg: null, br: null, bd: null, seq: 0, lim: 40, open: {}, exLim: 15, y: 0};
+const MX = {data: null, od: null, days: MX_DAYS, blk: new Set(), grp: 'reg', ropen: new Set(), wOpen: new Set(), g: 'f', view: 'mx', cat: null, over: false, G: {}, reg: null, br: null, bd: null, seq: 0, lim: 40, open: {}, exLim: 15, y: 0};
 const mxCol = p => (p == null ? 'var(--so)' : p < 70 ? 'var(--bad)' : p < 85 ? 'var(--warn)' : 'var(--good)');
 const mxPp = d => (d == null || !isFinite(d) ? '' : `<span class="pp ${sgn(d)}">${sgn(d) === 'up' ? '▲' : sgn(d) === 'dn' ? '▼' : '•'}${nf1.format(Math.abs(d))}</span>`);
 const mxDt = s => { if (!s) return ''; const d = new Date(s); return d.toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent'}).replace(',', ''); };
@@ -2017,6 +2017,16 @@ function mxBar2(onm, x, cap) {   // vitrina: matritsa SKU + tashqari, sig'imga n
   if (!cap) return `<span class="mxbar"></span>`;
   const m = Math.min(100, onm / cap * 100), xx = Math.max(0, Math.min(100 - m, x / cap * 100));
   return `<span class="mxbar two"><i style="width:${m}%;background:var(--accent)"></i><i style="width:${xx}%;background:var(--mxx)"></i></span>`;
+}
+function mxBlock(k, title, n, sub, body) {   // yig'iladigan blok (Tovarlar tabidagidek)
+  const op = MX.blk.has(k);
+  return `<div class="ablock mxblk"><button class="ah" data-blk="${k}" aria-expanded="${op}"><h3><span class="c">${op ? '▾' : '▸'}</span>${title} <span class="u">${n}</span></h3>
+    <span class="hint">${sub}</span></button>${op ? `<div class="mxlist">${body}</div>` : ''}</div>`;
+}
+function mxWorst(items, vit) {
+  const v = x => (vit ? x.A.fill : x.A.pct);
+  const w = items.filter(x => v(x) != null).sort((a, b) => v(a) - v(b))[0];
+  return w ? `eng pasti: ${esc(w.name)} <b style="color:${vit ? mxFillCol(v(w)) : mxCol(v(w))}">${pct(v(w))}</b>` : '';
 }
 function mxRows(d, withCat) {
   const G = MX.G;
@@ -2154,25 +2164,46 @@ async function renderMxList(host) {
         ${mxBar2(A.onm, A.x, A.cap)}<span class="s num"><span>${esc(b.region)}</span><span>turgan <b>${nf0.format(A.on)}/${nf0.format(A.cap)}</b></span><span>bo'sh <b>${nf0.format(A.empty)}</b></span>${A.over ? `<span>ortiq <b>${nf0.format(A.over)}</b></span>` : ''}</span></button>`
     : `<button class="mxrow" data-b="${b.id}"><span class="n">${esc(b.name)} ›</span><span class="pc num" style="color:${mxCol(A.pct)}">${pct(A.pct)}</span>
         ${mxBar(A.pct)}<span class="s num">${mxPp(A.d)}<span>${esc(b.region)}${b.cluster ? ' · ' + esc(b.cluster) : ''}</span><span>yo'q <b>${nf0.format(A.miss)}</b></span><span>kam <b>${nf0.format(A.low)}</b></span><span>vitrina ${pct(A.fill)}</span></span></button>`;
+  const ndRow = b => `<div class="mxrow nd"><span class="n">${esc(b.name)}</span><span class="pc">—</span>
+          <span class="s">${esc(b.region)} · qoldiq faylida yo'q (${nf0.format(b.pos)} pozitsiya)</span></div>`;
+  const regsHtml = () => {
+    const R = {};
+    brs.forEach(x => { const k = x.b.region_id; (R[k] = R[k] || {id: k, name: x.b.region, brs: [], nod: [], rows: []}).brs.push(x); });
+    nod.forEach(b => { const k = b.region_id; (R[k] = R[k] || {id: k, name: b.region, brs: [], nod: [], rows: []}).nod.push(b); });
+    rows.forEach(r => { const b = MX.G[r[0]]; if (b && R[b.region_id]) R[b.region_id].rows.push(r); });
+    const list = Object.values(R).map(g => ({...g, A: mxAgg(vit && MX.over ? g.rows.filter(r => r[9] && r[10] > r[9]) : g.rows)}))
+      .sort((a, b) => (vit ? (a.A.fill ?? 999) - (b.A.fill ?? 999) : (a.A.pct ?? 999) - (b.A.pct ?? 999)) || a.name.localeCompare(b.name));
+    return list.map(g => {
+      const op = MX.ropen.has(g.id), A = g.A, n = g.brs.length + g.nod.length;
+      const v = vit ? A.fill : A.pct, col = vit ? mxFillCol(v) : mxCol(v);
+      return `<button class="mxrow mxreg${op ? ' on' : ''}" data-reg="${g.id}"><span class="n">${op ? '▾' : '▸'} ${esc(g.name)} <small>${n} ta</small></span>
+          <span class="pc num" style="color:${col}">${pct(v)}</span>${vit ? mxBar2(A.onm, A.x, A.cap) : mxBar(v)}
+          <span class="s num">${vit ? `<span>turgan <b>${nf0.format(A.on)}/${nf0.format(A.cap)}</b></span><span>bo'sh <b>${nf0.format(A.empty)}</b></span>${A.over ? `<span>ortiq <b>${nf0.format(A.over)}</b></span>` : ''}`
+            : `${mxPp(A.d)}<span>yo'q <b>${nf0.format(A.miss)}</b></span><span>kam <b>${nf0.format(A.low)}</b></span><span>omborda <b>${nf0.format(A.inwh)}</b></span>`}</span></button>
+        ${op ? `<div class="mxsub">${g.brs.map(brRow).join('')}${g.nod.map(ndRow).join('')}</div>` : ''}`;
+    }).join('');
+  };
   host.innerHTML = `${mxViewSeg()}
     ${two ? `<div class="seg" id="mxSeg" role="group" aria-label="Filial turi">
       <button data-g="f" aria-pressed="${MX.g === 'f'}">Filial · ${KB.f.branches}</button><button data-g="m" aria-pressed="${MX.g === 'm'}">Mini do'kon · ${KB.m.branches}</button></div>` : ''}
     <div class="hint">matritsa ${mxDt(d.sync.at)} · qoldiq ${dm(d.snap.b)}${!vit && d.prev ? ` · ▲▼ — ${dm(d.prev)} ga nisbatan` : ''}${MX.cat ? ` · <b>${esc(catName[MX.cat])}</b>` : ''}</div>
     <div class="kpis mxk">${kpis}</div>
     ${!vit && ub && (ub.branches || ub.skus) ? `<div class="mxwarn">Bog'lanmagan: ${ub.branches ? `<b>${ub.branches}</b> filial` : ''}${ub.branches && ub.skus ? ' · ' : ''}${ub.skus ? `<b>${ub.skus}</b> SKU` : ''} — botda /matritsa → «⬇ Bog'lanish Excel»</div>` : ''}
-    ${regs.length > 1 ? `<div class="qchips mxchips"><button data-r="" aria-pressed="${!MX.reg}">Hammasi</button>${regs.map(r => `<button data-r="${r.id}" aria-pressed="${MX.reg === r.id}">${esc(r.name)}</button>`).join('')}</div>` : ''}
-    ${cats.length > 1 ? `<div class="sec"><h2>Kategoriyalar bo'yicha</h2><span class="hint">${MX.cat ? 'qayta bosing — filtr olinadi' : 'bosing — filtr'}</span></div>
-    <div class="card mxlist">${cats.map(catRow).join('')}
-      ${vit ? `<div class="mxleg"><span><i style="background:var(--accent)"></i>matritsa SKU</span><span><i style="background:var(--mxx)"></i>matritsadan tashqari</span><span><i class="e"></i>bo'sh</span></div>` : ''}</div>` : ''}
-    <div class="sec"><h2>${gName}${MX.cat ? ' · ' + esc(catName[MX.cat]) : ''}</h2><span class="hint">${vit ? (MX.over ? "eng ko'p ortiqcha tepada" : "eng bo'sh vitrina tepada") : 'eng past bajarilish tepada'}</span></div>
-    <div class="card mxlist">${brs.slice(0, MX.lim).map(brRow).join('')}
-      ${brs.length <= MX.lim ? nod.map(b => `<div class="mxrow nd"><span class="n">${esc(b.name)}</span><span class="pc">—</span>
-          <span class="s">${esc(b.region)} · qoldiq faylida yo'q (${nf0.format(b.pos)} pozitsiya)</span></div>`).join('') : ''}
-      ${!brs.length && !nod.length ? `<div class="empty">Bu tanlovda matritsa pozitsiyasi yo'q</div>` : ''}</div>
-    ${brs.length > MX.lim ? `<button class="more" id="mxMore">Yana ${nf0.format(brs.length - MX.lim)} ta ▾</button>` : ''}`;
+    ${cats.length > 1 ? mxBlock('c', "Kategoriyalar", cats.length, mxWorst(cats.map(c => ({name: c.name, A: c.A})), vit),
+      `${cats.map(catRow).join('')}
+      ${vit ? `<div class="mxleg"><span><i style="background:var(--accent)"></i>matritsa SKU</span><span><i style="background:var(--mxx)"></i>matritsadan tashqari</span><span><i class="e"></i>bo'sh</span></div>` : ''}
+      <div class="hint mxbh">${MX.cat ? 'qayta bosing — kategoriya filtri olinadi' : 'kategoriyani bosing — pastdagi hammasi shu kategoriya bo\'yicha'}</div>`) : ''}
+    ${mxBlock('b', gName + (MX.cat ? ' · ' + esc(catName[MX.cat]) : ''), brs.length + nod.length, mxWorst(brs.map(x => ({name: x.b.name, A: x.A})), vit),
+      `<div class="mxgrp"><span class="seg mini" id="mxGrp"><button data-gr="reg" aria-pressed="${MX.grp === 'reg'}">Hudud bo'yicha</button><button data-gr="list" aria-pressed="${MX.grp === 'list'}">Ro'yxat</button></span>
+        <span class="hint">${vit ? (MX.over ? "eng ko'p ortiqcha tepada" : "eng bo'sh tepada") : 'eng pasti tepada'}</span></div>
+      ${MX.grp === 'reg' ? regsHtml() : `${brs.slice(0, MX.lim).map(brRow).join('')}${brs.length <= MX.lim ? nod.map(ndRow).join('') : ''}
+        ${brs.length > MX.lim ? `<button class="more" id="mxMore">Yana ${nf0.format(brs.length - MX.lim)} ta ▾</button>` : ''}`}
+      ${!brs.length && !nod.length ? `<div class="empty">Bu tanlovda matritsa pozitsiyasi yo'q</div>` : ''}`)}`;
   host.querySelectorAll('#mxSeg [data-g]').forEach(b => b.onclick = () => { if (MX.g === b.dataset.g) return; MX.g = b.dataset.g; MX.reg = null; MX.lim = 40; renderMxList(host); });
   mxWireView(host);
-  host.querySelectorAll('[data-r]').forEach(b => b.onclick = () => { MX.reg = b.dataset.r ? +b.dataset.r : null; MX.lim = 40; renderMxList(host); });
+  host.querySelectorAll('[data-blk]').forEach(b => b.onclick = () => { const k = b.dataset.blk; MX.blk.has(k) ? MX.blk.delete(k) : MX.blk.add(k); renderMxList(host); });
+  host.querySelectorAll('#mxGrp [data-gr]').forEach(b => b.onclick = () => { if (MX.grp === b.dataset.gr) return; MX.grp = b.dataset.gr; MX.lim = 40; renderMxList(host); });
+  host.querySelectorAll('[data-reg]').forEach(b => b.onclick = () => { const k = +b.dataset.reg; MX.ropen.has(k) ? MX.ropen.delete(k) : MX.ropen.add(k); renderMxList(host); });
   host.querySelectorAll('[data-c]').forEach(b => b.onclick = () => { const c = +b.dataset.c; MX.cat = MX.cat === c ? null : c; MX.lim = 40; renderMxList(host); });
   const ov = $('mxOver'); if (ov) ov.onclick = () => { MX.over = !MX.over; MX.lim = 40; renderMxList(host); };
   host.querySelectorAll('[data-b]').forEach(b => b.onclick = () => { MX.y = window.scrollY; MX.br = +b.dataset.b; MX.bd = null; MX.open = {}; MX.exLim = 15; renderMx(); syncBack(); window.scrollTo(0, 0); });
