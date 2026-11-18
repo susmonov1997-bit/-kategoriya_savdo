@@ -397,6 +397,14 @@ def result_kb(s: dict | None = None):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _usd(v: float) -> str:
+    if v >= 1e6:
+        return f"{v / 1e6:.2f} mln $".replace(".", ",")
+    if v >= 1e3:
+        return f"{v / 1e3:.0f} ming $"
+    return f"{v:.0f} $"
+
+
 def _pp(d) -> str:
     if d is None:
         return ""
@@ -441,7 +449,8 @@ def digest_text(s: dict, dg: dict | None) -> str:
     od = (dg or {}).get("order") or {}
     T = od.get("total")
     if T and T.get("z"):
-        lines += ["", f"🛒 <b>Zakaz: {_n(int(T['pos']))} poz · {_n(round(T['z']))} dona</b>",
+        lines += ["", f"🛒 <b>Zakaz: {_n(int(T['pos']))} poz · {_n(round(T['z']))} dona</b>"
+                  + (f" · ≈ {_usd(T.get('usd') or 0)}" if T.get("usd") else ""),
                   " · ".join(f"{e(w['short'])} {_n(round(w['z']))}" for w in od["whs"] if w["z"] > 0)]
     elif T is not None:
         lines += ["", "🛒 Zakaz kerak emas — omborlardagi qoldiq yetarli."]

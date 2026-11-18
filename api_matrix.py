@@ -341,6 +341,43 @@ async def branch(req: MxReq, request: Request, user: User = Depends(current_user
 ORDER_DAYS = 14
 
 
+USD_MAX_UNIT = 10_000   # birlik narxi bundan katta bo'lsa — so'mda yozilgan deb olinadi (savdo faylidagi qoida kabi)
+
+
+async def unit_prices(con, sn: dict, pids: list[int]) -> dict[int, tuple[float, str]]:
+    """SKU birlik narxi, $ (zakaz summasi uchun):
+    1) ombor qoldig'idagi «A сектор учун жорий сотиш нархи» (= ta'minotchi narxi), so'nggi sana, omborlar o'rtachasi;
+       narx 10 000 dan katta bo'lsa — so'mda deb olinadi va bot kursi bilan $ ga o'tkaziladi;
+    2) bo'lmasa — filial qoldig'idagi kirim narxi (tannarx, so'm) ÷ bot kursi."""
+    if not pids:
+        return {}
+    out: dict[int, tuple[float, str]] = {}
+    if sn.get("w"):
+        rate = float(await con.fetchval("SELECT rate FROM fx_periods WHERE $1 >= valid_from AND $1 < valid_to", sn["w"]) or 0)
+        for r in await con.fetch("""SELECT product_id, qty::float8 q, value_usd::float8 v FROM stock_wh
+                                    WHERE snap_date = $1 AND product_id = ANY($2::bigint[]) AND qty > 0 AND value_usd > 0""",
+                                 sn["w"], pids):
+            u = r["v"] / r["q"]
+            if u > USD_MAX_UNIT:
+                if not rate:
+                    continue
+                u /= rate
+            a = out.setdefault(r["product_id"], [0.0, 0.0])
+            a[0] += u * r["q"]
+            a[1] += r["q"]
+        out = {k: (v[0] / v[1], "w") for k, v in out.items() if v[1]}
+    rest = [p for p in pids if p not in out]
+    if rest and sn.get("b"):
+        rate = float(await con.fetchval("SELECT rate FROM fx_periods WHERE $1 >= valid_from AND $1 < valid_to", sn["b"]) or 0)
+        if rate:
+            for r in await con.fetch("""SELECT product_id, sum(cost_uzs)::float8 c, sum(qty)::float8 q FROM stock_branch
+                                        WHERE snap_date = $1 AND product_id = ANY($2::bigint[]) AND qty > 0 AND cost_uzs > 0
+                                        GROUP BY 1""", sn["b"], rest):
+                if r["q"]:
+                    out[r["product_id"]] = (r["c"] / r["q"] / rate, "b")
+    return out
+
+
 async def order_data(con, cats: list[int]) -> dict:
     sn = await _snaps(con)
     out = {"snap": {k: (v.isoformat() if v else None) for k, v in sn.items()}, "whs": [], "days": ORDER_DAYS}
@@ -373,6 +410,7 @@ LEFT JOIN w USING (warehouse_id, product_id)
 JOIN products p ON p.product_id = mp.product_id JOIN categories c ON c.id = p.category_id""",
                            cats, sn["b"], sn["w"], s_from, s_to)
     names = {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM warehouses")}
+    price = await unit_prices(con, sn, list({r["product_id"] for r in rows}))
     nbr = {r["warehouse_id"]: r["n"] for r in await con.fetch(
         "SELECT warehouse_id, count(*) n FROM branches WHERE warehouse_id IS NOT NULL GROUP BY 1")}
     W: dict[int, dict] = {}
@@ -380,20 +418,27 @@ JOIN products p ON p.product_id = mp.product_id JOIN categories c ON c.id = p.ca
         w = W.setdefault(r["warehouse_id"], {"id": r["warehouse_id"], "name": names.get(r["warehouse_id"], "?"),
                                              "short": names.get(r["warehouse_id"], "?").replace(" омбори", ""),
                                              "branches": nbr.get(r["warehouse_id"], 0),
-                                             "m": 0.0, "s": 0.0, "h": 0.0, "z": 0.0, "pos": 0, "items": []})
+                                             "m": 0.0, "s": 0.0, "h": 0.0, "z": 0.0, "usd": 0.0, "nop": 0,
+                                             "pos": 0, "items": []})
         z = max(0.0, round(r["m"] + r["s"] - r["h"]))
         w["m"] += r["m"]
         w["s"] += r["s"]
         w["h"] += min(r["h"], r["m"] + r["s"])           # zakazni kamaytirgan qismi
         if z > 0:
+            pr, src = price.get(r["product_id"], (None, None))
             w["z"] += z
             w["pos"] += 1
+            if pr is None:
+                w["nop"] += 1
+            else:
+                w["usd"] += z * pr
             w["items"].append({"id": r["product_id"], "name": r["name"], "brand": r["brand"], "cat": r["cname"],
-                               "m": r["m"], "s": r["s"], "h": r["h"], "z": z, "nbr": r["nbr"]})
+                               "m": r["m"], "s": r["s"], "h": r["h"], "z": z, "nbr": r["nbr"],
+                               "p": pr, "src": src, "usd": z * pr if pr is not None else None})
     for w in W.values():
         w["items"].sort(key=lambda i: (-i["z"], i["name"]))
     out["whs"] = sorted(W.values(), key=lambda w: -w["z"])
-    out["total"] = {k: sum(w[k] for w in W.values()) for k in ("m", "s", "h", "z", "pos")}
+    out["total"] = {k: sum(w[k] for w in W.values()) for k in ("m", "s", "h", "z", "pos", "usd", "nop")}
     return out
 
 
@@ -460,13 +505,17 @@ def order_xlsx(d: dict, ship: list) -> bytes:
         return ws
 
     n = d.get("days", ORDER_DAYS)
-    sheet("Jami", ["Ombor", "Pozitsiya", "Matritsa uchun", f"{n} kun savdo", "Omborda (hisobga olingan)", "Zakaz, dona"],
-          [[w["name"], w["pos"], round(w["m"]), round(w["s"]), round(w["h"]), round(w["z"])] for w in d["whs"]], first=True)
+    SRC = {"w": "ombor (A sektor)", "b": "filial (kirim)"}
+    sheet("Jami", ["Ombor", "Pozitsiya", "Matritsa uchun", f"{n} kun savdo", "Omborda (hisobga olingan)", "Zakaz, dona",
+                   "Zakaz, $", "Narxi yo'q (poz)"],
+          [[w["name"], w["pos"], round(w["m"]), round(w["s"]), round(w["h"]), round(w["z"]), round(w["usd"], 2), w["nop"]]
+           for w in d["whs"]], first=True)
     for w in d["whs"]:
         sheet(w["short"], ["Kategoriya", "Brend", "Tovar ID", "Tovar", "Matritsa uchun", "Filiallar (yetishmaydi)",
-                           f"{n} kun savdo", "Omborda", "Zakaz, dona"],
-              [[i["cat"], i["brand"], i["id"], i["name"], round(i["m"]), i["nbr"], round(i["s"]), round(i["h"]), round(i["z"])]
-               for i in w["items"]])
+                           f"{n} kun savdo", "Omborda", "Zakaz, dona", "Narx, $", "Narx manbai", "Zakaz, $"],
+              [[i["cat"], i["brand"], i["id"], i["name"], round(i["m"]), i["nbr"], round(i["s"]), round(i["h"]), round(i["z"]),
+                round(i["p"], 2) if i["p"] is not None else None, SRC.get(i["src"], "yo'q"),
+                round(i["usd"], 2) if i["usd"] is not None else None] for i in w["items"]])
     sheet("Ombordan yuborish", ["Ombor", "Hudud", "Filial", "Kategoriya", "Brend", "Tovar ID", "Tovar", "Turishi",
                                 "Filialda bor", "Yuborish, dona"], ship)
     ws = wb.create_sheet("Izoh")
@@ -475,7 +524,9 @@ def order_xlsx(d: dict, ship: list) -> bytes:
                  "Matritsa uchun = shu ombor filiallarida Turishi − filial qoldig'i (yetishmagan qismi)",
                  f"Savdo davri: {s[0]} — {s[1]} · filial qoldig'i: {d['snap'].get('b')} · ombor qoldig'i: {d['snap'].get('w')}",
                  "Faqat matritsadagi SKU'lar; ombori biriktirilmagan va qoldiq faylida yo'q filiallar hisobga olinmaydi.",
-                 "«Ombordan yuborish» — ombor qoldig'i yetguncha, avval ko'p sotgan filialga."]:
+                 "«Ombordan yuborish» — ombor qoldig'i yetguncha, avval ko'p sotgan filialga.",
+                 "Narx, $: ombor qoldig'idagi «A сектор учун жорий сотиш нархи»; bo'lmasa — filial qoldig'idagi kirim narxi. "
+                 "So'mdagi narx (10 000 dan katta) bot kursi bilan $ ga o'tkazilgan."]:
         ws.append([line])
     ws.column_dimensions["A"].width = 110
     buf = io.BytesIO()

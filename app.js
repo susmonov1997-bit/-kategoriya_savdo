@@ -773,7 +773,7 @@ function renderShare() {
         <button data-v="struct" aria-pressed="${st.shareView === 'struct'}">Tuzilma</button>
         <button data-v="chg" aria-pressed="${st.shareView === 'chg'}">O'zgarish</button>
       </div>` : ''}</div>
-    <div class="hint">${esc(ctx)} · ${MQ() ? 'dona' : 'summa'}${hasCmp ? ' · pp — o\'tgan davrga nisbatan' : ''}</div>
+    <div class="hint">${esc(ctx)} · ${MQ() ? 'dona' : 'summa'}${hasCmp ? ' · pp — o\'tgan davrga · <i class="pmark"></i> o\'tgan davr ulushi' : ''}</div>
     <div id="shareBody"></div>
   </div>`;
   const can = !!childDimFor([...node.path, {dim: node.childDim, key: ''}]);
@@ -819,7 +819,6 @@ function shareStruct(node) {
   const max = Math.max(...rows.map(r => Math.max(r.share || 0, hasCmp ? r.pshare || 0 : 0)), 1);
   const can = !!childDimFor([...node.path, {dim: node.childDim, key: ''}]);
   return `<div class="strip" role="img" aria-label="Ulushlar tuzilmasi">${rows.map(r => `<span style="width:${r.share}%;background:${r.color}" title="${esc(r.label)}: ${pct(r.share)}"></span>`).join('')}</div>
-    ${hasCmp ? `<div class="legend" style="margin:2px 0 4px"><span><i style="background:var(--ink-2);width:3px;height:12px"></i>o'tgan davrdagi ulush</span></div>` : ''}
     <div class="srows">${rows.map(r => `<button class="srow ${r.key != null && can ? 'drill' : ''}" ${r.key != null ? `data-k="${esc(r.key)}"` : ''} ${r.key != null && can ? '' : 'disabled'}>
       <span class="sw" style="background:${r.color}"></span>
       <span class="sl" title="${esc(r.label)}">${esc(r.label)}</span>
@@ -1154,6 +1153,7 @@ async function loadTab(t) {
 $('catBtn').onclick = openCatSheet;
 $('perBtn').onclick = openPeriodSheet;
 $('filBtn').onclick = openFilterSheet;
+$('topFil').onclick = openFilterSheet;
 const reloadQirqim = () => { STALE.Qirqim = true; loadTab('Qirqim'); };
 $('rowsDim').onchange = e => { st.rows = e.target.value; if (st.cols === st.rows) st.cols = ''; st.showAll = false; reloadQirqim(); };
 $('colsDim').onchange = e => { st.cols = e.target.value === st.rows ? '' : e.target.value; st.showAll = false; reloadQirqim(); };
@@ -1372,7 +1372,8 @@ function setTab(t) {
   TAB = t;
   ['Umumiy', 'Qirqim', 'Tovarlar', 'Qoldiq', 'Reja', 'Matritsa'].forEach(x => { $('pane' + x).hidden = x !== t; });
   $('perBtn').hidden = $('metricSeg').hidden = t === 'Matritsa';   // matritsa — joriy holat, davrga bog'liq emas
-  $('topAnalytics').classList.toggle('mxhide', t === 'Matritsa');     // matritsada Filtr — ko'rinish qatorida
+  $('topAnalytics').classList.toggle('mxhide', t === 'Matritsa');     // matritsada Filtr — sarlavha yonida
+  $('topFil').hidden = t !== 'Matritsa'; if (t === 'Matritsa') mxFilBtn();
   const rj = t === 'Reja';                            // reja — kategoriya/davr/filtrga bog'liq emas
   $('catBtn').hidden = rj; $('topAnalytics').hidden = rj; $('upTitle').hidden = !rj;
   if (rj) { $('upTitle').textContent = 'Reja bajarilishi'; $('tmeta').textContent = META.data_to ? `ma'lumot ${dm(META.data_to)} gacha` : ''; }
@@ -1402,6 +1403,7 @@ function setView(v) {
   $('viewAnalytics').hidden = v !== 'analytics';
   $('viewUpload').hidden = v !== 'upload';
   $('tabbar').hidden = v !== 'analytics';
+  $('topFil').hidden = v !== 'analytics' || TAB !== 'Matritsa';
   if (v === 'upload') loadHistory();
   if (v === 'analytics' && NEED_REFRESH) { NEED_REFRESH = false; PL.data = null; refreshMeta(); }
   if (v === 'analytics' && TAB === 'Reja') setTab('Reja');
@@ -2020,12 +2022,23 @@ function mxRows(d, withCat) {
   return d.bc.filter(r => G[r[0]] && G[r[0]].g === MX.g && (!MX.reg || G[r[0]].region_id === MX.reg) && (!withCat || !MX.cat || r[1] === MX.cat));
 }
 const mxFcount = () => Object.values(st.f).reduce((n, v) => n + (v && v.size ? 1 : 0), 0);
-const mxViewSeg = () => `<div class="qrow"><div class="seg" id="mxView" role="group" aria-label="Ko'rinish">${[['mx', 'Matritsa'], ['vit', 'Vitrina'], ['zak', 'Zakaz']]
-  .map(([k, l]) => `<button data-v="${k}" aria-pressed="${MX.view === k}">${l}</button>`).join('')}</div>
-  <button class="tchip mxfil${mxFcount() ? ' on' : ''}" id="mxFil">Filtr${mxFcount() ? ' · ' + mxFcount() : ''}</button></div>`;
+const mxViewSeg = () => { mxFilBtn(); return `<div class="seg" id="mxView" role="group" aria-label="Ko'rinish">${[['mx', 'Matritsa'], ['vit', 'Vitrina'], ['zak', 'Zakaz']]
+  .map(([k, l]) => `<button data-v="${k}" aria-pressed="${MX.view === k}">${l}</button>`).join('')}</div>`; };
+function mxFilBtn() {   // Matritsa tabida «Filtr» — sarlavha yonida (davr va Summa/Dona bu yerda kerak emas)
+  const b = $('topFil'); if (!b) return;
+  const n = mxFcount();
+  b.textContent = n ? `Filtr · ${n}` : 'Filtr';
+  b.classList.toggle('on', !!n);
+}
 function mxWireView(host) {
-  const fb = $('mxFil'); if (fb) fb.onclick = openFilterSheet;
   host.querySelectorAll('#mxView [data-v]').forEach(b => b.onclick = () => { if (MX.view === b.dataset.v) return; MX.view = b.dataset.v; MX.lim = 40; renderMxList(host); });
+}
+function usd(v) {
+  if (v == null) return '—';
+  const a = Math.abs(v);
+  if (a >= 1e6) return nf2.format(v / 1e6) + ' mln $';
+  if (a >= 1e3) return nf0.format(v / 1e3) + ' ming $';
+  return nf0.format(v) + ' $';
 }
 async function renderMxOrder(host, d) {
   const seq = MX.seq;
@@ -2039,10 +2052,10 @@ async function renderMxOrder(host, d) {
   const whCard = w => {
     const open = MX.wOpen.has(w.id);
     return `<div class="card mxcat"><button class="mxwh" data-w="${w.id}"><span><b>${open ? '▾' : '▸'} ${esc(w.short)}</b>
-        <span class="hint">${nf0.format(w.pos)} poz · ${w.branches} filial</span></span><span class="q num">${nf0.format(Math.round(w.z))} dona</span></button>
+        <span class="hint">${nf0.format(w.pos)} poz · ${w.branches} filial</span></span><span class="qq"><span class="q num">${nf0.format(Math.round(w.z))} dona</span>${w.usd ? `<span class="hint num">≈ ${usd(w.usd)}</span>` : ''}</span></button>
       ${open ? `<div class="mxzt head"><span>SKU</span><span>matritsa</span><span>${od.days} kun</span><span>omborda</span><span>zakaz</span></div>
         ${w.items.map(i => `<div class="mxzt"><span class="n">${esc(i.name)}<small>${esc(i.cat)}${i.nbr ? ` · ${i.nbr} filialga` : ''}</small></span>
-          <span class="num">${nf0.format(Math.round(i.m))}</span><span class="num">${nf0.format(Math.round(i.s))}</span><span class="num mu">${nf0.format(Math.round(i.h))}</span><span class="num z">${nf0.format(Math.round(i.z))}</span></div>`).join('')
+          <span class="num">${nf0.format(Math.round(i.m))}</span><span class="num">${nf0.format(Math.round(i.s))}</span><span class="num mu">${nf0.format(Math.round(i.h))}</span><span class="num z">${nf0.format(Math.round(i.z))}${i.usd != null ? `<small>${nf0.format(Math.round(i.usd))} $</small>` : ''}</span></div>`).join('')
           || `<div class="empty">Zakaz kerak emas</div>`}
         ${w.more ? `<span class="hint mxmore">Yana ${nf0.format(w.more)} ta pozitsiya — Excel'da</span>` : ''}` : ''}</div>`;
   };
@@ -2050,9 +2063,9 @@ async function renderMxOrder(host, d) {
     <div class="hint">qoldiq: filial ${dm(od.snap.b)} · ombor ${dm(od.snap.w)} · savdo ${sd}${MX.cat && d && d.cats ? '' : ''}</div>
     ${od.snap.w ? '' : `<div class="mxwarn">Ombor qoldig'i yuklanmagan — zakaz omborni hisobga olmaydi.</div>`}
     <div class="tot mxtot"><span class="l">Ta'minotchiga zakaz · ${od.whs.length} ombor</span>
-      <div class="r1"><span class="v num">${nf0.format(Math.round(T.z))} dona</span><span class="num">${nf0.format(T.pos)} pozitsiya</span></div>
+      <div class="r1"><span class="v num">${nf0.format(Math.round(T.z))} dona</span><span class="num">${T.usd ? `≈ <b>${usd(T.usd)}</b> · ` : ''}${nf0.format(T.pos)} poz.</span></div>
       <span class="l num">matritsa uchun ${nf0.format(Math.round(T.m))} + ${od.days} kunlik savdo ${nf0.format(Math.round(T.s))} − omborda bor ${nf0.format(Math.round(T.h))}</span></div>
-    <div class="hint">Zakaz = filiallarda yetishmagan «Turishi» + ${od.days} kunlik savdo (shu ombor filiallari) − ombor qoldig'i. Manfiy bo'lsa — zakaz yo'q. Faqat matritsa SKU'lari.</div>
+    <div class="hint">Zakaz = filiallarda yetishmagan «Turishi» + ${od.days} kunlik savdo (shu ombor filiallari) − ombor qoldig'i. Manfiy bo'lsa — zakaz yo'q. Faqat matritsa SKU'lari. $ — ombordagi A sektor narxi (bo'lmasa — filial kirim narxi), so'mdagisi bot kursi bilan.${T.nop ? ` Narxi topilmagan: ${nf0.format(T.nop)} poz.` : ''}</div>
     ${od.whs.map(whCard).join('') || `<div class="card"><div class="empty">Zakaz uchun ma'lumot yo'q</div></div>`}
     ${od.whs.length ? `<button class="btn mxzx" id="mxZx">⬇ Zakaz Excel — botga yuborish</button>
       <span class="hint" style="text-align:center">har ombor alohida varaq + «Ombordan yuborish» (filial × SKU)</span>` : ''}`;
