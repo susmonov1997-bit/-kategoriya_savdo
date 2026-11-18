@@ -128,7 +128,7 @@ async def company_totals(con, f: Filters, dim: str | None = None) -> dict[str, d
                    sum(e.qty) FILTER (WHERE {cur}) c_qty, count(DISTINCT e.sale_date) FILTER (WHERE {cur}) c_days,
                    sum(e.amount) FILTER (WHERE NOT {cur}) p_amount, sum(e.amount - e.cost) FILTER (WHERE NOT {cur}) p_gross,
                    sum(e.qty) FILTER (WHERE NOT {cur}) p_qty, count(DISTINCT e.sale_date) FILTER (WHERE NOT {cur}) p_days
-            FROM company_enriched e JOIN branches b ON b.id = e.branch_id
+            FROM {'company_enriched_usd' if f.cur == 'usd' else 'company_enriched'} e JOIN branches b ON b.id = e.branch_id
             WHERE {' AND '.join(conds)} GROUP BY 1""", *params)
     return {r["key"]: {k: float(r[k] or 0) for k in ("c_amount", "c_gross", "c_qty", "c_days",
                                                       "p_amount", "p_gross", "p_qty", "p_days")} for r in rows}
@@ -534,7 +534,7 @@ async def _attributes(f: Filters, request: Request, user: User = Depends(current
     return {"blocks": out}
 
 
-async def _plan(request: Request, year: int | None = None, user: User = Depends(current_user)):
+async def _plan(request: Request, year: int | None = None, user: User = Depends(current_user), cur: str = "uzs"):
     """Reja va fakt: har bir kategoriya uchun 12 oylik massivlar. Bajarilish %, davr rejasi va prognoz —
     mijozda (data_to bo'yicha) hisoblanadi. Kategoriya menejeriga faqat o'z kategoriyalari rejasi ko'rinadi."""
     pool = request.app.state.pool
@@ -565,14 +565,23 @@ async def _plan(request: Request, year: int | None = None, user: User = Depends(
         from datetime import date as _date
         rows = await pool.fetch(
             """SELECT extract(month FROM e.sale_date)::int m, p.category_id cid, sum(e.amount) a, sum(e.margin) g
-               FROM sales_fact e JOIN products p USING (product_id)
+               FROM {'sales_fact_usd' if cur == 'usd' else 'sales_fact'} e JOIN products p USING (product_id)
                WHERE e.sale_date BETWEEN $1 AND $2 AND p.category_id = ANY($3::int[]) GROUP BY 1, 2""",
             _date(year, 1, 1), _date(year, 12, 31), list(ids))
         for r in rows:
             d = ids[r["cid"]]
             d["fact_amount"][r["m"] - 1] = float(r["a"] or 0)
             d["fact_gross"][r["m"] - 1] = float(r["g"] or 0)
-    return {"year": year, "years": years, "data_from": data_from, "data_to": data_to,
+    if cur == "usd":                 # reja so'mda — har oy o'sha oyning 15-kunidagi kurs bilan
+        from datetime import date as _d2
+        mr = []
+        for m in range(12):
+            mr.append(float(await pool.fetchval("SELECT rate FROM fx_periods WHERE $1 >= valid_from AND $1 < valid_to",
+                                                _d2(year, m + 1, 15)) or 0))
+        for d in out.values():
+            for k in ("plan_amount", "plan_gross"):
+                d[k] = [(v / mr[i] if v is not None and mr[i] else None) for i, v in enumerate(d[k])]
+    return {"year": year, "years": years, "data_from": data_from, "data_to": data_to, "cur": cur,
             "cats": sorted(out.values(), key=lambda d: (d["grp"], -sum(v or 0 for v in d["plan_amount"])))}
 
 
@@ -634,8 +643,9 @@ async def attributes(f: Filters, request: Request, user: User = Depends(current_
 
 
 @app.get("/api/plan")
-async def plan(request: Request, year: int | None = None, user: User = Depends(current_user)):
-    return await cached(request, user, "plan", year, lambda: _plan(request, year, user))
+async def plan(request: Request, year: int | None = None, cur: str = "uzs", user: User = Depends(current_user)):
+    cur = "usd" if cur == "usd" else "uzs"
+    return await cached(request, user, "plan", [year, cur], lambda: _plan(request, year, user, cur))
 
 
 # ---------------------------------------------------------------------------

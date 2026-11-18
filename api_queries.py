@@ -185,7 +185,7 @@ WITH pd AS (
     SELECT e.sale_date, e.is_bonus, e.qty, e.amount, e.gross_margin, e.supplier_income, e.margin,
            e.branch_id, e.region_id, e.cluster_id, pd.*, (cd.d IS NOT NULL) AS cov,
            CASE WHEN e.sale_date BETWEEN {c1} AND {c2} THEN 'c' ELSE 'p' END AS per
-    FROM sales_fact e
+    FROM {'sales_fact_usd' if f.cur == 'usd' else 'sales_fact'} e
     JOIN pd USING (product_id)
     LEFT JOIN cdays cd ON cd.d = e.sale_date
     WHERE {' AND '.join(where)}

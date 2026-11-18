@@ -17,12 +17,16 @@ const nf2 = new Intl.NumberFormat('ru-RU', {maximumFractionDigits: 2, minimumFra
 const nf0 = new Intl.NumberFormat('ru-RU', {maximumFractionDigits: 0});
 function money(v) {
   if (v == null) return '—';
-  const a = Math.abs(v);
-  if (a >= 1e9) return nf2.format(v / 1e9) + ' mlrd';
-  if (a >= 1e6) return nf1.format(v / 1e6) + ' mln';
-  if (a >= 1e3) return nf0.format(v / 1e3) + ' ming';
-  return nf0.format(v);
+  const a = Math.abs(v), u = USD() ? ' $' : '';
+  if (a >= 1e9) return nf2.format(v / 1e9) + ' mlrd' + u;
+  if (a >= 1e6) return nf1.format(v / 1e6) + ' mln' + u;
+  if (a >= 1e3) return nf0.format(v / 1e3) + ' ming' + u;
+  return nf0.format(v) + u;
 }
+// $ rejimi: savdo ko'rsatkichlarini server dollarda qaytaradi (har kun o'sha kunning bot kursi bilan);
+// qoldiq va matritsadagi so'mdagi qiymatlar (tannarx) — joriy bot kursi bilan (qoldiq — bugungi holat)
+const USD = () => typeof st !== 'undefined' && st.cur === 'usd';
+const smoney = v => (v == null ? '—' : money(USD() && META && META.fx_rate ? v / META.fx_rate : v));
 const pct = v => v == null ? '—' : nf1.format(v) + '%';
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 function pill(v, pp) {
@@ -66,7 +70,7 @@ async function api(path, body) {
 // ---------------------------------------------------------------- holat
 let META = null;
 const st = {
-  cat: null, from: null, to: null, preset: 'month', compare: 'mom',
+  cat: null, from: null, to: null, preset: 'month', compare: 'mom', cur: 'uzs',
   f: {},                 // dim -> Set(key)   (kalitlar API'dagidek matn)
   mode: 'tree',          // tree (daraxt) | pivot (kesma)
   rows: 'region', cols: 'attr:0', sort: 'amount',
@@ -137,7 +141,7 @@ const NUM_DIMS = {region: 'region_ids', cluster: 'cluster_ids', branch: 'branch_
 function filters() {
   const F = {scope: st.cat, date_from: st.from, date_to: st.to, compare: st.compare,
              region_ids: [], cluster_ids: [], branch_ids: [], product_ids: [], brands: [], statuses: [], attrs: {},
-             category_ids: [], owners: [], share_by: st.metric};
+             category_ids: [], owners: [], share_by: st.metric, cur: st.cur};
   for (const d in st.f) {
     const vals = [...st.f[d]];
     if (!vals.length) continue;
@@ -201,9 +205,16 @@ function renderHeader() {
   const per = (st.preset && PERIOD_SHORT[st.preset]) || periodText();
   $('perBtn').innerHTML = `${esc(per)}${st.compare === 'yoy' ? ' · o\'tgan yil' : ''} <span class="car">▾</span>`;
   $('filBtn').innerHTML = `Filtr${nf ? ` <span class="badge">${nf}</span>` : ''}`;
+  const segKey = () => (st.metric === 'qty' ? 'qty' : st.cur === 'usd' ? 'usd' : 'amount');
   document.querySelectorAll('#metricSeg button').forEach(b => {
-    b.setAttribute('aria-pressed', b.dataset.m === st.metric);
-    b.onclick = () => { if (st.metric === b.dataset.m) return; st.metric = b.dataset.m; resetView(); load(); };
+    b.setAttribute('aria-pressed', b.dataset.m === segKey());
+    b.onclick = () => {
+      if (segKey() === b.dataset.m) return;
+      const m = b.dataset.m, oldCur = st.cur;
+      if (m === 'qty') st.metric = 'qty'; else { st.metric = 'amount'; st.cur = m === 'usd' ? 'usd' : 'uzs'; }
+      if (st.cur !== oldCur) { PL.data = null; if (typeof MX !== 'undefined') MX.bd = null; }
+      resetView(); load();
+    };
   });
   $('filBtn').classList.toggle('acc', nf > 0);
   const chips = [];
@@ -1355,7 +1366,7 @@ async function loadPlan(year) {
   PL.loading = true;
   $('plBody').classList.add('loading');
   try {
-    const d = await api('plan' + (year ? `?year=${year}` : ''));
+    const d = await api('plan?cur=' + st.cur + (year ? `&year=${year}` : ''));
     PL.data = d; PL.year = d.year;
     if (PL.month == null || year) {
       const to = d.data_to;
@@ -1567,7 +1578,7 @@ const lvPill = (lv, d) => `<span class="qp l${lv}">${d == null ? '—' : nf0.for
 // ---------------------------------------------------------------- boshqa tablardagi qator
 function stockLine(x, sku) {
   if (!x) return '';
-  const val = sku || MQ() ? `<b>${nf0.format(x.stock)}</b> dona` : `<b>${money(x.value)}</b>`;
+  const val = sku || MQ() ? `<b>${nf0.format(x.stock)}</b> dona` : `<b>${smoney(x.value)}</b>`;
   const oos = x.oos ? (sku ? `<span>${nf0.format(x.oos)} filialda yo'q</span>` : `<span>OOS <b>${nf0.format(x.oos)}</b></span>`) : '';
   return `<span class="qline"><span>📦 qoldiq ${val}</span>${dPill(x.days)}${oos}</span>`;
 }
@@ -1622,9 +1633,9 @@ async function stockPlanCard(host) {
   const card = document.createElement('div');
   card.className = 'card qplan';
   card.innerHTML = `<div class="sh"><span class="label">📦 Qoldiq rejani bajarishga yetadimi?</span><span class="hint">${dm(r.snap && (r.snap.b || r.snap.w))} holati</span></div>
-    <div class="m2">Oy oxirigacha kerakli savdo — <b>${money(need)}</b></div>
-    <div class="m2">Qoldiq — <b>${money(have)}</b> <span class="hint">filial tannarxda + ombor A sektor narxida</span></div>
-    <div class="m2">${gap > 0 ? `<span class="qp lo">${money(gap)} yetmaydi</span>` : `<span class="qp ok">yetadi · zaxira ${money(-gap)}</span>`}
+    <div class="m2">Oy oxirigacha kerakli savdo — <b>${smoney(need)}</b></div>
+    <div class="m2">Qoldiq — <b>${smoney(have)}</b> <span class="hint">filial tannarxda + ombor A sektor narxida</span></div>
+    <div class="m2">${gap > 0 ? `<span class="qp lo">${smoney(gap)} yetmaydi</span>` : `<span class="qp ok">yetadi · zaxira ${smoney(-gap)}</span>`}
       ${short.length ? `<span class="hint">yetmaydi: ${short.slice(0, 4).map(x => esc(x.name)).join(', ')}${short.length > 4 ? ` +${short.length - 4}` : ''}</span>` : ''}</div>`;
   host.querySelector('.qplan')?.remove();
   host.insertBefore(card, host.children[1] || null);
@@ -1682,7 +1693,7 @@ function sigCard(x) {
   return `<button class="al l${x.level}" data-t="${x.t}" data-id="${x.id}" data-c="${x.cat_id}" data-b="${esc(x.brand)}">
     <span class="p">${ic} <b>${esc(x.name)}</b>${x.sub ? ` · ${esc(x.sub)}` : ''} · ${esc(x.cat || '')}${x.new ? '<span class="nw2">yangi</span>' : ''}</span>
     <span class="w"><b>${esc(x.brand)}</b>${lvPill(x.level, x.days)}</span>
-    <span class="k">${lines.map(l => `<span>${l}</span>`).join('')}<span>${MQ() ? `savdo <b>≈ ${nf1.format(x.sales_day || 0)}</b> dona/kun` : `<b>≈ ${money(x.risk)}</b>/kun xavf`}</span></span></button>`;
+    <span class="k">${lines.map(l => `<span>${l}</span>`).join('')}<span>${MQ() ? `savdo <b>≈ ${nf1.format(x.sales_day || 0)}</b> dona/kun` : `<b>≈ ${smoney(x.risk)}</b>/kun xavf`}</span></span></button>`;
 }
 async function renderSignals(host, more) {
   const seq = ++QS.seq;
@@ -1757,7 +1768,7 @@ function skuRows(items, locType) {
     const alt = x.other && x.other.length ? `<span>boshqa omborda: ${x.other.map(o => `${esc(o.name.replace(' омбори', ''))} ${nf0.format(o.qty)}`).join(', ')}</span>` : '';
     return `<div class="al ${lv == null ? 'l9' : 'l' + lv}"><span class="w"><b>${esc(x.name)}</b>${dPill(x.days)}</span>
       <span class="k"><span>${locType === 'w' ? 'omborda' : 'qoldiq'} <b>${nf0.format(x.stock)}</b></span>${locType === 'w' ? `<span>filiallarda ${nf0.format(x.br_stock)}</span>` : (x.wh_stock ? `<span>omborida ${nf0.format(x.wh_stock)}</span>` : '')}
-      ${x.oos ? `<span>${locType === 'b' ? 'tugagan' : `${nf0.format(x.oos)} filialda yo'q`}</span>` : ''}${x.risk ? `<span>${MQ() ? `<b>${nf1.format(x.sales_day || 0)}</b> dona/kun` : `<b>${money(x.risk)}</b>/kun`}</span>` : ''}${alt}</span></div>`;
+      ${x.oos ? `<span>${locType === 'b' ? 'tugagan' : `${nf0.format(x.oos)} filialda yo'q`}</span>` : ''}${x.risk ? `<span>${MQ() ? `<b>${nf1.format(x.sales_day || 0)}</b> dona/kun` : `<b>${smoney(x.risk)}</b>/kun`}</span>` : ''}${alt}</span></div>`;
   }).join('');
 }
 async function openCellSheet(q, title) {
@@ -1840,7 +1851,7 @@ async function renderDetail() {
         + gc('Filiallar', `${nf0.format(t.br_stock)} dona`, dTxtK(t.br_days))
         : gc('Qoldiq', `${nf0.format(t.br_stock)} dona`, prev ? `oldin ${nf0.format(prev.stock)}` : '')
           + gc('Omborida', `${nf0.format(t.wh_stock)} dona`, '')}
-        ${gc('Savdo', `${nf1.format(t.sales_day || 0)} dona/kun`, d.accel && Math.abs(d.accel - 1) >= 0.1 ? `7 kunda ${d.accel > 1 ? '▲' : '▼'} ${nf0.format(Math.abs(Math.round((d.accel - 1) * 100)))}% · ≈ ${money(t.risk)}/kun` : `≈ ${money(t.risk)}/kun`)}</div></div>
+        ${gc('Savdo', `${nf1.format(t.sales_day || 0)} dona/kun`, d.accel && Math.abs(d.accel - 1) >= 0.1 ? `7 kunda ${d.accel > 1 ? '▲' : '▼'} ${nf0.format(Math.abs(Math.round((d.accel - 1) * 100)))}% · ≈ ${smoney(t.risk)}/kun` : `≈ ${smoney(t.risk)}/kun`)}</div></div>
     ${isW ? linkWarn(d.links) : ''}
     <div class="sec"><h2>Savdo sur'ati</h2><span class="hint">kunlik dona · 30 kun</span></div>
     <div class="card">${salesChart(d)}${start ? `<div class="hint">🟡 ${dm(start)} dan 15 kundan pastga tushgan</div>` : ''}</div>
@@ -1867,16 +1878,16 @@ async function renderOverview(host) {
   const bar = days => `<span class="dbar"><i style="left:${Math.min(100, (days == null ? 100 : days / 60 * 100)).toFixed(0)}%"></i></span>`;
   host.innerHTML = `${linkWarn(d.links)}<div class="hint">${snapNote(d.snap)}</div>
     <div class="qtot"><div class="r1"><span>Jami qoldiq</span><span class="pl">${dTxtK(t.days)}</span></div>
-      <div class="big">${MQ() ? nf0.format(t.br_stock + t.wh_stock) + ' dona' : money(t.br_value + t.wh_value)}</div>
-      <div class="g3">${MQ() ? gc('Filiallar', `${nf0.format(t.br_stock)} dona`, money(t.br_value)) + gc('Omborlar', `${nf0.format(t.wh_stock)} dona`, money(t.wh_value))
-        : gc('Filiallar', money(t.br_value), `${nf0.format(t.br_stock)} dona · tannarx`) + gc('Omborlar', money(t.wh_value), `${nf0.format(t.wh_stock)} dona · A narx×kurs`)}${gc('OOS', nf0.format(t.oos), 'filial×SKU')}</div></div>
+      <div class="big">${MQ() ? nf0.format(t.br_stock + t.wh_stock) + ' dona' : smoney(t.br_value + t.wh_value)}</div>
+      <div class="g3">${MQ() ? gc('Filiallar', `${nf0.format(t.br_stock)} dona`, smoney(t.br_value)) + gc('Omborlar', `${nf0.format(t.wh_stock)} dona`, smoney(t.wh_value))
+        : gc('Filiallar', smoney(t.br_value), `${nf0.format(t.br_stock)} dona · tannarx`) + gc('Omborlar', smoney(t.wh_value), `${nf0.format(t.wh_stock)} dona · A narx×kurs`)}${gc('OOS', nf0.format(t.oos), 'filial×SKU')}</div></div>
     ${listCards(d.lists)}
     <div class="sec"><h2>Omborlar</h2><span class="hint">o'z filiallari savdosiga</span></div>
-    ${d.warehouses.map(w => `<button class="li can qw" data-w="${w.id}"><span class="r1"><span class="n">🏬 ${esc(w.name)}</span><span class="v">${MQ() ? nf0.format(w.stock + w.br_stock) + ' dona' : money(w.value)}</span></span>
+    ${d.warehouses.map(w => `<button class="li can qw" data-w="${w.id}"><span class="r1"><span class="n">🏬 ${esc(w.name)}</span><span class="v">${MQ() ? nf0.format(w.stock + w.br_stock) + ' dona' : smoney(w.value)}</span></span>
       <span class="m">${dPill(w.days)}<span>omborda <b>${nf0.format(w.stock)}</b> dona</span><span>filiallarda ${dTxtK(w.br_days)}</span><span>OOS ${nf0.format(w.oos)}</span></span>
       <span class="m"><span>${esc(w.regions.join(', '))}</span></span>${bar(w.days)}</button>`).join('')}
     <div class="sec"><h2>Hududlar</h2><span class="hint">filial qoldig'i · kam qolgani tepada</span></div>
-    ${d.regions.map(r => `<button class="li can qr" data-r="${r.id}"><span class="r1"><span class="n">${esc(r.name)}</span><span class="v">${MQ() ? nf0.format(r.stock) + ' dona' : money(r.value)}</span></span>
+    ${d.regions.map(r => `<button class="li can qr" data-r="${r.id}"><span class="r1"><span class="n">${esc(r.name)}</span><span class="v">${MQ() ? nf0.format(r.stock) + ' dona' : smoney(r.value)}</span></span>
       <span class="m">${dPill(r.days)}<span><b>${nf0.format(r.stock)}</b> dona</span><span>${r.branches} filial</span><span>OOS ${nf0.format(r.oos)}</span></span>${bar(r.days)}</button>`).join('')}
     <p class="foot">Filial qoldig'i — tannarxda (Kirim So'm), ombor qoldig'i — «A сектор» narxi × kurs (${nf0.format(d.rate || 0)}). Necha kunga yetadi — qoldiq ÷ 30 kunlik o'rtacha savdo.</p>`;
   host.querySelectorAll('[data-list]').forEach(b => b.onclick = () => openDetail({list: b.dataset.list}));
@@ -1888,8 +1899,8 @@ function listCards(l) {
   if (!l) return '';
   return `<div class="qlc">
     <button class="qlc-s" data-list="send"><span class="t">🚚 Ombordan yuborish</span><b>${nf0.format(l.send.positions)}</b><span>poz · ${nf0.format(l.send.qty)} dona</span></button>
-    <button class="qlc-o" data-list="over"><span class="t">📈 Ortiqcha</span><b>${MQ() ? nf0.format(l.over.qty || 0) + ' dona' : money(l.over.value)}</b><span>&gt; 90 kun · ${nf0.format(l.over.positions)} poz</span></button>
-    <button class="qlc-i" data-list="idle"><span class="t">💤 Harakatsiz</span><b>${MQ() ? nf0.format(l.idle.qty || 0) + ' dona' : money(l.idle.value)}</b><span>60 kun sotuvsiz · ${nf0.format(l.idle.positions)}</span></button></div>`;
+    <button class="qlc-o" data-list="over"><span class="t">📈 Ortiqcha</span><b>${MQ() ? nf0.format(l.over.qty || 0) + ' dona' : smoney(l.over.value)}</b><span>&gt; 90 kun · ${nf0.format(l.over.positions)} poz</span></button>
+    <button class="qlc-i" data-list="idle"><span class="t">💤 Harakatsiz</span><b>${MQ() ? nf0.format(l.idle.qty || 0) + ' dona' : smoney(l.idle.value)}</b><span>60 kun sotuvsiz · ${nf0.format(l.idle.positions)}</span></button></div>`;
 }
 async function stockExport(btn) {
   const t = btn.textContent; btn.disabled = true; btn.textContent = 'Tayyorlanmoqda…';
@@ -1931,14 +1942,14 @@ async function renderListView(host, D_) {
       const open = D_.open.has(String(g.id)), n = D_.show[g.id] || 10;
       const items = open ? g.items.slice(0, n).map(x => `<div class="li"><span class="r1"><span class="n">${esc((D_.by || 'w') === 'b' ? x.name : x.branch)}</span><span class="v">+${nf0.format(x.send)} dona</span></span>
         <span class="m"><span>${esc((D_.by || 'w') === 'b' ? `${shortW(x.wname)} omboridan` : x.name)}</span></span>
-        <span class="m">${dPill(x.days)}<span>bor <b>${nf0.format(x.have)}</b></span><span>me'yor <b>${nf0.format(x.norm)}</b></span><span>omborda <b>${nf0.format(x.wh)}</b></span>${x.risk ? `<span>savdo ≈ ${MQ() ? nf1.format(x.sd || 0) + ' dona' : money(x.risk)}/kun</span>` : ''}</span></div>`).join('') : '';
+        <span class="m">${dPill(x.days)}<span>bor <b>${nf0.format(x.have)}</b></span><span>me'yor <b>${nf0.format(x.norm)}</b></span><span>omborda <b>${nf0.format(x.wh)}</b></span>${x.risk ? `<span>savdo ≈ ${MQ() ? nf1.format(x.sd || 0) + ' dona' : smoney(x.risk)}/kun</span>` : ''}</span></div>`).join('') : '';
       const more = open && g.items.length > n ? `<button class="more" data-more="${esc(g.id)}">Yana ${nf0.format(g.items.length - n)} ta ▾</button>` : '';
       return `<button class="whh" data-open="${esc(g.id)}"><b>${open ? '▾' : '▸'} ${(D_.by || 'w') === 'b' ? '🏪' : '🏬'} ${esc(g.name)}</b><span>${nf0.format(g.positions)} poz · ${nf0.format(g.qty)} dona</span></button>${items}${more}`;
     }).join('') : `<div class="card"><div class="empty">Yuboriladigan tovar yo'q — filiallarda yetarli yoki omborda ham yo'q 👍</div></div>`;
     body += `<p class="foot">Filialda ${d.send_days} kundan kamga yetadigan SKU, uning omborida bor. Me'yor — ${esc(d.norm)} (30 kunlik o'rtacha kunlik savdo × ${d.norm_days}). Yuboriladi = me'yor − bor, ombordagidan oshmaydi; ombor qoldig'i eng kam qolgan filiallarga birinchi taqsimlanadi.</p>`;
   } else {
     const n = D_.show.list || 30, items = d.items || [];
-    body = items.length ? items.slice(0, n).map(x => `<div class="li"><span class="r1"><span class="n">${esc(x.name)}</span><span class="v">${MQ() ? nf0.format(x.stock) + ' dona' : money(x.value)}</span></span>
+    body = items.length ? items.slice(0, n).map(x => `<div class="li"><span class="r1"><span class="n">${esc(x.name)}</span><span class="v">${MQ() ? nf0.format(x.stock) + ' dona' : smoney(x.value)}</span></span>
       <span class="m">${q.list === 'over' ? `<span class="qp hi">${x.days == null ? '30 kun sotuvsiz' : nf0.format(x.days) + ' kunga'}</span>` : `<span class="qp hi">${d.idle_days}+ kun sotuvsiz</span>`}<span><b>${nf0.format(x.stock)}</b> dona</span>
         <span>${esc(shortW(x.zone))}${x.wh_stock ? ` · omborda ${nf0.format(x.wh_stock)}` : ''}${x.branches ? ` · ${x.branches} filialda ${nf0.format(x.br_stock)}` : ''}</span></span>
       ${x.top.length ? `<span class="m"><span>eng ko'p: ${x.top.map(t => `${esc(t.name.replace(/ filiali$/, ''))} — ${nf0.format(t.qty)}`).join(', ')}${x.branches > x.top.length ? ' …' : ''}</span></span>` : ''}</div>`).join('')
@@ -1947,8 +1958,8 @@ async function renderListView(host, D_) {
     body += `<p class="foot">Zona — ombor va u ta'minlaydigan filiallar birga. ${q.list === 'over' ? `Ortiqcha — zona qoldig'i ${d.over_days} kundan ko'pga yetadi (30 kunlik savdo bo'yicha).` : `Harakatsiz — qoldig'i bor, ${d.idle_days} kunda zonada bitta ham sotilmagan.`} Qiymati: filialda tannarx, omborda A narx × kurs.</p>`;
   }
   const tot = q.list === 'send' ? `${nf0.format(d.summary.send.positions)} poz · ${nf0.format(d.summary.send.qty)} dona`
-    : q.list === 'over' ? `${nf0.format(d.summary.over.positions)} poz · ${MQ() ? nf0.format(d.summary.over.qty || 0) + ' dona' : money(d.summary.over.value)}`
-    : `${nf0.format(d.summary.idle.positions)} poz · ${MQ() ? nf0.format(d.summary.idle.qty || 0) + ' dona' : money(d.summary.idle.value)}`;
+    : q.list === 'over' ? `${nf0.format(d.summary.over.positions)} poz · ${MQ() ? nf0.format(d.summary.over.qty || 0) + ' dona' : smoney(d.summary.over.value)}`
+    : `${nf0.format(d.summary.idle.positions)} poz · ${MQ() ? nf0.format(d.summary.idle.qty || 0) + ' dona' : smoney(d.summary.idle.value)}`;
   host.innerHTML = `<button class="tchip back" id="qBack">‹ Orqaga</button>
     <div class="qdh"><h2>${LIST_T[q.list]}</h2><div class="hint">${tot} · ${snapNote(d.snap)}</div></div>
     ${q.list === 'send' ? `<div class="card nrm">
@@ -2360,9 +2371,9 @@ async function renderMxBranch(host) {
   }).join('');
   const ex = d.extra;
   const exHtml = ex && ex.n ? `<div class="card mxcat"><div class="h"><b>Matritsadan tashqari qoldiq</b><span class="num" style="color:var(--s7)">${nf0.format(ex.qty)} dona</span></div>
-      <span class="hint num">filialda turibdi, lekin matritsada yo'q · ${ex.n} SKU · tannarxi ${money(ex.cost)}</span>
+      <span class="hint num">filialda turibdi, lekin matritsada yo'q · ${ex.n} SKU · tannarxi ${smoney(ex.cost)}</span>
       ${ex.items.slice(0, MX.exLim).map(x => `<div class="mxit"><span class="n">${esc(x.name)}</span><span class="q num">${nf0.format(x.qty)} dona</span>
-        <span class="s num">${esc(x.cat)} · tannarx ${money(x.cost)} · 30 kun savdo ${nf0.format(x.s30)}</span></div>`).join('')}
+        <span class="s num">${esc(x.cat)} · tannarx ${smoney(x.cost)} · 30 kun savdo ${nf0.format(x.s30)}</span></div>`).join('')}
       ${Math.min(ex.items.length, ex.n) > MX.exLim ? `<button class="more" id="mxExMore">Yana ${Math.min(ex.items.length, ex.n) - MX.exLim} ta ▾</button>` : ''}
       ${ex.n > ex.items.length ? `<span class="hint">eng qimmat ${ex.items.length} tasi ko'rsatildi</span>` : ''}</div>` : '';
   host.innerHTML = `<button class="tchip back" id="mxBack">‹ ${MX.g === 'm' ? "Mini do'konlar" : 'Filiallar'}</button>

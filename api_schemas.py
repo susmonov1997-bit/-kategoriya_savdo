@@ -27,7 +27,8 @@ class Filters(BaseModel):
     product_ids: list[int] = []
     category_ids: list[int] = []       # ko'p kategoriyali doirada kategoriya filtri
     owners: list[str] = []             # mas'ul xodim filtri
-    share_by: Literal["amount", "qty"] = "amount"   # ulush va tartib: savdo summasi yoki dona bo'yicha
+    share_by: Literal["amount", "qty"] = "amount"
+    cur: Literal["uzs", "usd"] = "uzs"   # pul ko'rsatkichlari: so'm yoki $ (har kun o'sha kunning bot kursi bilan)   # ulush va tartib: savdo summasi yoki dona bo'yicha
     # xususiyatlar: {"1": ["176–190 sm"], "0": ["Но фрост"]} — kalit slot raqami, qiymat — filtr qiymatlari
     attrs: dict[int, list[str]] = {}
 

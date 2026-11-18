@@ -10,7 +10,7 @@ log = logging.getLogger(__name__)
 
 FACT_SELECT = """
 SELECT e.sale_date, e.branch_id, b.region_id, b.cluster_id, e.product_id, e.is_bonus,
-       e.qty::float8, e.amount::float8, e.gross_margin::float8, e.supplier_income::float8, e.margin::float8
+       e.qty::float8, e.amount::float8, e.gross_margin::float8, e.supplier_income::float8, e.margin::float8, e.rate::float8
 FROM sales_enriched e JOIN branches b ON b.id = e.branch_id"""
 
 
