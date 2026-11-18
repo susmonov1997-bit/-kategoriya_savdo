@@ -84,11 +84,10 @@ async def matrix_order_cb(c: CallbackQuery, pool: asyncpg.Pool) -> None:
         await c.answer("Faqat adminlar uchun", show_alert=True)
         return
     await c.answer("Tayyorlanmoqda…")
-    from api_matrix import all_cats, order_data, order_fname, order_xlsx, send_list
+    from api_matrix import all_flt, order_data, order_fname, order_xlsx, send_list
     async with pool.acquire() as con:
-        cats = await all_cats(con)
-        d = await order_data(con, cats)
-        ship = await send_list(con, cats)
+        d = await order_data(con, await all_flt(con))
+        ship = await send_list(con, await all_flt(con))
     if not d["whs"]:
         await c.message.answer("Zakaz uchun ma'lumot yo'q (matritsa yoki qoldiq yuklanmagan).")
         return

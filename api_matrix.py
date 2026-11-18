@@ -60,6 +60,18 @@ def _where_branches(f: Filters, params: list) -> str:
     return " AND ".join(c) or "TRUE"
 
 
+def _pf(f: Filters) -> bool:
+    """Tovar filtri bormi (brend, status, SKU, mas'ul, xususiyat) — bunda vitrina va ▲▼ solishtirib bo'lmaydi."""
+    return bool(f.brands or f.statuses or f.product_ids or f.owners or any(v for v in f.attrs.values()))
+
+
+async def _flt(con, f: Filters, user: User):
+    """Filtr SQL yig'uvchisi (api_stock._SQL): pd — tovarlar (doira + barcha tovar filtrlari), bb — filiallar."""
+    from api_stock import _SQL
+    cats, attrs, _ = await _M().scope_ctx(con, f, user)
+    return _SQL(f, cats, attrs)
+
+
 async def _cats(con, f: Filters, user: User) -> list[int]:
     cats, _, _ = await _M().scope_ctx(con, f, user)
     if f.category_ids:
@@ -111,26 +123,23 @@ async def _overview(con, f: Filters, user: User) -> dict:
         return out
     await refresh_daily(con, sn["b"])
 
-    params: list = [cats, sn["b"], sn["w"]]
-    bw = _where_branches(f, params)
-    brand = ""
-    if f.brands:
-        params.append(f.brands)
-        brand = f"AND p.brand = ANY(${len(params)}::text[])"
+    q = await _flt(con, f, user)
+    w_ = q.ctes()
+    D, W = q.p(sn["b"]), q.p(sn["w"])
     rows = await con.fetch(f"""
-WITH bb AS (SELECT b.id branch_id, b.warehouse_id FROM branches b WHERE {bw}),
+WITH {w_},
 m AS (SELECT mr.branch_id, mr.product_id, mr.category_id, max(mr.need_qty) need
-      FROM matrix_rows mr JOIN bb USING (branch_id) JOIN products p USING (product_id)
-      WHERE mr.category_id = ANY($1::int[]) {brand} GROUP BY 1, 2, 3),
+      FROM matrix_rows mr JOIN bb USING (branch_id) JOIN pd USING (product_id)
+      WHERE mr.category_id IS NOT NULL GROUP BY 1, 2, 3),
 j AS (SELECT m.branch_id, m.category_id, m.need, COALESCE(s.qty, 0) have, COALESCE(w.qty, 0) whq
       FROM m JOIN bb USING (branch_id)
-      LEFT JOIN stock_branch s ON s.snap_date = $2 AND s.branch_id = m.branch_id AND s.product_id = m.product_id
-      LEFT JOIN stock_wh w ON w.snap_date = $3 AND w.warehouse_id = bb.warehouse_id AND w.product_id = m.product_id)
+      LEFT JOIN stock_branch s ON s.snap_date = {D} AND s.branch_id = m.branch_id AND s.product_id = m.product_id
+      LEFT JOIN stock_wh w ON w.snap_date = {W} AND w.warehouse_id = bb.warehouse_id AND w.product_id = m.product_id)
 SELECT branch_id, category_id, count(*) pos, count(*) FILTER (WHERE have >= need) ok,
        count(*) FILTER (WHERE have <= 0) miss, count(*) FILTER (WHERE have > 0 AND have < need) low,
        count(*) FILTER (WHERE have < need AND whq > 0) inwh,
        count(*) FILTER (WHERE have <= 0 AND whq > 0) missw, count(*) FILTER (WHERE have > 0) onm
-FROM j GROUP BY 1, 2""", *params)
+FROM j GROUP BY 1, 2""", *q.params)
     cov = {r[0] for r in await con.fetch("SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = $1", sn["b"])}
     vit = await _vitrina(con, cats, sn["b"])
     prev_d = await con.fetchval("SELECT max(snap_date) FROM matrix_daily WHERE snap_date < $1", sn["b"])
@@ -175,7 +184,7 @@ FROM j GROUP BY 1, 2""", *params)
         vt = sum(1 for c in a["cats"] if (v := vit.get((bid, c))) and v[0])
         x.update(ok=a["ok"], miss=a["miss"], low=a["low"], inwh=a["inwh"], vit_full=vf, vit_total=vt,
                  pct=a["ok"] / a["pos"] * 100 if a["pos"] else None, d=None)
-        if bid in prev and prev[bid][0] and not f.brands:
+        if bid in prev and prev[bid][0] and not _pf(f):
             x["d"] = x["pct"] - prev[bid][1] / prev[bid][0] * 100
             K["ppos"] += prev[bid][0]
             K["pok"] += prev[bid][1]
@@ -193,7 +202,7 @@ FROM j GROUP BY 1, 2""", *params)
     #  vitrina sig'imi, turgan model, oldingi pos, oldingi ok]
     out["bc"] = [[r["branch_id"], r["category_id"], r["pos"], r["ok"], r["miss"], r["low"], r["inwh"], r["missw"],
                   r["onm"], *(vit.get((r["branch_id"], r["category_id"])) or (None, 0)),
-                  *(pc.get((r["branch_id"], r["category_id"])) or (None, None))]
+                  *((pc.get((r["branch_id"], r["category_id"])) if not _pf(f) else None) or (None, None))]
                  for r in rows if r["branch_id"] in cov and r["branch_id"] in meta]
     out["cats"] = [{"id": r["id"], "name": r["name"]} for r in await con.fetch(
         "SELECT id, name FROM categories WHERE id = ANY($1::int[]) ORDER BY name", list({r["category_id"] for r in rows}))]
@@ -254,22 +263,21 @@ async def _branch(con, f: MxReq, user: User) -> dict:
         return out
     s_to = sn["s"] or sn["b"]
     s_from = s_to - timedelta(days=29)
-    params = [cats, f.branch_id, sn["b"], sn["w"], b["warehouse_id"], s_from, s_to]
-    brand = ""
-    if f.brands:
-        params.append(f.brands)
-        brand = f"AND p.brand = ANY(${len(params)}::text[])"
+    q = await _flt(con, f, user)
+    w_ = q.ctes()
+    B, D, W, WH, S1, S2 = (q.p(f.branch_id), q.p(sn["b"]), q.p(sn["w"]), q.p(b["warehouse_id"]), q.p(s_from), q.p(s_to))
     items = await con.fetch(f"""
-WITH m AS (SELECT mr.product_id, mr.category_id, max(mr.need_qty)::float8 need, max(mr.product_name) mname
-           FROM matrix_rows mr JOIN products p USING (product_id)
-           WHERE mr.branch_id = $2 AND mr.category_id = ANY($1::int[]) {brand} GROUP BY 1, 2),
-sl AS (SELECT product_id, sum(qty) q FROM sales_fact WHERE branch_id = $2 AND sale_date BETWEEN $6 AND $7 GROUP BY 1)
+WITH {w_},
+m AS (SELECT mr.product_id, mr.category_id, max(mr.need_qty)::float8 need, max(mr.product_name) mname
+      FROM matrix_rows mr JOIN pd USING (product_id)
+      WHERE mr.branch_id = {B} AND mr.category_id IS NOT NULL GROUP BY 1, 2),
+sl AS (SELECT product_id, sum(qty) q FROM sales_fact WHERE branch_id = {B} AND sale_date BETWEEN {S1} AND {S2} GROUP BY 1)
 SELECT m.product_id, m.category_id, c.name cname, COALESCE(p.name, m.mname) name, m.need,
        COALESCE(s.qty, 0)::float8 have, COALESCE(w.qty, 0)::float8 whq, COALESCE(sl.q, 0)::float8 s30
 FROM m JOIN categories c ON c.id = m.category_id LEFT JOIN products p ON p.product_id = m.product_id
-LEFT JOIN stock_branch s ON s.snap_date = $3 AND s.branch_id = $2 AND s.product_id = m.product_id
-LEFT JOIN stock_wh w ON w.snap_date = $4 AND w.warehouse_id = $5 AND w.product_id = m.product_id
-LEFT JOIN sl ON sl.product_id = m.product_id""", *params)
+LEFT JOIN stock_branch s ON s.snap_date = {D} AND s.branch_id = {B} AND s.product_id = m.product_id
+LEFT JOIN stock_wh w ON w.snap_date = {W} AND w.warehouse_id = {WH}::int AND w.product_id = m.product_id
+LEFT JOIN sl ON sl.product_id = m.product_id""", *q.params)
     vit = await _vitrina(con, cats, sn["b"], f.branch_id)
     cs: dict[int, dict] = {}
     for r in items:
@@ -292,22 +300,20 @@ LEFT JOIN sl ON sl.product_id = m.product_id""", *params)
                              sn["b"], f.branch_id)
     out["nodata"] = not cov
 
-    ep = [cats, f.branch_id, sn["b"], s_from, s_to]
-    ebrand = ""
-    if f.brands:
-        ep.append(f.brands)
-        ebrand = f"AND p.brand = ANY(${len(ep)}::text[])"
+    q = await _flt(con, f, user)
+    w_ = q.ctes()
+    B, D, S1, S2 = q.p(f.branch_id), q.p(sn["b"]), q.p(s_from), q.p(s_to)
     ex = await con.fetch(f"""
-WITH mc AS (SELECT DISTINCT category_id FROM matrix_rows WHERE branch_id = $2 AND category_id = ANY($1::int[])),
-mp AS (SELECT DISTINCT product_id FROM matrix_rows WHERE branch_id = $2 AND product_id IS NOT NULL),
-sl AS (SELECT product_id, sum(qty) q FROM sales_fact WHERE branch_id = $2 AND sale_date BETWEEN $4 AND $5 GROUP BY 1)
-SELECT p.product_id, p.name, c.name cname, s.qty::float8 qty, COALESCE(s.cost_uzs, 0)::float8 cost,
+WITH {w_},
+mc AS (SELECT DISTINCT category_id FROM matrix_rows WHERE branch_id = {B} AND category_id IS NOT NULL),
+mp AS (SELECT DISTINCT product_id FROM matrix_rows WHERE branch_id = {B} AND product_id IS NOT NULL),
+sl AS (SELECT product_id, sum(qty) q FROM sales_fact WHERE branch_id = {B} AND sale_date BETWEEN {S1} AND {S2} GROUP BY 1)
+SELECT p.product_id, p.pname AS name, c.name cname, s.qty::float8 qty, COALESCE(s.cost_uzs, 0)::float8 cost,
        COALESCE(sl.q, 0)::float8 s30
-FROM stock_branch s JOIN products p USING (product_id) JOIN mc ON mc.category_id = p.category_id
+FROM stock_branch s JOIN pd p USING (product_id) JOIN mc ON mc.category_id = p.category_id
 JOIN categories c ON c.id = p.category_id LEFT JOIN sl ON sl.product_id = s.product_id
-WHERE s.snap_date = $3 AND s.branch_id = $2 AND s.qty > 0 AND s.product_id NOT IN (SELECT product_id FROM mp)
-  {ebrand}
-ORDER BY s.cost_uzs DESC NULLS LAST""", *ep)
+WHERE s.snap_date = {D} AND s.branch_id = {B} AND s.qty > 0 AND s.product_id NOT IN (SELECT product_id FROM mp)
+ORDER BY s.cost_uzs DESC NULLS LAST""", *q.params)
     out["extra"] = {"qty": sum(r["qty"] for r in ex), "cost": sum(r["cost"] for r in ex), "n": len(ex),
                     "items": [{"id": r["product_id"], "name": r["name"], "cat": r["cname"], "qty": r["qty"],
                                "cost": r["cost"], "s30": r["s30"]} for r in ex[:60]]}
@@ -378,7 +384,8 @@ async def unit_prices(con, sn: dict, pids: list[int]) -> dict[int, tuple[float, 
     return out
 
 
-async def order_data(con, cats: list[int]) -> dict:
+async def order_data(con, q) -> dict:
+    """q — _flt() natijasi (tovar va filial filtrlari bilan)."""
     sn = await _snaps(con)
     out = {"snap": {k: (v.isoformat() if v else None) for k, v in sn.items()}, "whs": [], "days": ORDER_DAYS}
     if not sn["b"]:
@@ -386,33 +393,36 @@ async def order_data(con, cats: list[int]) -> dict:
     s_to = sn["s"] or sn["b"]
     s_from = s_to - timedelta(days=ORDER_DAYS - 1)
     out["sales"] = [s_from.isoformat(), s_to.isoformat()]
-    rows = await con.fetch("""
-WITH bb AS (SELECT id branch_id, warehouse_id FROM branches WHERE warehouse_id IS NOT NULL),
-cov AS (SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = $2),
+    w_ = q.ctes()
+    D, W, S1, S2 = q.p(sn["b"]), q.p(sn["w"]), q.p(s_from), q.p(s_to)
+    rows = await con.fetch(f"""
+WITH {w_},
+wb AS (SELECT branch_id, warehouse_id FROM bb WHERE warehouse_id IS NOT NULL),
+cov AS (SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = {D}),
 m AS (SELECT mr.branch_id, mr.product_id, max(mr.need_qty) need FROM matrix_rows mr
-      JOIN bb USING (branch_id) JOIN cov USING (branch_id)
-      WHERE mr.product_id IS NOT NULL AND mr.category_id = ANY($1::int[]) GROUP BY 1, 2),
-f AS (SELECT bb.warehouse_id, m.product_id, sum(GREATEST(0, m.need - COALESCE(s.qty, 0))) fill,
+      JOIN wb USING (branch_id) JOIN cov USING (branch_id) JOIN pd USING (product_id)
+      WHERE mr.category_id IS NOT NULL GROUP BY 1, 2),
+f AS (SELECT wb.warehouse_id, m.product_id, sum(GREATEST(0, m.need - COALESCE(s.qty, 0))) fill,
              count(*) FILTER (WHERE m.need > COALESCE(s.qty, 0)) nbr
-      FROM m JOIN bb USING (branch_id)
-      LEFT JOIN stock_branch s ON s.snap_date = $2 AND s.branch_id = m.branch_id AND s.product_id = m.product_id
+      FROM m JOIN wb USING (branch_id)
+      LEFT JOIN stock_branch s ON s.snap_date = {D} AND s.branch_id = m.branch_id AND s.product_id = m.product_id
       GROUP BY 1, 2),
-mp AS (SELECT DISTINCT bb.warehouse_id, m.product_id FROM m JOIN bb USING (branch_id)),
-sl AS (SELECT bb.warehouse_id, e.product_id, sum(e.qty) q FROM sales_fact e JOIN bb USING (branch_id)
-       JOIN mp ON mp.warehouse_id = bb.warehouse_id AND mp.product_id = e.product_id
-       WHERE e.sale_date BETWEEN $4 AND $5 GROUP BY 1, 2),
-w AS (SELECT warehouse_id, product_id, qty FROM stock_wh WHERE snap_date = $3)
+mp AS (SELECT DISTINCT wb.warehouse_id, m.product_id FROM m JOIN wb USING (branch_id)),
+sl AS (SELECT wb.warehouse_id, e.product_id, sum(e.qty) q FROM sales_fact e JOIN wb USING (branch_id)
+       JOIN mp ON mp.warehouse_id = wb.warehouse_id AND mp.product_id = e.product_id
+       WHERE e.sale_date BETWEEN {S1} AND {S2} GROUP BY 1, 2),
+w AS (SELECT warehouse_id, product_id, qty FROM stock_wh WHERE snap_date = {W})
 SELECT mp.warehouse_id, mp.product_id, COALESCE(f.fill, 0)::float8 m, COALESCE(f.nbr, 0) nbr,
        GREATEST(0, COALESCE(sl.q, 0))::float8 s, GREATEST(0, COALESCE(w.qty, 0))::float8 h,
        p.name, p.brand, c.name cname
 FROM mp LEFT JOIN f USING (warehouse_id, product_id) LEFT JOIN sl USING (warehouse_id, product_id)
 LEFT JOIN w USING (warehouse_id, product_id)
-JOIN products p ON p.product_id = mp.product_id JOIN categories c ON c.id = p.category_id""",
-                           cats, sn["b"], sn["w"], s_from, s_to)
+JOIN products p ON p.product_id = mp.product_id JOIN categories c ON c.id = p.category_id""", *q.params)
     names = {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM warehouses")}
     price = await unit_prices(con, sn, list({r["product_id"] for r in rows}))
+    q2 = q.__class__(q.f, q.cats, q.attrs)
     nbr = {r["warehouse_id"]: r["n"] for r in await con.fetch(
-        "SELECT warehouse_id, count(*) n FROM branches WHERE warehouse_id IS NOT NULL GROUP BY 1")}
+        f"WITH {q2.ctes()} SELECT warehouse_id, count(*) n FROM bb WHERE warehouse_id IS NOT NULL GROUP BY 1", *q2.params)}
     W: dict[int, dict] = {}
     for r in rows:
         w = W.setdefault(r["warehouse_id"], {"id": r["warehouse_id"], "name": names.get(r["warehouse_id"], "?"),
@@ -442,30 +452,32 @@ JOIN products p ON p.product_id = mp.product_id JOIN categories c ON c.id = p.ca
     return out
 
 
-async def send_list(con, cats: list[int]) -> list:
+async def send_list(con, q) -> list:
     """Ombordan yuborish: filialdagi yetishmovchilik (Turishi − qoldiq), ombor qoldig'i yetguncha —
     avval 14 kunda ko'p sotgan filialga."""
     sn = await _snaps(con)
     if not sn["b"] or not sn["w"]:
         return []
     s_to = sn["s"] or sn["b"]
-    rows = await con.fetch("""
-WITH bb AS (SELECT b.id branch_id, b.name bname, b.warehouse_id, rg.name region FROM branches b
-            JOIN regions rg ON rg.id = b.region_id WHERE b.warehouse_id IS NOT NULL),
-cov AS (SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = $2),
+    w_ = q.ctes()
+    D, W, S1, S2 = q.p(sn["b"]), q.p(sn["w"]), q.p(s_to - timedelta(days=ORDER_DAYS - 1)), q.p(s_to)
+    rows = await con.fetch(f"""
+WITH {w_},
+wb AS (SELECT b.id branch_id, b.name bname, b.warehouse_id, rg.name region FROM branches b
+       JOIN bb ON bb.branch_id = b.id JOIN regions rg ON rg.id = b.region_id WHERE b.warehouse_id IS NOT NULL),
+cov AS (SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = {D}),
 m AS (SELECT mr.branch_id, mr.product_id, max(mr.need_qty)::float8 need FROM matrix_rows mr
-      JOIN cov USING (branch_id) WHERE mr.product_id IS NOT NULL AND mr.category_id = ANY($1::int[]) GROUP BY 1, 2),
-sl AS (SELECT branch_id, product_id, sum(qty) q FROM sales_fact WHERE sale_date BETWEEN $4 AND $5 GROUP BY 1, 2)
-SELECT bb.warehouse_id, bb.region, bb.bname, m.product_id, p.name, p.brand, c.name cname, m.need,
+      JOIN cov USING (branch_id) JOIN pd USING (product_id) WHERE mr.category_id IS NOT NULL GROUP BY 1, 2),
+sl AS (SELECT branch_id, product_id, sum(qty) q FROM sales_fact WHERE sale_date BETWEEN {S1} AND {S2} GROUP BY 1, 2)
+SELECT wb.warehouse_id, wb.region, wb.bname, m.product_id, p.name, p.brand, c.name cname, m.need,
        COALESCE(s.qty, 0)::float8 have, w.qty::float8 whq, COALESCE(sl.q, 0)::float8 s14
-FROM m JOIN bb USING (branch_id)
-JOIN stock_wh w ON w.snap_date = $3 AND w.warehouse_id = bb.warehouse_id AND w.product_id = m.product_id AND w.qty > 0
-LEFT JOIN stock_branch s ON s.snap_date = $2 AND s.branch_id = m.branch_id AND s.product_id = m.product_id
+FROM m JOIN wb USING (branch_id)
+JOIN stock_wh w ON w.snap_date = {W} AND w.warehouse_id = wb.warehouse_id AND w.product_id = m.product_id AND w.qty > 0
+LEFT JOIN stock_branch s ON s.snap_date = {D} AND s.branch_id = m.branch_id AND s.product_id = m.product_id
 LEFT JOIN sl ON sl.branch_id = m.branch_id AND sl.product_id = m.product_id
 JOIN products p ON p.product_id = m.product_id JOIN categories c ON c.id = p.category_id
 WHERE COALESCE(s.qty, 0) < m.need
-ORDER BY bb.warehouse_id, m.product_id, s14 DESC, bb.bname""",
-                           cats, sn["b"], sn["w"], s_to - timedelta(days=ORDER_DAYS - 1), s_to)
+ORDER BY wb.warehouse_id, m.product_id, s14 DESC, wb.bname""", *q.params)
     names = {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM warehouses")}
     left: dict[tuple, float] = {}
     out = []
@@ -538,16 +550,23 @@ async def all_cats(con) -> list[int]:
     return [r[0] for r in await con.fetch("SELECT id FROM categories")]
 
 
+async def all_flt(con):
+    """Bot uchun: barcha kategoriyalar, filtrsiz."""
+    from datetime import date
+    return await _flt(con, MxReq(scope="a:", date_from=date.today(), date_to=date.today()),
+                      User(id=0, is_admin=True, level="admin"))
+
+
 @router.post("/order")
 async def order(req: MxReq, request: Request, user: User = Depends(current_user)):
     async def run():
         async with request.app.state.pool.acquire() as con:
-            d = await order_data(con, await _cats(con, req, user))
+            d = await order_data(con, await _flt(con, req, user))
             for w in d["whs"]:                        # Mini App'ga har ombordan eng katta 100 tasi
                 w["more"] = max(0, len(w["items"]) - 100)
                 w["items"] = w["items"][:100]
             return d
-    payload = req.model_dump(mode="json", include={"scope", "category_ids"})
+    payload = req.model_dump(mode="json", exclude={"date_from", "date_to", "compare", "share_by", "branch_id"})
     return await _M().cached(request, user, "mx_order", payload, run)
 
 
@@ -557,9 +576,8 @@ async def order_export(req: MxReq, request: Request, user: User = Depends(curren
     from aiogram import Bot
     from aiogram.types import BufferedInputFile
     async with request.app.state.pool.acquire() as con:
-        cats = await _cats(con, req, user)
-        d = await order_data(con, cats)
-        ship = await send_list(con, cats)
+        d = await order_data(con, await _flt(con, req, user))
+        ship = await send_list(con, await _flt(con, req, user))
     if not d["whs"]:
         raise HTTPException(404, "Zakaz uchun ma'lumot yo'q")
     if not config.BOT_TOKEN:
@@ -586,5 +604,5 @@ async def bot_digest(con) -> dict:
     u = User(id=0, is_admin=True, level="admin")
     f = MxReq(scope="a:", date_from=date.today(), date_to=date.today())
     ov = await _overview(con, f, u)
-    od = await order_data(con, await all_cats(con)) if ov.get("snap", {}).get("b") else {"whs": [], "total": None}
+    od = await order_data(con, await _flt(con, f, u)) if ov.get("snap", {}).get("b") else {"whs": [], "total": None}
     return {"ov": ov, "order": od}

@@ -2063,7 +2063,8 @@ async function renderMxOrder(host, d) {
     <div class="hint">qoldiq: filial ${dm(od.snap.b)} · ombor ${dm(od.snap.w)} · savdo ${sd}${MX.cat && d && d.cats ? '' : ''}</div>
     ${od.snap.w ? '' : `<div class="mxwarn">Ombor qoldig'i yuklanmagan — zakaz omborni hisobga olmaydi.</div>`}
     <div class="tot mxtot"><span class="l">Ta'minotchiga zakaz · ${od.whs.length} ombor</span>
-      <div class="r1"><span class="v num">${nf0.format(Math.round(T.z))} dona</span><span class="num">${T.usd ? `≈ <b>${usd(T.usd)}</b> · ` : ''}${nf0.format(T.pos)} poz.</span></div>
+      <div class="r1"><span class="v num">${nf0.format(Math.round(T.z))} dona</span>${T.usd ? `<span class="num usdv">≈ ${usd(T.usd)}</span>` : ''}</div>
+      <span class="l num">${nf0.format(T.pos)} pozitsiya</span>
       <span class="l num">matritsa uchun ${nf0.format(Math.round(T.m))} + ${od.days} kunlik savdo ${nf0.format(Math.round(T.s))} − omborda bor ${nf0.format(Math.round(T.h))}</span></div>
     <div class="hint">Zakaz = filiallarda yetishmagan «Turishi» + ${od.days} kunlik savdo (shu ombor filiallari) − ombor qoldig'i. Manfiy bo'lsa — zakaz yo'q. Faqat matritsa SKU'lari. $ — ombordagi A sektor narxi (bo'lmasa — filial kirim narxi), so'mdagisi bot kursi bilan.${T.nop ? ` Narxi topilmagan: ${nf0.format(T.nop)} poz.` : ''}</div>
     ${od.whs.map(whCard).join('') || `<div class="card"><div class="empty">Zakaz uchun ma'lumot yo'q</div></div>`}

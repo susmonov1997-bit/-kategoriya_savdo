@@ -594,3 +594,9 @@ button.whh b{color:var(--ink);font-size:14px}
 .mxwh .qq{display:flex;flex-direction:column;align-items:flex-end;gap:1px}
 .mxzt .z{display:flex;flex-direction:column;align-items:flex-end}.mxzt .z small{font-weight:600;font-size:10px;color:var(--muted)}
 .mxzt{grid-template-columns:minmax(0,1fr) 46px 40px 48px 58px}
+.tmrow{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+.tmrow .tmeta{min-width:0}
+.tmrow .mxfil{padding:5px 12px;font-size:13px;flex:0 0 auto}
+.brandrow>.mxfil{display:none}
+.mxtot .r1 .v{white-space:nowrap}
+.mxtot .usdv{font-size:17px;font-weight:800;white-space:nowrap}
