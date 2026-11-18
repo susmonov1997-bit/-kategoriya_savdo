@@ -331,3 +331,209 @@ async def branch(req: MxReq, request: Request, user: User = Depends(current_user
             return await _branch(con, req, user)
     payload = req.model_dump(mode="json", exclude={"date_from", "date_to", "compare", "share_by"})
     return await _M().cached(request, user, "mx_branch", payload, run)
+
+
+# ---------------------------------------------------------------------------
+# Zakaz: ombor × SKU (faqat matritsa SKU'lari)
+#   matritsa uchun = Σ filiallar (shu ombor) max(0, Turishi − filial qoldig'i)   — qoldiq fayli bor filiallar
+#   2 hafta savdo  = shu ombor filiallarining oxirgi 14 kunlik savdosi (oxirgi savdo sanasigacha)
+#   zakaz          = max(0, matritsa uchun + 2 hafta savdo − ombor qoldig'i)
+ORDER_DAYS = 14
+
+
+async def order_data(con, cats: list[int]) -> dict:
+    sn = await _snaps(con)
+    out = {"snap": {k: (v.isoformat() if v else None) for k, v in sn.items()}, "whs": [], "days": ORDER_DAYS}
+    if not sn["b"]:
+        return out
+    s_to = sn["s"] or sn["b"]
+    s_from = s_to - timedelta(days=ORDER_DAYS - 1)
+    out["sales"] = [s_from.isoformat(), s_to.isoformat()]
+    rows = await con.fetch("""
+WITH bb AS (SELECT id branch_id, warehouse_id FROM branches WHERE warehouse_id IS NOT NULL),
+cov AS (SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = $2),
+m AS (SELECT mr.branch_id, mr.product_id, max(mr.need_qty) need FROM matrix_rows mr
+      JOIN bb USING (branch_id) JOIN cov USING (branch_id)
+      WHERE mr.product_id IS NOT NULL AND mr.category_id = ANY($1::int[]) GROUP BY 1, 2),
+f AS (SELECT bb.warehouse_id, m.product_id, sum(GREATEST(0, m.need - COALESCE(s.qty, 0))) fill,
+             count(*) FILTER (WHERE m.need > COALESCE(s.qty, 0)) nbr
+      FROM m JOIN bb USING (branch_id)
+      LEFT JOIN stock_branch s ON s.snap_date = $2 AND s.branch_id = m.branch_id AND s.product_id = m.product_id
+      GROUP BY 1, 2),
+mp AS (SELECT DISTINCT bb.warehouse_id, m.product_id FROM m JOIN bb USING (branch_id)),
+sl AS (SELECT bb.warehouse_id, e.product_id, sum(e.qty) q FROM sales_fact e JOIN bb USING (branch_id)
+       JOIN mp ON mp.warehouse_id = bb.warehouse_id AND mp.product_id = e.product_id
+       WHERE e.sale_date BETWEEN $4 AND $5 GROUP BY 1, 2),
+w AS (SELECT warehouse_id, product_id, qty FROM stock_wh WHERE snap_date = $3)
+SELECT mp.warehouse_id, mp.product_id, COALESCE(f.fill, 0)::float8 m, COALESCE(f.nbr, 0) nbr,
+       GREATEST(0, COALESCE(sl.q, 0))::float8 s, GREATEST(0, COALESCE(w.qty, 0))::float8 h,
+       p.name, p.brand, c.name cname
+FROM mp LEFT JOIN f USING (warehouse_id, product_id) LEFT JOIN sl USING (warehouse_id, product_id)
+LEFT JOIN w USING (warehouse_id, product_id)
+JOIN products p ON p.product_id = mp.product_id JOIN categories c ON c.id = p.category_id""",
+                           cats, sn["b"], sn["w"], s_from, s_to)
+    names = {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM warehouses")}
+    nbr = {r["warehouse_id"]: r["n"] for r in await con.fetch(
+        "SELECT warehouse_id, count(*) n FROM branches WHERE warehouse_id IS NOT NULL GROUP BY 1")}
+    W: dict[int, dict] = {}
+    for r in rows:
+        w = W.setdefault(r["warehouse_id"], {"id": r["warehouse_id"], "name": names.get(r["warehouse_id"], "?"),
+                                             "short": names.get(r["warehouse_id"], "?").replace(" омбори", ""),
+                                             "branches": nbr.get(r["warehouse_id"], 0),
+                                             "m": 0.0, "s": 0.0, "h": 0.0, "z": 0.0, "pos": 0, "items": []})
+        z = max(0.0, round(r["m"] + r["s"] - r["h"]))
+        w["m"] += r["m"]
+        w["s"] += r["s"]
+        w["h"] += min(r["h"], r["m"] + r["s"])           # zakazni kamaytirgan qismi
+        if z > 0:
+            w["z"] += z
+            w["pos"] += 1
+            w["items"].append({"id": r["product_id"], "name": r["name"], "brand": r["brand"], "cat": r["cname"],
+                               "m": r["m"], "s": r["s"], "h": r["h"], "z": z, "nbr": r["nbr"]})
+    for w in W.values():
+        w["items"].sort(key=lambda i: (-i["z"], i["name"]))
+    out["whs"] = sorted(W.values(), key=lambda w: -w["z"])
+    out["total"] = {k: sum(w[k] for w in W.values()) for k in ("m", "s", "h", "z", "pos")}
+    return out
+
+
+async def send_list(con, cats: list[int]) -> list:
+    """Ombordan yuborish: filialdagi yetishmovchilik (Turishi − qoldiq), ombor qoldig'i yetguncha —
+    avval 14 kunda ko'p sotgan filialga."""
+    sn = await _snaps(con)
+    if not sn["b"] or not sn["w"]:
+        return []
+    s_to = sn["s"] or sn["b"]
+    rows = await con.fetch("""
+WITH bb AS (SELECT b.id branch_id, b.name bname, b.warehouse_id, rg.name region FROM branches b
+            JOIN regions rg ON rg.id = b.region_id WHERE b.warehouse_id IS NOT NULL),
+cov AS (SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = $2),
+m AS (SELECT mr.branch_id, mr.product_id, max(mr.need_qty)::float8 need FROM matrix_rows mr
+      JOIN cov USING (branch_id) WHERE mr.product_id IS NOT NULL AND mr.category_id = ANY($1::int[]) GROUP BY 1, 2),
+sl AS (SELECT branch_id, product_id, sum(qty) q FROM sales_fact WHERE sale_date BETWEEN $4 AND $5 GROUP BY 1, 2)
+SELECT bb.warehouse_id, bb.region, bb.bname, m.product_id, p.name, p.brand, c.name cname, m.need,
+       COALESCE(s.qty, 0)::float8 have, w.qty::float8 whq, COALESCE(sl.q, 0)::float8 s14
+FROM m JOIN bb USING (branch_id)
+JOIN stock_wh w ON w.snap_date = $3 AND w.warehouse_id = bb.warehouse_id AND w.product_id = m.product_id AND w.qty > 0
+LEFT JOIN stock_branch s ON s.snap_date = $2 AND s.branch_id = m.branch_id AND s.product_id = m.product_id
+LEFT JOIN sl ON sl.branch_id = m.branch_id AND sl.product_id = m.product_id
+JOIN products p ON p.product_id = m.product_id JOIN categories c ON c.id = p.category_id
+WHERE COALESCE(s.qty, 0) < m.need
+ORDER BY bb.warehouse_id, m.product_id, s14 DESC, bb.bname""",
+                           cats, sn["b"], sn["w"], s_to - timedelta(days=ORDER_DAYS - 1), s_to)
+    names = {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM warehouses")}
+    left: dict[tuple, float] = {}
+    out = []
+    for r in rows:
+        k = (r["warehouse_id"], r["product_id"])
+        rest = left.setdefault(k, r["whq"])
+        q = min(r["need"] - r["have"], rest)
+        if q <= 0:
+            continue
+        left[k] = rest - q
+        out.append([names.get(r["warehouse_id"], "?"), r["region"], r["bname"], r["cname"], r["brand"], r["product_id"],
+                    r["name"], r["need"], r["have"], q])
+    return out
+
+
+def order_xlsx(d: dict, ship: list) -> bytes:
+    import io
+    from openpyxl import Workbook
+
+    from export_missing import BOLD, HEAD_FILL, _autowidth
+
+    wb = Workbook()
+
+    def sheet(title, head, rows, first=False):
+        ws = wb.active if first else wb.create_sheet(title[:31])
+        ws.title = title[:31]
+        ws.append(head)
+        for i in range(1, len(head) + 1):
+            c = ws.cell(row=1, column=i)
+            c.font, c.fill = BOLD, HEAD_FILL
+        for r in rows:
+            ws.append(list(r))
+        ws.freeze_panes = "A2"
+        if rows:
+            ws.auto_filter.ref = ws.dimensions
+        _autowidth(ws)
+        return ws
+
+    n = d.get("days", ORDER_DAYS)
+    sheet("Jami", ["Ombor", "Pozitsiya", "Matritsa uchun", f"{n} kun savdo", "Omborda (hisobga olingan)", "Zakaz, dona"],
+          [[w["name"], w["pos"], round(w["m"]), round(w["s"]), round(w["h"]), round(w["z"])] for w in d["whs"]], first=True)
+    for w in d["whs"]:
+        sheet(w["short"], ["Kategoriya", "Brend", "Tovar ID", "Tovar", "Matritsa uchun", "Filiallar (yetishmaydi)",
+                           f"{n} kun savdo", "Omborda", "Zakaz, dona"],
+              [[i["cat"], i["brand"], i["id"], i["name"], round(i["m"]), i["nbr"], round(i["s"]), round(i["h"]), round(i["z"])]
+               for i in w["items"]])
+    sheet("Ombordan yuborish", ["Ombor", "Hudud", "Filial", "Kategoriya", "Brend", "Tovar ID", "Tovar", "Turishi",
+                                "Filialda bor", "Yuborish, dona"], ship)
+    ws = wb.create_sheet("Izoh")
+    s = d.get("sales") or ["", ""]
+    for line in ["Zakaz = matritsa uchun + " + f"{n} kunlik savdo − ombor qoldig'i (manfiy bo'lsa — 0)",
+                 "Matritsa uchun = shu ombor filiallarida Turishi − filial qoldig'i (yetishmagan qismi)",
+                 f"Savdo davri: {s[0]} — {s[1]} · filial qoldig'i: {d['snap'].get('b')} · ombor qoldig'i: {d['snap'].get('w')}",
+                 "Faqat matritsadagi SKU'lar; ombori biriktirilmagan va qoldiq faylida yo'q filiallar hisobga olinmaydi.",
+                 "«Ombordan yuborish» — ombor qoldig'i yetguncha, avval ko'p sotgan filialga."]:
+        ws.append([line])
+    ws.column_dimensions["A"].width = 110
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+async def all_cats(con) -> list[int]:
+    return [r[0] for r in await con.fetch("SELECT id FROM categories")]
+
+
+@router.post("/order")
+async def order(req: MxReq, request: Request, user: User = Depends(current_user)):
+    async def run():
+        async with request.app.state.pool.acquire() as con:
+            d = await order_data(con, await _cats(con, req, user))
+            for w in d["whs"]:                        # Mini App'ga har ombordan eng katta 100 tasi
+                w["more"] = max(0, len(w["items"]) - 100)
+                w["items"] = w["items"][:100]
+            return d
+    payload = req.model_dump(mode="json", include={"scope", "category_ids"})
+    return await _M().cached(request, user, "mx_order", payload, run)
+
+
+@router.post("/order_export")
+async def order_export(req: MxReq, request: Request, user: User = Depends(current_user)):
+    import config
+    from aiogram import Bot
+    from aiogram.types import BufferedInputFile
+    async with request.app.state.pool.acquire() as con:
+        cats = await _cats(con, req, user)
+        d = await order_data(con, cats)
+        ship = await send_list(con, cats)
+    if not d["whs"]:
+        raise HTTPException(404, "Zakaz uchun ma'lumot yo'q")
+    if not config.BOT_TOKEN:
+        raise HTTPException(503, "Bot sozlanmagan")
+    bot = Bot(config.BOT_TOKEN)
+    try:
+        await bot.send_document(user.id, BufferedInputFile(order_xlsx(d, ship), filename=order_fname()),
+                                caption="🛒 Zakaz: har ombor alohida varaq + «Ombordan yuborish»")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(503, f"Botga yuborib bo'lmadi — botga /start bosilganini tekshiring ({e})")
+    finally:
+        await bot.session.close()
+    return {"ok": True}
+
+
+def order_fname() -> str:
+    from datetime import datetime, timezone
+    return f"zakaz_{datetime.now(timezone(timedelta(hours=5))):%d.%m.%Y}.xlsx"
+
+
+async def bot_digest(con) -> dict:
+    """06:00 xabari uchun: filiallar va mini do'konlar bo'yicha holat + zakaz (barcha kategoriyalar)."""
+    from datetime import date
+    u = User(id=0, is_admin=True, level="admin")
+    f = MxReq(scope="a:", date_from=date.today(), date_to=date.today())
+    ov = await _overview(con, f, u)
+    od = await order_data(con, await all_cats(con)) if ov.get("snap", {}).get("b") else {"whs": [], "total": None}
+    return {"ov": ov, "order": od}

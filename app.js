@@ -1974,14 +1974,14 @@ document.querySelectorAll('#qSeg button').forEach(b => b.onclick = () => {
 
 // ============================================================ MATRITSA
 // Google Sheet «Матрица КБТ» (har kuni 06:00) × filial qoldig'i: bajarilish, yo'q/kam, vitrina, omborda bor.
-const MX = {data: null, g: 'f', view: 'mx', cat: null, over: false, G: {}, reg: null, br: null, bd: null, seq: 0, lim: 40, open: {}, exLim: 15, y: 0};
+const MX = {data: null, od: null, wOpen: new Set(), g: 'f', view: 'mx', cat: null, over: false, G: {}, reg: null, br: null, bd: null, seq: 0, lim: 40, open: {}, exLim: 15, y: 0};
 const mxCol = p => (p == null ? 'var(--so)' : p < 70 ? 'var(--bad)' : p < 85 ? 'var(--warn)' : 'var(--good)');
 const mxPp = d => (d == null || !isFinite(d) ? '' : `<span class="pp ${sgn(d)}">${sgn(d) === 'up' ? '▲' : sgn(d) === 'dn' ? '▼' : '•'}${nf1.format(Math.abs(d))}</span>`);
 const mxDt = s => { if (!s) return ''; const d = new Date(s); return d.toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent'}).replace(',', ''); };
 const mxBar = (p, c) => `<span class="mxbar"><i style="width:${Math.max(0, Math.min(100, p || 0))}%;background:${c || mxCol(p)}"></i></span>`;
 function loadMatrixTab() {
   STALE.Matritsa = false;
-  MX.data = null; MX.bd = null;
+  MX.data = null; MX.bd = null; MX.od = null;
   renderMx();
 }
 function renderMx() { return MX.br ? (MX.view === 'vit' && MX.data && MX.data.bc ? renderMxVitBranch($('mxBody')) : renderMxBranch($('mxBody'))) : renderMxList($('mxBody')); }
@@ -2019,6 +2019,50 @@ function mxRows(d, withCat) {
   const G = MX.G;
   return d.bc.filter(r => G[r[0]] && G[r[0]].g === MX.g && (!MX.reg || G[r[0]].region_id === MX.reg) && (!withCat || !MX.cat || r[1] === MX.cat));
 }
+const mxViewSeg = () => `<div class="seg" id="mxView" role="group" aria-label="Ko'rinish">${[['mx', 'Matritsa'], ['vit', 'Vitrina'], ['zak', 'Zakaz']]
+  .map(([k, l]) => `<button data-v="${k}" aria-pressed="${MX.view === k}">${l}</button>`).join('')}</div>`;
+function mxWireView(host) {
+  host.querySelectorAll('#mxView [data-v]').forEach(b => b.onclick = () => { if (MX.view === b.dataset.v) return; MX.view = b.dataset.v; MX.lim = 40; renderMxList(host); });
+}
+async function renderMxOrder(host, d) {
+  const seq = MX.seq;
+  if (!MX.od) {
+    host.innerHTML = `${mxViewSeg()}<div class="empty">Yuklanmoqda…</div>`; mxWireView(host);
+    try { const od = await api('matrix/order', filters()); if (seq !== MX.seq) return; MX.od = od; }
+    catch (e) { if (seq === MX.seq) { host.innerHTML = `${mxViewSeg()}<div class="errbox">${esc(e.message)}</div>`; mxWireView(host); } return; }
+  }
+  const od = MX.od, T = od.total || {m: 0, s: 0, h: 0, z: 0, pos: 0};
+  const sd = od.sales ? `${dm(od.sales[0])}–${dm(od.sales[1])}` : '';
+  const whCard = w => {
+    const open = MX.wOpen.has(w.id);
+    return `<div class="card mxcat"><button class="mxwh" data-w="${w.id}"><span><b>${open ? '▾' : '▸'} ${esc(w.short)}</b>
+        <span class="hint">${nf0.format(w.pos)} poz · ${w.branches} filial</span></span><span class="q num">${nf0.format(Math.round(w.z))} dona</span></button>
+      ${open ? `<div class="mxzt head"><span>SKU</span><span>matritsa</span><span>${od.days} kun</span><span>omborda</span><span>zakaz</span></div>
+        ${w.items.map(i => `<div class="mxzt"><span class="n">${esc(i.name)}<small>${esc(i.cat)}${i.nbr ? ` · ${i.nbr} filialga` : ''}</small></span>
+          <span class="num">${nf0.format(Math.round(i.m))}</span><span class="num">${nf0.format(Math.round(i.s))}</span><span class="num mu">${nf0.format(Math.round(i.h))}</span><span class="num z">${nf0.format(Math.round(i.z))}</span></div>`).join('')
+          || `<div class="empty">Zakaz kerak emas</div>`}
+        ${w.more ? `<span class="hint mxmore">Yana ${nf0.format(w.more)} ta pozitsiya — Excel'da</span>` : ''}` : ''}</div>`;
+  };
+  host.innerHTML = `${mxViewSeg()}
+    <div class="hint">qoldiq: filial ${dm(od.snap.b)} · ombor ${dm(od.snap.w)} · savdo ${sd}${MX.cat && d && d.cats ? '' : ''}</div>
+    ${od.snap.w ? '' : `<div class="mxwarn">Ombor qoldig'i yuklanmagan — zakaz omborni hisobga olmaydi.</div>`}
+    <div class="tot mxtot"><span class="l">Ta'minotchiga zakaz · ${od.whs.length} ombor</span>
+      <div class="r1"><span class="v num">${nf0.format(Math.round(T.z))} dona</span><span class="num">${nf0.format(T.pos)} pozitsiya</span></div>
+      <span class="l num">matritsa uchun ${nf0.format(Math.round(T.m))} + ${od.days} kunlik savdo ${nf0.format(Math.round(T.s))} − omborda bor ${nf0.format(Math.round(T.h))}</span></div>
+    <div class="hint">Zakaz = filiallarda yetishmagan «Turishi» + ${od.days} kunlik savdo (shu ombor filiallari) − ombor qoldig'i. Manfiy bo'lsa — zakaz yo'q. Faqat matritsa SKU'lari.</div>
+    ${od.whs.map(whCard).join('') || `<div class="card"><div class="empty">Zakaz uchun ma'lumot yo'q</div></div>`}
+    ${od.whs.length ? `<button class="btn mxzx" id="mxZx">⬇ Zakaz Excel — botga yuborish</button>
+      <span class="hint" style="text-align:center">har ombor alohida varaq + «Ombordan yuborish» (filial × SKU)</span>` : ''}`;
+  mxWireView(host);
+  host.querySelectorAll('[data-w]').forEach(b => b.onclick = () => { const k = +b.dataset.w; MX.wOpen.has(k) ? MX.wOpen.delete(k) : MX.wOpen.add(k); renderMxOrder(host, d); });
+  const zx = $('mxZx');
+  if (zx) zx.onclick = async () => {
+    zx.disabled = true; zx.textContent = '⏳ Tayyorlanmoqda…';
+    try { await api('matrix/order_export', filters()); zx.textContent = '✅ Botga yuborildi'; }
+    catch (e) { zx.textContent = '❌ ' + e.message; }
+    setTimeout(() => { zx.disabled = false; zx.textContent = '⬇ Zakaz Excel — botga yuborish'; }, 4000);
+  };
+}
 async function renderMxList(host) {
   const seq = ++MX.seq;
   if (!MX.data) {
@@ -2032,6 +2076,7 @@ async function renderMxList(host) {
     return;
   }
   if (!d.snap.b) { host.innerHTML = noStock(); return; }
+  if (MX.view === 'zak') return renderMxOrder(host, d);
   MX.G = {}; d.branches.forEach(b => { MX.G[b.id] = b; b.g = b.g || 'f'; });
   const KB = d.kpi_by || {f: d.kpi, m: null};
   const two = KB.f && KB.m && KB.f.branches && KB.m.branches;
@@ -2087,7 +2132,7 @@ async function renderMxList(host) {
         ${mxBar(A.pct)}<span class="s num">${mxPp(A.d)}<span>${esc(b.region)}${b.cluster ? ' · ' + esc(b.cluster) : ''}</span><span>yo'q <b>${nf0.format(A.miss)}</b></span><span>kam <b>${nf0.format(A.low)}</b></span><span>vitrina ${pct(A.fill)}</span></span></button>`;
   host.innerHTML = `${two ? `<div class="seg" id="mxSeg" role="group" aria-label="Filial turi">
       <button data-g="f" aria-pressed="${MX.g === 'f'}">Filial · ${KB.f.branches}</button><button data-g="m" aria-pressed="${MX.g === 'm'}">Mini do'kon · ${KB.m.branches}</button></div>` : ''}
-    <div class="seg" id="mxView" role="group" aria-label="Ko'rinish"><button data-v="mx" aria-pressed="${!vit}">Matritsa bajarilishi</button><button data-v="vit" aria-pressed="${vit}">Vitrina</button></div>
+    ${mxViewSeg()}
     <div class="hint">matritsa ${mxDt(d.sync.at)} · qoldiq ${dm(d.snap.b)}${!vit && d.prev ? ` · ▲▼ — ${dm(d.prev)} ga nisbatan` : ''}${MX.cat ? ` · <b>${esc(catName[MX.cat])}</b>` : ''}</div>
     <div class="kpis mxk">${kpis}</div>
     ${!vit && ub && (ub.branches || ub.skus) ? `<div class="mxwarn">Bog'lanmagan: ${ub.branches ? `<b>${ub.branches}</b> filial` : ''}${ub.branches && ub.skus ? ' · ' : ''}${ub.skus ? `<b>${ub.skus}</b> SKU` : ''} — botda /matritsa → «⬇ Bog'lanish Excel»</div>` : ''}
@@ -2102,7 +2147,7 @@ async function renderMxList(host) {
       ${!brs.length && !nod.length ? `<div class="empty">Bu tanlovda matritsa pozitsiyasi yo'q</div>` : ''}</div>
     ${brs.length > MX.lim ? `<button class="more" id="mxMore">Yana ${nf0.format(brs.length - MX.lim)} ta ▾</button>` : ''}`;
   host.querySelectorAll('#mxSeg [data-g]').forEach(b => b.onclick = () => { if (MX.g === b.dataset.g) return; MX.g = b.dataset.g; MX.reg = null; MX.lim = 40; renderMxList(host); });
-  host.querySelectorAll('#mxView [data-v]').forEach(b => b.onclick = () => { if (MX.view === b.dataset.v) return; MX.view = b.dataset.v; MX.lim = 40; renderMxList(host); });
+  mxWireView(host);
   host.querySelectorAll('[data-r]').forEach(b => b.onclick = () => { MX.reg = b.dataset.r ? +b.dataset.r : null; MX.lim = 40; renderMxList(host); });
   host.querySelectorAll('[data-c]').forEach(b => b.onclick = () => { const c = +b.dataset.c; MX.cat = MX.cat === c ? null : c; MX.lim = 40; renderMxList(host); });
   const ov = $('mxOver'); if (ov) ov.onclick = () => { MX.over = !MX.over; MX.lim = 40; renderMxList(host); };

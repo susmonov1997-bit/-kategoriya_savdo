@@ -554,3 +554,14 @@ button.whh b{color:var(--ink);font-size:14px}
 .mxk .kpi .v{font-size:19px}.mxk .kpi.mxhero .v{font-size:21px}
 .mxk .kpi .p{font-size:11.5px}
 .mxkb{border:0;text-align:left;font:inherit;color:inherit;cursor:pointer}.mxkb.on{outline:2px solid var(--warn)}
+.mxwh{width:100%;border:0;background:none;color:var(--ink);font:inherit;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 14px;text-align:left;cursor:pointer}
+.mxwh>span:first-child{display:flex;flex-direction:column;gap:2px;font-size:15px}
+.mxwh .q{font-size:16px;font-weight:800}
+.mxzt{display:grid;grid-template-columns:minmax(0,1fr) 50px 44px 52px 50px;gap:4px;padding:8px 14px;border-top:1px solid var(--line);font-size:12.5px;align-items:center}
+.mxzt>span:not(.n){text-align:right}
+.mxzt .n{font-weight:600;line-height:1.3;display:flex;flex-direction:column}.mxzt .n small{font-weight:400;color:var(--muted);font-size:11px}
+.mxzt .mu{color:var(--muted)}.mxzt .z{font-weight:800;color:var(--accent)}
+.mxzt.head{background:var(--card-2);font-size:10.5px;color:var(--muted);font-weight:600;padding:6px 14px}
+.mxzt.head span:last-child{color:var(--accent)}
+.mxmore{display:block;padding:8px 14px 12px;border-top:1px solid var(--line)}
+.mxzx{background:var(--ink);color:var(--card);border:0;border-radius:14px;padding:13px;font-size:15px;font-weight:700;width:100%}

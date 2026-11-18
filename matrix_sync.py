@@ -383,17 +383,85 @@ async def _notify_admins(text: str, kb=None) -> None:
         await bot.session.close()
 
 
-def result_kb():
-    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="⬇ Bog'lanish Excel", callback_data="mx:xl"),
-        InlineKeyboardButton(text="🔄 Qayta o'qish", callback_data="mx:sync")]])
+def result_kb(s: dict | None = None):
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+    rows = []
+    top = []
+    if config.WEBAPP_URL:
+        top.append(InlineKeyboardButton(text="📱 Mini App'da ochish", web_app=WebAppInfo(url=config.WEBAPP_URL)))
+    top.append(InlineKeyboardButton(text="⬇ Zakaz Excel", callback_data="mx:zx"))
+    rows.append(top)
+    unb = s and (s.get("skus_miss") or s.get("branches", 0) > s.get("branches_ok", 0) or s.get("branches_no_wh"))
+    rows.append(([InlineKeyboardButton(text="⚠️ Bog'lanish Excel", callback_data="mx:xl")] if unb else [])
+                + [InlineKeyboardButton(text="🔄 Qayta o'qish", callback_data="mx:sync")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _pp(d) -> str:
+    if d is None:
+        return ""
+    a = "▲" if d > 0.05 else "▼" if d < -0.05 else "•"
+    return f" ({a}{abs(d):.1f} oldingi kunga)".replace(".", ",")
+
+
+def _p1(v) -> str:
+    return "—" if v is None else f"{v:.1f}%".replace(".", ",")
+
+
+def digest_text(s: dict, dg: dict | None) -> str:
+    """06:00 / /matritsa xabari: o'qish natijasi + holat + zakaz."""
+    e = lambda v: html.escape(str(v), quote=False)  # noqa: E731
+    unb = []
+    if s["branches"] > s["branches_ok"]:
+        unb.append(f"{s['branches'] - s['branches_ok']} filial")
+    if s["skus_miss"]:
+        unb.append(f"{s['skus_miss']} SKU")
+    lines = [f"🧩 <b>Matritsa yangilandi</b> · {s['at']:%d.%m.%Y %H:%M}",
+             f"{_n(s['rows'])} qator · {_n(s['branches'])} filial · bog'landi {_pct(s['rows_ok'], s['rows'])}"
+             + (f" · ⚠️ bog'lanmagan: {', '.join(unb)}" if unb else " ✓")]
+    if s.get("branches_no_wh"):
+        lines.append(f"🚚 Ombori ko'rsatilmagan filial: {s['branches_no_wh']} (zakazga kirmaydi)")
+    ov = (dg or {}).get("ov") or {}
+    if not ov.get("snap", {}).get("b"):
+        lines += ["", "Filial qoldig'i hali yuklanmagan — bajarilish hisoblanmadi."]
+        return "\n".join(lines)
+    KB = ov.get("kpi_by") or {}
+    lines.append("")
+    lines.append(f"<i>qoldiq {ov['snap']['b'][8:10]}.{ov['snap']['b'][5:7]} holati</i>")
+    for g, icon, name in (("f", "🏬", "Filiallar"), ("m", "🏪", "Mini do'konlar")):
+        K = KB.get(g)
+        if not K or not K.get("pos"):
+            continue
+        lines.append(f"{icon} <b>{name}: {_p1(K['pct'])}</b>{_pp(K.get('d'))}")
+        lines.append(f"   yo'q {_n(K['miss'])} poz" + (f" · kam {_n(K['low'])}" if K.get("low") else "")
+                     + f" · omborda bor {_n(K['inwh'])}")
+    worst = [b for b in ov.get("branches", []) if b.get("g", "f") == "f" and not b.get("nodata") and b.get("pct") is not None][:3]
+    if worst:
+        lines += ["", "<b>Eng past 3 filial:</b>"] + [f"• {e(b['name'])} — {_p1(b['pct'])}" for b in worst]
+    od = (dg or {}).get("order") or {}
+    T = od.get("total")
+    if T and T.get("z"):
+        lines += ["", f"🛒 <b>Zakaz: {_n(int(T['pos']))} poz · {_n(round(T['z']))} dona</b>",
+                  " · ".join(f"{e(w['short'])} {_n(round(w['z']))}" for w in od["whs"] if w["z"] > 0)]
+    elif T is not None:
+        lines += ["", "🛒 Zakaz kerak emas — omborlardagi qoldiq yetarli."]
+    return "\n".join(lines)
+
+
+async def digest(pool: asyncpg.Pool) -> dict | None:
+    try:
+        from api_matrix import bot_digest
+        async with pool.acquire() as con:
+            return await bot_digest(con)
+    except Exception:  # noqa: BLE001
+        log.exception("Matritsa holatini hisoblab bo'lmadi")
+        return None
 
 
 async def _run_auto(pool: asyncpg.Pool) -> None:
     try:
         s = await sync(pool, "auto")
-        await _notify_admins(summary_text(s), result_kb())
+        await _notify_admins(digest_text(s, await digest(pool)), result_kb(s))
     except MatrixError as e:
         await _notify_admins(f"❌ <b>Matritsani o'qib bo'lmadi</b> (06:00)\n{html.escape(str(e), quote=False)}\n"
                              "Kechagi matritsa saqlanib qoldi. /matritsa — qayta urinish.")
