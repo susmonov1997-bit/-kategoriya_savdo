@@ -57,13 +57,43 @@ async def _warm_loop(app: FastAPI) -> None:
             if v != last:
                 from api_matrix import prewarm
                 sec = await prewarm(app)
+                sec2 = await prewarm_main(app)
                 last = v
-                log.info("Matritsa oldindan hisoblandi: %.1f s (versiya %s)", sec, v)
+                log.info("Oldindan hisoblandi: matritsa %.1f s, savdo/qoldiq %.1f s (versiya %s)", sec, sec2, v)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
             log.exception("Oldindan hisoblash xatosi")
         await asyncio.sleep(20)
+
+
+async def prewarm_main(app: FastAPI) -> float:
+    """Ilova ochilganda so'raladigan standart ko'rinishlar («Barcha kategoriyalar», filtrsiz): shu oy va shu yil —
+    Umumiy, Qirqim, Tovarlar, Qoldiq. Natija keshga tushadi; birinchi ochish ham darhol bo'ladi."""
+    import time
+    from datetime import date as _d
+    from types import SimpleNamespace
+    from api_stock import StockReq, signals, stock_by
+    t0 = time.time()
+    span = await app.state.pool.fetchrow("SELECT min(sale_date) d1, max(sale_date) d2 FROM sales_daily")
+    if not span or not span["d2"]:
+        return 0.0
+    d1, d2 = span["d1"], span["d2"]
+    req, u = SimpleNamespace(app=app), User(id=0, is_admin=True, level="admin")
+    await cached(req, u, "meta", None, lambda: _meta_core(req, u))
+    month = dict(scope="a:", date_from=max(d2.replace(day=1), d1), date_to=d2, compare="mom")
+    year = dict(scope="a:", date_from=max(_d(d2.year, 1, 1), d1), date_to=d2, compare="yoy")
+    for F in (month, year):
+        await summary(Filters(**F), req, u)
+        await daily(Filters(**F), req, u)
+        await breakdown(BreakdownRequest(**F, rows="category", sort="amount", limit=500), req, u)
+    await breakdown(BreakdownRequest(**month, rows="region", sort="amount", desc=True, limit=500), req, u)
+    await attributes(Filters(**month), req, u)
+    await breakdown(BreakdownRequest(**month, rows="sku", sort="amount", limit=10), req, u)
+    for dim in ("category", "all", "region"):
+        await stock_by(StockReq(**month, dim=dim), req, u)
+    await signals(StockReq(**month, loc="all", limit=30), req, u)
+    return time.time() - t0
 
 
 @asynccontextmanager
@@ -166,6 +196,14 @@ async def health(request: Request):
 # ---------------------------------------------------------------------------
 @app.get("/api/meta")
 async def meta(request: Request, user: User = Depends(current_user)):
+    """Ilova ochilganda — kategoriyalar, xususiyatlar, sanalar. Og'ir qismi (90 kunlik savdo bo'yicha tartib)
+    keshlanadi; foydalanuvchiga xos maydonlar har safar qo'shiladi."""
+    core = await cached(request, user, "meta", None, lambda: _meta_core(request, user))
+    return {**core, "user": {"id": user.id, "name": user.first_name},
+            "can_upload": can_upload(user), "max_upload_mb": config.MAX_UPLOAD_MB, "is_admin": user.is_admin}
+
+
+async def _meta_core(request: Request, user: User) -> dict:
     pool = request.app.state.pool
     allowed = await allowed_categories(user)
     cats = await pool.fetch(
@@ -222,8 +260,6 @@ async def meta(request: Request, user: User = Depends(current_user)):
     scopes += [multi_scope(f"g:{g}", "group", f"Butun {g}", m) for g, m in sorted(groups.items())]
     scopes += [multi_scope(f"o:{o}", "owner", o, m) for o, m in sorted(owners.items())]
     return {
-        "user": {"id": user.id, "name": user.first_name},
-        "can_upload": can_upload(user), "max_upload_mb": config.MAX_UPLOAD_MB, "is_admin": user.is_admin,
         "categories": out, "scopes": scopes,
         "location_path": LOCATION_PATH,
         "dimensions": {"region": "Hudud", "cluster": "Klaster", "branch": "Filial", "brand": "Brend",

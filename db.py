@@ -13,7 +13,9 @@ SQL_DIR = Path(__file__).resolve().parent
 
 
 async def create_pool(dsn: str | None = None) -> asyncpg.Pool:
-    return await asyncpg.create_pool(dsn or config.DATABASE_URL, min_size=2, max_size=10)
+    # jit=off: tahliliy so'rovlarda PostgreSQL JIT kompilyatsiyasi har so'rovga ~0,5–1 s qo'shardi (foydasi yo'q)
+    return await asyncpg.create_pool(dsn or config.DATABASE_URL, min_size=2, max_size=10,
+                                     server_settings={"jit": "off"})
 
 
 async def migrate(pool: asyncpg.Pool) -> list[str]:

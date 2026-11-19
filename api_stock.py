@@ -47,6 +47,11 @@ ACCEL = 1.3            # «kamaymoqda»: oxirgi 7 kunlik savdo 30 kunlikdan ≥ 
 MIN_Q7 = 3             # 7 kunda kamida shuncha dona sotilgan bo'lsa — sur'at hisobga olinadi (tasodifiy sotuv emas)
 
 
+# kesh kaliti: qoldiq faqat davr OXIRIGA bog'liq (date_from, solishtirish, ulush va valyuta ta'sir qilmaydi) —
+# davr o'zgarsa ham qayta hisoblanmaydi
+_SK = set(Filters.model_fields) - {"date_from", "compare", "share_by", "cur"}
+
+
 class StockReq(Filters):
     loc: Literal["all", "w", "b"] = "all"
     level: int | None = None                     # 0 | 1 | 2 | None (hammasi)
@@ -175,8 +180,11 @@ st AS (SELECT s.warehouse_id, s.product_id, s.qty, s.value_usd FROM stock_wh s
        JOIN wf USING (warehouse_id) JOIN pd USING (product_id) WHERE s.snap_date = {D}),
 sl AS (SELECT b2.warehouse_id, e.product_id, sum(e.qty) q, sum(e.amount) a,
               sum(e.qty) FILTER (WHERE e.sale_date > {E}::date - 7) q7 FROM sales_fact e
-       JOIN branches b2 ON b2.id = e.branch_id JOIN pd USING (product_id) JOIN wf ON wf.warehouse_id = b2.warehouse_id
-       WHERE e.sale_date BETWEEN {S} AND {E} GROUP BY 1, 2),
+       JOIN branches b2 ON b2.id = e.branch_id
+       WHERE e.sale_date BETWEEN {S} AND {E}
+         -- IN (…) — xeshli semi-join; JOIN pd/wf rejalashtiruvchini noto'g'ri nested loop'ga olib borardi (75 s)
+         AND e.product_id IN (SELECT product_id FROM pd) AND b2.warehouse_id IN (SELECT warehouse_id FROM wf)
+       GROUP BY 1, 2),
 j AS (SELECT warehouse_id, product_id, COALESCE(st.qty, 0) sq, COALESCE(st.value_usd, 0) sv,
              COALESCE(sl.q, 0) q, COALESCE(sl.a, 0) a, COALESCE(sl.q7, 0) q7
       FROM st FULL JOIN sl USING (warehouse_id, product_id))
@@ -258,7 +266,7 @@ async def _base(request: Request, user: User, f: Filters) -> dict:
         async with request.app.state.pool.acquire() as con:
             cats, attrs = await _ctx(con, f, user)
             return await base_data(con, f, cats, attrs)
-    return await _M().cached(request, user, "stock_base", f.model_dump(mode="json", include=set(Filters.model_fields)), run)
+    return await _M().cached(request, user, "stock_base", f.model_dump(mode="json", include=_SK), run)
 
 
 def _signals(base: dict, loc: str) -> list[dict]:
@@ -605,7 +613,7 @@ SELECT {stock_sql}::float8 sq,
                               "risk": round(tot["a"] / WINDOW), "oos": tot["oos"]},
                     "history": hist, "daily": daily, "sales_to": ls.isoformat() if ls else None,
                     "links": dict(links), "items": items[:60]}
-    payload = req.model_dump(mode="json", include=set(Filters.model_fields) | {"loc_type", "loc_id", "brand", "map_category"})
+    payload = req.model_dump(mode="json", include=_SK | {"loc_type", "loc_id", "brand", "map_category"})
     return await _M().cached(request, user, "stock_detail", payload, run)
 
 
@@ -648,8 +656,8 @@ cov AS (SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = {D}),
 st AS (SELECT s.branch_id, s.product_id, s.qty, s.cost_uzs, s.price_uzs FROM stock_branch s JOIN bb USING (branch_id)
        JOIN pd USING (product_id) WHERE s.snap_date = {D}),
 sl AS (SELECT e.branch_id, e.product_id, sum(e.qty) q, sum(e.qty) FILTER (WHERE e.sale_date > {E}::date - 7) q7
-       FROM sales_fact e JOIN bb USING (branch_id)
-       JOIN pd USING (product_id) WHERE e.sale_date BETWEEN {E}::date - {WINDOW - 1} AND {E} GROUP BY 1, 2),
+       FROM sales_fact e WHERE e.sale_date BETWEEN {E}::date - {WINDOW - 1} AND {E}
+         AND e.branch_id IN (SELECT branch_id FROM bb) AND e.product_id IN (SELECT product_id FROM pd) GROUP BY 1, 2),
 j AS (SELECT branch_id, product_id, COALESCE(st.qty, 0) sq, COALESCE(st.cost_uzs, 0) sv,
              COALESCE(st.price_uzs, 0) sp, COALESCE(sl.q, 0) q, COALESCE(sl.q7, 0) q7,
              (branch_id IN (SELECT branch_id FROM cov)) cov
@@ -675,7 +683,7 @@ FROM agg {'LEFT JOIN wst ON wst.k = agg.k' if not no_wh else ''}""", *s.params)
                                  "lv": 0 if d is not None and d < LV_DAYS[0] else 1 if d is not None and d < LV_DAYS[1]
                                  else 3 if d is not None and d > 90 else 2 if d is not None and d < LV_DAYS[2] else 4}
             return {"snap": {k: (v.isoformat() if v else None) for k, v in sn.items()}, "items": items}
-    payload = req.model_dump(mode="json", include=set(Filters.model_fields) | {"dim"})
+    payload = req.model_dump(mode="json", include=_SK | {"dim"})
     return await _M().cached(request, user, "stock_by", payload, run)
 
 
@@ -859,7 +867,7 @@ async def _lists(request: Request, user: User, f: StockReq) -> dict:
         async with request.app.state.pool.acquire() as con:
             cats, attrs = await _ctx(con, f, user)
             return await lists_data(con, f, cats, attrs, nd, td)
-    payload = {**f.model_dump(mode="json", include=set(Filters.model_fields)), "nd": nd, "td": td}
+    payload = {**f.model_dump(mode="json", include=_SK), "nd": nd, "td": td}
     return await _M().cached(request, user, "stock_lists", payload, run)
 
 
