@@ -45,12 +45,36 @@ LOCATION_PATH = ["region", "cluster", "branch"]
 MAX_PIVOT_COLS = 30
 
 
+async def _warm_loop(app: FastAPI) -> None:
+    """Ma'lumot versiyasi o'zgarsa — sales_fact'ni qayta quradi va Matritsa tabini oldindan hisoblaydi (fonda),
+    shunda foydalanuvchi birinchi ochganda kutmaydi."""
+    import asyncio
+    last = None
+    await asyncio.sleep(5)
+    while True:
+        try:
+            v = await ensure_fact(app.state.pool)
+            if v != last:
+                from api_matrix import prewarm
+                sec = await prewarm(app)
+                last = v
+                log.info("Matritsa oldindan hisoblandi: %.1f s (versiya %s)", sec, v)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            log.exception("Oldindan hisoblash xatosi")
+        await asyncio.sleep(20)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
     app.state.pool = await create_pool()
     await migrate(app.state.pool)
     await ensure_fact(app.state.pool)          # tayyor hisob-kitob jadvali (birinchi ishga tushishda quriladi)
+    warm = asyncio.create_task(_warm_loop(app), name="warm")
     yield
+    warm.cancel()
     await app.state.pool.close()
 
 

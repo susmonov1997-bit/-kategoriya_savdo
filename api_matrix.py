@@ -899,3 +899,29 @@ async def outside_export(req: MxReq, request: Request, user: User = Depends(curr
     finally:
         await bot.session.close()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Oldindan hisoblash: ma'lumot o'zgargach (savdo/qoldiq yuklandi, matritsa o'qildi, kurs o'zgardi) Matritsa tabining
+# standart ko'rinishlari (barcha kategoriyalar, filtrsiz) fonda hisoblanib keshga qo'yiladi — birinchi ochish ham tez.
+async def prewarm(app) -> float:
+    import time
+    from datetime import date
+    from types import SimpleNamespace
+    t0 = time.time()
+    req = SimpleNamespace(app=app)
+    today = date.today()
+    f = MxReq(scope="a:", date_from=today, date_to=today)
+    steps = []
+    for adm in (True, False):
+        t = time.time()
+        await overview(f, req, User(id=0, is_admin=adm, level="admin" if adm else "viewer"))
+        steps.append(f"overview {time.time() - t:.1f}s")
+    adm = User(id=0, is_admin=True, level="admin")
+    for name, fn in (("zakaz", order), ("nematritsa", outside)):
+        t = time.time()
+        await fn(f, req, adm)
+        steps.append(f"{name} {time.time() - t:.1f}s")
+    import logging
+    logging.getLogger(__name__).info("prewarm: %s", ", ".join(steps))
+    return time.time() - t0
