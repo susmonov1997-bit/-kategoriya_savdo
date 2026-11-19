@@ -11,8 +11,10 @@
 """
 from __future__ import annotations
 
+import difflib
 import html
 import logging
+import re
 
 import asyncpg
 from aiogram import Bot, F, Router
@@ -20,12 +22,13 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardButton as Btn, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton as Btn, InlineKeyboardMarkup, Message, WebAppInfo
 
 import config
 from access import get_access
 from fact import ensure_fact
 from loaders_common import name_key
+from matrix_sync import rebind_branches, unbound_branches
 from pending import format_resolved, resolve_pending, resolve_stock
 
 log = logging.getLogger(__name__)
@@ -68,8 +71,26 @@ async def sync_requests(con: asyncpg.Connection) -> None:
            GROUP BY k
            ON CONFLICT (name_key) DO UPDATE
            SET region_hint = COALESCE(branch_requests.region_hint, EXCLUDED.region_hint)""")
+    # matritsadagi bog'lanmagan filiallar (avval yangi qo'shilgan filiallar bo'yicha qayta ulanadi)
+    try:
+        await rebind_branches(con)
+        ub = await unbound_branches(con)
+        if ub:
+            await con.executemany(
+                """INSERT INTO branch_requests (name_key, name, region_hint, cluster_hint, src)
+                   VALUES ($1, $2, $3, $4, 'mx')
+                   ON CONFLICT (name_key) DO UPDATE
+                   SET region_hint = COALESCE(branch_requests.region_hint, EXCLUDED.region_hint),
+                       cluster_hint = COALESCE(branch_requests.cluster_hint, EXCLUDED.cluster_hint),
+                       src = COALESCE(branch_requests.src, 'mx'),
+                       notified_at = CASE WHEN branch_requests.done_at IS NULL THEN branch_requests.notified_at END,
+                       done_at = NULL""",
+                [(k, x["name"], x["region"], x["cluster"]) for k, x in ub.items()])
+    except Exception:  # noqa: BLE001
+        log.exception("Matritsa filial so'rovlari yig'ilmadi")
     await con.execute("UPDATE branch_requests r SET done_at = now() WHERE done_at IS NULL "
-                      "AND EXISTS (SELECT 1 FROM branches b WHERE b.name_key = r.name_key)")
+                      "AND (EXISTS (SELECT 1 FROM branches b WHERE b.name_key = r.name_key) "
+                      "OR EXISTS (SELECT 1 FROM branch_aliases a WHERE a.alias_key = r.name_key))")
     await con.execute(
         """INSERT INTO warehouse_requests (alias_key, sample_name)
            SELECT loc_key, max(loc_name) FROM stock_pending sp
@@ -97,8 +118,43 @@ async def _branch_stats(con, key: str) -> str:
     return "; ".join(parts) or "—"
 
 
+def _similar(key: str, brs, n: int = 2) -> list[tuple[int, str, float]]:
+    sq = lambda v: re.sub(r"[\W_]+", "", v or "")  # noqa: E731 — tire/bo'shliq farqi hisobga olinmaydi
+    k = sq(key)
+    sc = [(difflib.SequenceMatcher(None, k, sq(b["name_key"])).ratio(), b["id"], b["name"]) for b in brs]
+    sc.sort(reverse=True)
+    return [(i, nm, r) for r, i, nm in sc[:n] if r >= 0.75]
+
+
+async def _mx_intro(con, req, mx: dict, stats: str) -> tuple[str, InlineKeyboardMarkup]:
+    rid = req["id"]
+    det = [f"<b>{mx['skus']} SKU</b>"] + [f"{lb}: {esc(v)}" for lb, v in
+                                          (("Hudud", mx["region"]), ("Klaster", mx["cluster"]), ("Format", mx["format"])) if v]
+    text = (f"🆕 <b>Matritsadagi filial botda yo'q:</b> «{esc(req['name'])}»\n"
+            f"Matritsada: {' · '.join(det)}")
+    rows = []
+    link = stats == "—"          # savdo/qoldiq faylida ham kutayotgan bo'lsa — faqat yangi filial
+    if not link:
+        text += f"\nSavdo/qoldiqda ham kutmoqda: {stats}"
+    else:
+        sim = _similar(req["name_key"], await con.fetch("SELECT id, name, name_key FROM branches"))
+        if sim:
+            text += "\n\n<i>Ehtimol, botdagi filial nomi biroz boshqacha yozilgan:</i>\n" + "\n".join(
+                f"{i}) {esc(nm)} · {round(r * 100)}% o'xshash" for i, (_, nm, r) in enumerate(sim, 1))
+            rows += [[Btn(text=f"🔗 {i}) {nm[:40]}", callback_data=f"nb:l:{rid}:{bid}")]
+                     for i, (bid, nm, _) in enumerate(sim, 1)]
+        text += "\n\nMavjud filialga bog'laysizmi yoki yangi filial sifatida qo'shasizmi?"
+    rows.append(([Btn(text="🔗 Boshqa filial…", callback_data=f"nb:o:{rid}")] if link else [])
+                + [Btn(text="📝 Yangi filial", callback_data=f"nb:s:{rid}")])
+    rows.append([Btn(text="Keyinroq", callback_data=f"nb:x:{rid}")])
+    return text, _kb(rows)
+
+
 async def _branch_intro(con, req) -> tuple[str, InlineKeyboardMarkup]:
     stats = await _branch_stats(con, req["name_key"])
+    mx = (await unbound_branches(con)).get(req["name_key"])
+    if mx:
+        return await _mx_intro(con, req, mx, stats)
     hint = f"\nFayldagi hudud: {esc(req['region_hint'])}" if req["region_hint"] else ""
     text = (f"🆕 <b>Yangi filial:</b> «{esc(req['name'])}»\n"
             f"Spravochnikda yo'q — kutmoqda: {stats}{hint}\n\n"
@@ -120,7 +176,7 @@ async def _wh_intro(con, req) -> tuple[str, InlineKeyboardMarkup]:
 
 
 async def prompt_new(pool: asyncpg.Pool, bot: Bot | None = None, only_new: bool = True,
-                     chat_ids: list[int] | None = None) -> int:
+                     chat_ids: list[int] | None = None, mx_only: bool = False) -> int:
     """Ochiq so'rovlarni adminlarga yuboradi (only_new — faqat hali yuborilmaganlarini). Xatolar yutiladi."""
     if not config.BOT_TOKEN:
         return 0
@@ -131,7 +187,10 @@ async def prompt_new(pool: asyncpg.Pool, bot: Bot | None = None, only_new: bool 
             await sync_requests(con)
             cond = "done_at IS NULL" + (" AND notified_at IS NULL" if only_new else "")
             breqs = await con.fetch(f"SELECT * FROM branch_requests WHERE {cond} ORDER BY id LIMIT 20")
-            wreqs = await con.fetch(f"SELECT * FROM warehouse_requests WHERE {cond} ORDER BY id LIMIT 20")
+            if mx_only:
+                breqs = [r for r in breqs if r["src"] == "mx"]
+            wreqs = [] if mx_only else await con.fetch(
+                f"SELECT * FROM warehouse_requests WHERE {cond} ORDER BY id LIMIT 20")
             msgs = [await _wh_intro(con, r) for r in wreqs] + [await _branch_intro(con, r) for r in breqs]
             if not msgs:
                 return 0
@@ -184,7 +243,9 @@ async def _step_wh(con, req) -> tuple[str, InlineKeyboardMarkup]:
 
 async def _step_cl(con, req) -> tuple[str, InlineKeyboardMarkup]:
     cls = await con.fetch("SELECT id, name FROM clusters ORDER BY name")
-    btns = [Btn(text=c["name"], callback_data=f"nb:c:{req['id']}:{c['id']}") for c in cls]
+    hk = name_key(req["cluster_hint"]) if req["cluster_hint"] else None
+    btns = [Btn(text=("✓ " if hk and name_key(c["name"]) == hk else "") + c["name"],
+                callback_data=f"nb:c:{req['id']}:{c['id']}") for c in cls]
     return (f"<b>{esc(req['name'])} · 2/3</b>\nQaysi <b>klaster</b>?",
             _kb(_grid(btns, 3) + [[Btn(text="‹ Orqaga", callback_data=f"nb:s:{req['id']}")]]))
 
@@ -224,11 +285,61 @@ async def _finish(pool, con, req, by: int) -> str:
         await ensure_fact(pool)
     except Exception:  # noqa: BLE001
         log.exception("sales_fact qayta qurilmadi — API keyingi so'rovda quradi")
+    mx = await _mx_rebind_line(con)
     r = await con.fetchrow(
         """SELECT rg.name rg, cl.name cl, w.name wh FROM regions rg, clusters cl, warehouses w
            WHERE rg.id = $1 AND cl.id = $2 AND w.id = $3""", req["region_id"], req["cluster_id"], req["warehouse_id"])
     return (f"✅ <b>Saqlandi:</b> {esc(req['name'])}\n{esc(r['rg'])} · {esc(r['cl'])} · {esc(r['wh'])}"
-            + (format_resolved(res) or "\nKutayotgan ma'lumot yo'q edi."))
+            + (format_resolved(res) or ("" if mx else "\nKutayotgan ma'lumot yo'q edi.")) + mx)
+
+
+async def _mx_rebind_line(con) -> str:
+    try:
+        n = await rebind_branches(con)
+    except Exception:  # noqa: BLE001
+        log.exception("Matritsa qayta bog'lanmadi — 06:00 da bog'lanadi")
+        return ""
+    if not n:
+        return ""
+    left = len(await unbound_branches(con))
+    return f"\nMatritsa qayta bog'landi: {n} qator · endi bog'lanmagan filial: <b>{left}</b>"
+
+
+def _app_kb() -> InlineKeyboardMarkup | None:
+    if not config.WEBAPP_URL:
+        return None
+    return _kb([[Btn(text="📱 Mini App'da ochish", web_app=WebAppInfo(url=config.WEBAPP_URL))]])
+
+
+async def _link(con, req, bid: int, by: int) -> str:
+    async with con.transaction():
+        await con.execute("""INSERT INTO branch_aliases (alias_key, branch_id, created_by) VALUES ($1, $2, $3)
+                             ON CONFLICT (alias_key) DO UPDATE SET branch_id = EXCLUDED.branch_id,
+                               created_by = EXCLUDED.created_by, created_at = now()""",
+                          req["name_key"], bid, by)
+        await con.execute("UPDATE branch_requests SET done_at = now(), done_by = $2 WHERE id = $1", req["id"], by)
+    bname = await con.fetchval("SELECT name FROM branches WHERE id = $1", bid)
+    return (f"✅ <b>Bog'landi:</b> «{esc(req['name'])}» → <b>{esc(bname)}</b>" + await _mx_rebind_line(con)
+            + "\n<i>Keyingi sinxronlarda ham shu nom avtomatik shu filialga ulanadi.</i>")
+
+
+async def _step_other(con, req, rg: int | None = None, regions: bool = False) -> tuple[str, InlineKeyboardMarkup]:
+    rid = req["id"]
+    rgs = await con.fetch("SELECT r.id, r.name, count(b.id) n FROM regions r JOIN branches b ON b.region_id = r.id "
+                          "GROUP BY r.id ORDER BY r.name")
+    if rg is None and not regions and req["region_hint"]:
+        hk = name_key(req["region_hint"])
+        rg = next((r["id"] for r in rgs if name_key(r["name"]) == hk), None)
+    if rg is None:
+        btns = [Btn(text=f"{r['name']} ({r['n']})", callback_data=f"nb:og:{rid}:{r['id']}") for r in rgs]
+        return (f"<b>{esc(req['name'])}</b>\nQaysi <b>hudud</b> filialiga bog'lansin?",
+                _kb(_grid(btns, 2) + [[Btn(text="‹ Orqaga", callback_data=f"nb:i:{rid}")]]))
+    brs = await con.fetch("SELECT id, name FROM branches WHERE region_id = $1 ORDER BY name LIMIT 90", rg)
+    rname = next((r["name"] for r in rgs if r["id"] == rg), "")
+    btns = [Btn(text=b["name"][:32], callback_data=f"nb:l:{rid}:{b['id']}") for b in brs]
+    return (f"<b>{esc(req['name'])}</b>\nQaysi filialga bog'lansin? <i>{esc(rname)} filiallari:</i>",
+            _kb(_grid(btns, 2) + [[Btn(text="Boshqa hudud ▾", callback_data=f"nb:or:{rid}")],
+                                  [Btn(text="‹ Orqaga", callback_data=f"nb:i:{rid}")]]))
 
 
 @router.callback_query(F.data.startswith("nb:"))
@@ -243,7 +354,9 @@ async def nb_cb(c: CallbackQuery, pool: asyncpg.Pool) -> None:
         if req is None:
             await c.answer("So'rov topilmadi", show_alert=True)
             return
-        if req["done_at"] or await con.fetchval("SELECT 1 FROM branches WHERE name_key = $1", req["name_key"]):
+        if req["done_at"] or await con.fetchval(
+                "SELECT 1 FROM branches WHERE name_key = $1 UNION ALL SELECT 1 FROM branch_aliases WHERE alias_key = $1",
+                req["name_key"]):
             await c.answer("Bu filial allaqachon saqlangan", show_alert=True)
             try:
                 await c.message.edit_reply_markup(reply_markup=None)
@@ -254,7 +367,20 @@ async def nb_cb(c: CallbackQuery, pool: asyncpg.Pool) -> None:
             await c.message.edit_reply_markup(reply_markup=None)
             await c.answer("Keyinroq — /yangi buyrug'i bilan qaytasiz")
             return
-        if act == "s":
+        if act == "l":
+            text = await _link(con, req, int(p[3]), c.from_user.id)
+            await safe_edit(c, text, reply_markup=_app_kb())
+            await c.answer("Bog'landi")
+            return
+        if act == "i":
+            text, kb = await _branch_intro(con, req)
+        elif act == "o":
+            text, kb = await _step_other(con, req)
+        elif act == "or":
+            text, kb = await _step_other(con, req, regions=True)
+        elif act == "og":
+            text, kb = await _step_other(con, req, rg=int(p[3]))
+        elif act == "s":
             text, kb = await _step_wh(con, req)
         elif act == "w":
             await con.execute("UPDATE branch_requests SET warehouse_id = $2 WHERE id = $1", rid, int(p[3]))
@@ -270,7 +396,7 @@ async def nb_cb(c: CallbackQuery, pool: asyncpg.Pool) -> None:
                     if rg:
                         await con.execute("UPDATE branch_requests SET region_id = $2 WHERE id = $1", rid, rg)
                         text = await _finish(pool, con, await _req(con, rid), c.from_user.id)
-                        await safe_edit(c, text)
+                        await safe_edit(c, text, reply_markup=_app_kb())
                         await c.answer("Saqlandi")
                         return
                 text, kb = await _step_rg(con, req)
@@ -289,7 +415,7 @@ async def nb_cb(c: CallbackQuery, pool: asyncpg.Pool) -> None:
                     text, kb = await _step_wh(con, req)
                 else:
                     text = await _finish(pool, con, req, c.from_user.id)
-                    await safe_edit(c, text)
+                    await safe_edit(c, text, reply_markup=_app_kb())
                     await c.answer("Saqlandi")
                     return
         else:

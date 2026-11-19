@@ -46,6 +46,9 @@ async def _do_sync(pool: asyncpg.Pool, msg: Message, uid: int) -> None:
     except Exception:  # noqa: BLE001
         pass
     await msg.answer(text, reply_markup=kb)
+    if kb is not None:                     # bog'lanmagan filiallar → «🆕» (bog'lash / yangi filial)
+        from bot_stock import prompt_new
+        await prompt_new(pool, msg.bot, only_new=False, chat_ids=[uid], mx_only=True)
 
 
 @router.message(Command("matritsa"))

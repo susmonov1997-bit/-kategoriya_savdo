@@ -178,6 +178,66 @@ def loose_key(v) -> str | None:
 
 # ---------------------------------------------------------------------------
 # Bog'lash va yozish
+async def branch_map(con: asyncpg.Connection) -> dict[str, tuple[int, int | None]]:
+    """name_key → (branch_id, warehouse_id): botdagi filial nomlari + qo'lda bog'langan matritsa nomlari."""
+    br = {b["name_key"]: (b["id"], b["warehouse_id"])
+          for b in await con.fetch("SELECT id, name_key, warehouse_id FROM branches")}
+    for a in await con.fetch("SELECT a.alias_key, b.id, b.warehouse_id FROM branch_aliases a "
+                             "JOIN branches b ON b.id = a.branch_id"):
+        br.setdefault(a["alias_key"], (a["id"], a["warehouse_id"]))
+    return br
+
+
+async def unbound_branches(con: asyncpg.Connection) -> dict[str, dict]:
+    """Matritsadagi bog'lanmagan filiallar: name_key → {name, region, cluster, format, skus}."""
+    out: dict[str, dict] = {}
+    for r in await con.fetch(
+            """SELECT branch_name, max(region) region, max(cluster) cluster, max(format) fmt,
+                      count(DISTINCT product_name) skus
+               FROM matrix_rows WHERE branch_id IS NULL GROUP BY branch_name"""):
+        k = name_key(r["branch_name"])
+        if not k:
+            continue
+        x = out.setdefault(k, {"name": r["branch_name"], "region": None, "cluster": None, "format": None, "skus": 0})
+        x["skus"] += r["skus"]
+        x["region"] = x["region"] or r["region"]
+        x["cluster"] = x["cluster"] or r["cluster"]
+        x["format"] = x["format"] or r["fmt"]
+    return out
+
+
+async def rebind_branches(con: asyncpg.Connection) -> int:
+    """Bog'lanmagan matritsa qatorlarini hozirgi filiallar/bog'lashlar bo'yicha qayta ulaydi
+    (06:00 ni kutmasdan). Ulangan qatorlar sonini qaytaradi."""
+    names = [r["branch_name"] for r in
+             await con.fetch("SELECT DISTINCT branch_name FROM matrix_rows WHERE branch_id IS NULL")]
+    if not names:
+        return 0
+    br = await branch_map(con)
+    pairs = [(n, br[k][0]) for n in names if (k := name_key(n)) in br]
+    if not pairs:
+        return 0
+    n = 0
+    async with con.transaction():
+        for nm, bid in pairs:
+            n += int((await con.execute("UPDATE matrix_rows SET branch_id = $2 WHERE branch_name = $1 "
+                                        "AND branch_id IS NULL", nm, bid)).split()[-1])
+        # oxirgi sinxron statistikasini yangilash (Mini App'dagi «Bog'lanmagan» yozuvi)
+        allb = [r["branch_name"] for r in await con.fetch("SELECT DISTINCT branch_name FROM matrix_rows")]
+        ok = {x for x in allb if name_key(x) in br}
+        no_wh = sum(1 for x in ok if br[name_key(x)][1] is None)
+        rows_ok = await con.fetchval("SELECT count(*) FROM matrix_rows WHERE branch_id IS NOT NULL "
+                                     "AND product_id IS NOT NULL")
+        await con.execute(
+            """UPDATE matrix_syncs SET stats = coalesce(stats, '{}'::jsonb) || jsonb_build_object('branches', $1::int, 'branches_ok', $2::int,
+                      'branches_no_wh', $3::int, 'rows_ok', $4::int)
+               WHERE id = (SELECT max(id) FROM matrix_syncs WHERE status = 'ok')""",
+            len(set(allb)), len(ok), no_wh, rows_ok)
+        # ▲▼ tarixi joriy qoldiq sanasi uchun qayta hisoblansin
+        await con.execute("DELETE FROM matrix_daily WHERE snap_date = (SELECT max(snap_date) FROM stock_branch)")
+    return n
+
+
 async def bind_and_store(con: asyncpg.Connection, rows: list[dict]) -> dict:
     exact: dict[str, list[int]] = defaultdict(list)
     loose: dict[str, list[int]] = defaultdict(list)
@@ -190,8 +250,7 @@ async def bind_and_store(con: asyncpg.Connection, rows: list[dict]) -> dict:
             loose[lk].append(p["product_id"])
         pcat[p["product_id"]] = p["category_id"]
         pname[p["product_id"]] = p["name"]
-    br = {b["name_key"]: (b["id"], b["warehouse_id"])
-          for b in await con.fetch("SELECT id, name_key, warehouse_id FROM branches")}
+    br = await branch_map(con)
     cats = {name_key(c["name"]): c["id"] for c in await con.fetch("SELECT id, name FROM categories")}
 
     pmatch: dict[str, tuple[int | None, int | None, str | None]] = {}  # nom → (pid, tier, izoh)
@@ -474,6 +533,9 @@ async def _run_auto(pool: asyncpg.Pool) -> None:
     try:
         s = await sync(pool, "auto")
         await _notify_admins(digest_text(s, await digest(pool)), result_kb(s))
+        if s.get("branches", 0) > s.get("branches_ok", 0):     # bog'lanmagan filiallar → «🆕» so'rovlari
+            from bot_stock import prompt_new
+            await prompt_new(pool, only_new=True)
     except MatrixError as e:
         await _notify_admins(f"❌ <b>Matritsani o'qib bo'lmadi</b> (06:00)\n{html.escape(str(e), quote=False)}\n"
                              "Kechagi matritsa saqlanib qoldi. /matritsa — qayta urinish.")

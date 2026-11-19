@@ -2300,7 +2300,7 @@ async function renderMxList(host) {
       <button data-g="f" aria-pressed="${MX.g === 'f'}">Filial · ${KB.f.branches}</button><button data-g="m" aria-pressed="${MX.g === 'm'}">Mini do'kon · ${KB.m.branches}</button></div>` : ''}
     <div class="hint">matritsa ${mxDt(d.sync.at)} · qoldiq ${dm(d.snap.b)}${!vit && d.prev ? ` · ▲▼ — ${dm(d.prev)} ga nisbatan` : ''}${MX.cat ? ` · <b>${esc(catName[MX.cat])}</b>` : ''}</div>
     <div class="kpis mxk">${kpis}</div>
-    ${!vit && ub && (ub.branches || ub.skus) ? `<div class="mxwarn">Bog'lanmagan: ${ub.branches ? `<b>${ub.branches}</b> filial` : ''}${ub.branches && ub.skus ? ' · ' : ''}${ub.skus ? `<b>${ub.skus}</b> SKU` : ''} — botda /matritsa → «⬇ Bog'lanish Excel»</div>` : ''}
+    ${!vit && ub && (ub.branches || ub.skus) ? `<div class="mxwarn">Bog'lanmagan: ${ub.branches ? `<b>${ub.branches}</b> filial` : ''}${ub.branches && ub.skus ? ' · ' : ''}${ub.skus ? `<b>${ub.skus}</b> SKU` : ''} — botda ${ub.branches ? '/yangi (filial)' : ''}${ub.branches && ub.skus ? ', ' : ''}${ub.skus ? "/matritsa → «⬇ Bog'lanish Excel»" : ''}</div>` : ''}
     ${cats.length > 1 ? mxBlock('c', "Kategoriyalar", cats.length, mxWorst(cats.map(c => ({name: c.name, A: c.A})), vit),
       `${cats.map(catRow).join('')}
       ${vit ? `<div class="mxleg"><span><i style="background:var(--accent)"></i>matritsa SKU</span><span><i style="background:var(--mxx)"></i>matritsadan tashqari</span><span><i class="e"></i>bo'sh</span></div>` : ''}
