@@ -84,10 +84,16 @@ async def matrix_order_cb(c: CallbackQuery, pool: asyncpg.Pool) -> None:
         await c.answer("Faqat adminlar uchun", show_alert=True)
         return
     await c.answer("Tayyorlanmoqda…")
-    from api_matrix import all_flt, order_data, order_fname, order_xlsx, send_list
-    async with pool.acquire() as con:
-        d = await order_data(con, await all_flt(con))
-        ship = await send_list(con, await all_flt(con))
+    from datetime import date as _date
+    from types import SimpleNamespace
+    from api_auth import User
+    from api_main import app as api_app
+    from api_matrix import MxReq, _order_full, _ship, order_fname, order_xlsx
+    # API bilan bir xil kesh: 06:00 dan keyin oldindan hisoblangan bo'lsa — darhol
+    rq, u = SimpleNamespace(app=api_app), User(id=0, is_admin=True, level="admin")
+    f = MxReq(scope="a:", date_from=_date.today(), date_to=_date.today())
+    d = await _order_full(f, rq, u)
+    ship = await _ship(f, rq, u)
     if not d["whs"]:
         await c.message.answer("Zakaz uchun ma'lumot yo'q (matritsa yoki qoldiq yuklanmagan).")
         return

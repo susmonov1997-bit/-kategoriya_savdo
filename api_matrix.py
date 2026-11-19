@@ -504,16 +504,20 @@ wb AS (SELECT b.id branch_id, b.name bname, b.warehouse_id, rg.name region FROM 
 cov AS (SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = {D}),
 m AS (SELECT mr.branch_id, mr.product_id, max(mr.need_qty)::float8 need FROM matrix_rows mr
       JOIN cov USING (branch_id) JOIN pd USING (product_id) WHERE mr.category_id IS NOT NULL GROUP BY 1, 2),
-sl AS (SELECT branch_id, product_id, sum(qty) q FROM sales_fact WHERE sale_date BETWEEN {S1} AND {S2} GROUP BY 1, 2)
-SELECT wb.warehouse_id, wb.region, wb.bname, m.product_id, p.name, p.brand, c.name cname, m.need,
-       COALESCE(s.qty, 0)::float8 have, w.qty::float8 whq, COALESCE(sl.q, 0)::float8 s14
-FROM m JOIN wb USING (branch_id)
-JOIN stock_wh w ON w.snap_date = {W} AND w.warehouse_id = wb.warehouse_id AND w.product_id = m.product_id AND w.qty > 0
-LEFT JOIN stock_branch s ON s.snap_date = {D} AND s.branch_id = m.branch_id AND s.product_id = m.product_id
-LEFT JOIN sl ON sl.branch_id = m.branch_id AND sl.product_id = m.product_id
-JOIN products p ON p.product_id = m.product_id JOIN categories c ON c.id = p.category_id
-WHERE COALESCE(s.qty, 0) < m.need
-ORDER BY wb.warehouse_id, m.product_id, s14 DESC, wb.bname""", *q.params)
+k AS MATERIALIZED (       -- yetishmayotgan va omborda bor (kichik to'plam) — savdo faqat shular uchun olinadi
+    SELECT wb.warehouse_id, wb.region, wb.bname, m.branch_id, m.product_id, m.need,
+           COALESCE(s.qty, 0)::float8 have, w.qty::float8 whq
+    FROM m JOIN wb USING (branch_id)
+    JOIN stock_wh w ON w.snap_date = {W} AND w.warehouse_id = wb.warehouse_id AND w.product_id = m.product_id AND w.qty > 0
+    LEFT JOIN stock_branch s ON s.snap_date = {D} AND s.branch_id = m.branch_id AND s.product_id = m.product_id
+    WHERE COALESCE(s.qty, 0) < m.need),
+sl AS (SELECT e.branch_id, e.product_id, sum(e.qty) q FROM sales_fact e JOIN k USING (branch_id, product_id)
+       WHERE e.sale_date BETWEEN {S1} AND {S2} GROUP BY 1, 2)
+SELECT k.warehouse_id, k.region, k.bname, k.product_id, p.name, p.brand, c.name cname, k.need, k.have, k.whq,
+       COALESCE(sl.q, 0)::float8 s14
+FROM k LEFT JOIN sl ON sl.branch_id = k.branch_id AND sl.product_id = k.product_id
+JOIN products p ON p.product_id = k.product_id JOIN categories c ON c.id = p.category_id
+ORDER BY k.warehouse_id, k.product_id, s14 DESC, k.bname""", *q.params)
     names = {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM warehouses")}
     left: dict[tuple, float] = {}
     out = []
@@ -606,17 +610,29 @@ async def all_flt(con):
                       User(id=0, is_admin=True, level="admin"))
 
 
-@router.post("/order")
-async def order(req: MxReq, request: Request, user: User = Depends(current_user)):
+_XP = {"date_from", "date_to", "compare", "share_by", "branch_id"}
+
+
+async def _order_full(req: MxReq, request, user: User) -> dict:
+    """To'liq zakaz (keshda) — Mini App ham, Excel ham shundan foydalanadi."""
     async def run():
         async with request.app.state.pool.acquire() as con:
-            d = await order_data(con, await _flt(con, req, user), req.days, req.mode)
-            for w in d["whs"]:                        # Mini App'ga har ombordan eng katta 100 tasi
-                w["more"] = max(0, len(w["items"]) - 100)
-                w["items"] = w["items"][:100]
-            return d
-    payload = req.model_dump(mode="json", exclude={"date_from", "date_to", "compare", "share_by", "branch_id"})
-    return await _M().cached(request, user, "mx_order", payload, run)
+            return await order_data(con, await _flt(con, req, user), req.days, req.mode)
+    return await _M().cached(request, user, "mx_order_full", req.model_dump(mode="json", exclude=_XP), run)
+
+
+async def _ship(req: MxReq, request, user: User) -> list:
+    async def run():
+        async with request.app.state.pool.acquire() as con:
+            return await send_list(con, await _flt(con, req, user))
+    return await _M().cached(request, user, "mx_ship", req.model_dump(mode="json", exclude=_XP | {"days", "mode"}), run)
+
+
+@router.post("/order")
+async def order(req: MxReq, request: Request, user: User = Depends(current_user)):
+    d = await _order_full(req, request, user)
+    # Mini App'ga har ombordan eng katta 100 tasi (keshdagi to'liq natija o'zgartirilmaydi — nusxa)
+    return {**d, "whs": [{**w, "items": w["items"][:100], "more": max(0, len(w["items"]) - 100)} for w in d["whs"]]}
 
 
 @router.post("/order_export")
@@ -624,9 +640,8 @@ async def order_export(req: MxReq, request: Request, user: User = Depends(curren
     import config
     from aiogram import Bot
     from aiogram.types import BufferedInputFile
-    async with request.app.state.pool.acquire() as con:
-        d = await order_data(con, await _flt(con, req, user), req.days, req.mode)
-        ship = await send_list(con, await _flt(con, req, user))
+    d = await _order_full(req, request, user)
+    ship = await _ship(req, request, user)
     if not d["whs"]:
         raise HTTPException(404, "Zakaz uchun ma'lumot yo'q")
     if not config.BOT_TOKEN:
@@ -855,23 +870,22 @@ def outside_xlsx(d: dict, con_meta: dict) -> bytes:
     return buf.getvalue()
 
 
-@router.post("/outside")
-async def outside(req: MxReq, request: Request, user: User = Depends(current_user)):
+async def _outside_full(req: MxReq, request, user: User) -> dict:
     async def run():
         async with request.app.state.pool.acquire() as con:
-            d = await outside_data(con, await _flt(con, req, user))
-        d.pop("_brows", None)
-        d.pop("_wrows", None)
-        for c in d.get("cats", []):                   # Mini App'ga — har brenddan eng qimmat 50 SKU
-            for b in c["brands"]:
-                b["nsku"] = len(b["skus"])
-                b["skus"] = b["skus"][:50]
-        for w in d.get("whs", []):
-            w["nsku"] = len(w["items"])
-            w["items"] = w["items"][:50]
-        return d
-    payload = req.model_dump(mode="json", exclude={"date_from", "date_to", "compare", "share_by", "branch_id", "days", "mode"})
-    return await _M().cached(request, user, "mx_outside", payload, run)
+            return await outside_data(con, await _flt(con, req, user))
+    return await _M().cached(request, user, "mx_outside_full", req.model_dump(mode="json", exclude=_XP | {"days", "mode"}), run)
+
+
+@router.post("/outside")
+async def outside(req: MxReq, request: Request, user: User = Depends(current_user)):
+    d = await _outside_full(req, request, user)
+    out = {k: v for k, v in d.items() if not k.startswith("_")}
+    # Mini App'ga — har brenddan va ombordan eng qimmat 50 SKU (nusxa)
+    out["cats"] = [{**c, "brands": [{**b, "nsku": len(b["skus"]), "skus": b["skus"][:50]} for b in c["brands"]]}
+                   for c in d.get("cats", [])]
+    out["whs"] = [{**w, "nsku": len(w["items"]), "items": w["items"][:50]} for w in d.get("whs", [])]
+    return out
 
 
 @router.post("/outside_export")
@@ -880,8 +894,8 @@ async def outside_export(req: MxReq, request: Request, user: User = Depends(curr
     from datetime import datetime, timezone
     from aiogram import Bot
     from aiogram.types import BufferedInputFile
+    d = await _outside_full(req, request, user)
     async with request.app.state.pool.acquire() as con:
-        d = await outside_data(con, await _flt(con, req, user))
         meta = {"branches": {r["id"]: (r["region"], r["name"]) for r in await con.fetch(
                     "SELECT b.id, b.name, rg.name region FROM branches b JOIN regions rg ON rg.id = b.region_id")},
                 "whs": {r["id"]: r["name"] for r in await con.fetch("SELECT id, name FROM warehouses")}}
@@ -918,7 +932,7 @@ async def prewarm(app) -> float:
         await overview(f, req, User(id=0, is_admin=adm, level="admin" if adm else "viewer"))
         steps.append(f"overview {time.time() - t:.1f}s")
     adm = User(id=0, is_admin=True, level="admin")
-    for name, fn in (("zakaz", order), ("nematritsa", outside)):
+    for name, fn in (("zakaz", order), ("nematritsa", outside), ("yuborish", lambda f_, r_, u_: _ship(f_, r_, u_))):
         t = time.time()
         await fn(f, req, adm)
         steps.append(f"{name} {time.time() - t:.1f}s")
