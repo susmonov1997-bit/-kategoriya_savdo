@@ -588,7 +588,7 @@ async def _plan(request: Request, year: int | None = None, user: User = Depends(
     if ids:
         from datetime import date as _date
         rows = await pool.fetch(
-            """SELECT extract(month FROM e.sale_date)::int m, p.category_id cid, sum(e.amount) a, sum(e.margin) g
+            f"""SELECT extract(month FROM e.sale_date)::int m, p.category_id cid, sum(e.amount) a, sum(e.margin) g
                FROM {'sales_fact_usd' if cur == 'usd' else 'sales_fact'} e JOIN products p USING (product_id)
                WHERE e.sale_date BETWEEN $1 AND $2 AND p.category_id = ANY($3::int[]) GROUP BY 1, 2""",
             _date(year, 1, 1), _date(year, 12, 31), list(ids))
