@@ -678,14 +678,19 @@ async def outside_data(con, q) -> dict:
 mc AS (SELECT DISTINCT category_id FROM matrix_rows WHERE category_id IS NOT NULL),
 pdm AS (SELECT pd.* FROM pd JOIN mc USING (category_id)),
 mx AS (SELECT DISTINCT branch_id, product_id FROM matrix_rows WHERE branch_id IS NOT NULL AND product_id IS NOT NULL)"""
+    # avval nomatritsa qoldiq (kichik to'plam), keyin faqat shu filial×SKU savdosi (sales_fact katta — to'liq yig'ilmaydi)
     brows = await con.fetch(base + f""",
-sl AS (SELECT branch_id, product_id, sum(qty) q FROM sales_fact WHERE sale_date BETWEEN {S1} AND {S2} GROUP BY 1, 2)
-SELECT s.branch_id, s.product_id, s.qty::float8 qty, COALESCE(s.cost_uzs, 0)::float8 cost, COALESCE(sl.q, 0)::float8 s30,
+c AS MATERIALIZED (
+    SELECT s.branch_id, s.product_id, s.qty, s.cost_uzs FROM stock_branch s JOIN bb USING (branch_id)
+    JOIN pdm p USING (product_id)
+    LEFT JOIN mx ON mx.branch_id = s.branch_id AND mx.product_id = s.product_id
+    WHERE s.snap_date = {D} AND s.qty > 0 AND mx.product_id IS NULL),
+sl AS (SELECT e.branch_id, e.product_id, sum(e.qty) q FROM sales_fact e JOIN c USING (branch_id, product_id)
+       WHERE e.sale_date BETWEEN {S1} AND {S2} GROUP BY 1, 2)
+SELECT c.branch_id, c.product_id, c.qty::float8 qty, COALESCE(c.cost_uzs, 0)::float8 cost, COALESCE(sl.q, 0)::float8 s30,
        p.pname, p.brand, p.cname
-FROM stock_branch s JOIN bb USING (branch_id) JOIN pdm p USING (product_id)
-LEFT JOIN mx ON mx.branch_id = s.branch_id AND mx.product_id = s.product_id
-LEFT JOIN sl ON sl.branch_id = s.branch_id AND sl.product_id = s.product_id
-WHERE s.snap_date = {D} AND s.qty > 0 AND mx.product_id IS NULL""", *q.params) if sn["b"] else []
+FROM c JOIN pdm p USING (product_id)
+LEFT JOIN sl ON sl.branch_id = c.branch_id AND sl.product_id = c.product_id""", *q.params) if sn["b"] else []
     q2 = q.__class__(q.f, q.cats, q.attrs)
     w2 = q2.ctes()
     W2, T1, T2 = q2.p(sn["w"]), q2.p(s_to - timedelta(days=29)), q2.p(s_to)
@@ -695,14 +700,18 @@ pdm AS (SELECT pd.* FROM pd JOIN mc USING (category_id)),
 whs AS (SELECT DISTINCT warehouse_id FROM bb WHERE warehouse_id IS NOT NULL),
 wmx AS (SELECT DISTINCT b.warehouse_id, m.product_id FROM matrix_rows m JOIN branches b ON b.id = m.branch_id
         WHERE m.product_id IS NOT NULL AND b.warehouse_id IS NOT NULL),
-sl AS (SELECT b.warehouse_id, e.product_id, sum(e.qty) q FROM sales_fact e JOIN branches b ON b.id = e.branch_id
+c AS MATERIALIZED (
+    SELECT s.warehouse_id, s.product_id, s.qty, s.value_usd FROM stock_wh s JOIN whs USING (warehouse_id)
+    JOIN pdm p USING (product_id)
+    LEFT JOIN wmx ON wmx.warehouse_id = s.warehouse_id AND wmx.product_id = s.product_id
+    WHERE s.snap_date = {W2} AND s.qty > 0 AND wmx.product_id IS NULL),
+sl AS (SELECT b.warehouse_id, e.product_id, sum(e.qty) q FROM sales_fact e
+       JOIN (SELECT DISTINCT product_id FROM c) cp USING (product_id) JOIN branches b ON b.id = e.branch_id
        WHERE e.sale_date BETWEEN {T1} AND {T2} AND b.warehouse_id IS NOT NULL GROUP BY 1, 2)
-SELECT s.warehouse_id, s.product_id, s.qty::float8 qty, s.value_usd::float8 v, COALESCE(sl.q, 0)::float8 s30,
+SELECT c.warehouse_id, c.product_id, c.qty::float8 qty, c.value_usd::float8 v, COALESCE(sl.q, 0)::float8 s30,
        p.pname, p.brand, p.cname
-FROM stock_wh s JOIN whs USING (warehouse_id) JOIN pdm p USING (product_id)
-LEFT JOIN wmx ON wmx.warehouse_id = s.warehouse_id AND wmx.product_id = s.product_id
-LEFT JOIN sl ON sl.warehouse_id = s.warehouse_id AND sl.product_id = s.product_id
-WHERE s.snap_date = {W2} AND s.qty > 0 AND wmx.product_id IS NULL""", *q2.params) if sn["w"] else []
+FROM c JOIN pdm p USING (product_id)
+LEFT JOIN sl ON sl.warehouse_id = c.warehouse_id AND sl.product_id = c.product_id""", *q2.params) if sn["w"] else []
 
     meta = {r["id"]: r for r in await con.fetch(
         """SELECT b.id, b.name, b.region_id, rg.name region FROM branches b JOIN regions rg ON rg.id = b.region_id""")}
