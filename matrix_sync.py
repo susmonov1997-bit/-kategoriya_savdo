@@ -178,6 +178,28 @@ def loose_key(v) -> str | None:
 
 # ---------------------------------------------------------------------------
 # Bog'lash va yozish
+_CUR_MX = """SELECT branch_id, product_id, max(category_id) category_id, max(need_qty) need FROM matrix_rows
+             WHERE branch_id IS NOT NULL AND product_id IS NOT NULL AND category_id IS NOT NULL GROUP BY 1, 2"""
+
+
+async def snapshot_hist(con: asyncpg.Connection) -> bool:
+    """Joriy matritsani matrix_hist'ga versiya sifatida yozadi (o'zgargan bo'lsa). Kunlik chartlar uchun."""
+    sig = ("SELECT md5(coalesce(string_agg(branch_id || ':' || product_id || ':' || need, ',' "
+           "ORDER BY branch_id, product_id), '')) FROM ({}) x")
+    last = await con.fetchval("SELECT max(ver) FROM matrix_hist")
+    cur = await con.fetchval(sig.format(_CUR_MX))
+    if last is not None and cur == await con.fetchval(
+            sig.format("SELECT branch_id, product_id, need FROM matrix_hist WHERE ver = $1"), last):
+        return False
+    today = datetime.now(TZ).date()
+    ver = today if last is not None else datetime(2000, 1, 1).date()
+    async with con.transaction():
+        await con.execute("DELETE FROM matrix_hist WHERE ver = $1", ver)
+        await con.execute(f"INSERT INTO matrix_hist (ver, branch_id, product_id, category_id, need) "
+                          f"SELECT $1, branch_id, product_id, category_id, need FROM ({_CUR_MX}) x", ver)
+    return True
+
+
 async def branch_map(con: asyncpg.Connection) -> dict[str, tuple[int, int | None]]:
     """name_key → (branch_id, warehouse_id): botdagi filial nomlari + qo'lda bog'langan matritsa nomlari."""
     br = {b["name_key"]: (b["id"], b["warehouse_id"])
@@ -235,6 +257,10 @@ async def rebind_branches(con: asyncpg.Connection) -> int:
             len(set(allb)), len(ok), no_wh, rows_ok)
         # ▲▼ tarixi joriy qoldiq sanasi uchun qayta hisoblansin
         await con.execute("DELETE FROM matrix_daily WHERE snap_date = (SELECT max(snap_date) FROM stock_branch)")
+    try:
+        await snapshot_hist(con)
+    except Exception:  # noqa: BLE001
+        log.exception("matrix_hist yozilmadi")
     return n
 
 
@@ -319,6 +345,10 @@ async def sync(pool: asyncpg.Pool, trigger: str = "auto", user_id: int | None = 
             del values
             async with pool.acquire() as con:
                 stats = await bind_and_store(con, rows)
+                try:                                   # kunlik chartlar uchun matritsa versiyasi
+                    await snapshot_hist(con)
+                except Exception:  # noqa: BLE001
+                    log.exception("matrix_hist yozilmadi")
                 try:                                   # ▲▼ uchun bugungi bajarilish tarixi
                     from api_matrix import refresh_daily
                     await refresh_daily(con, await con.fetchval("SELECT max(snap_date) FROM stock_branch"))

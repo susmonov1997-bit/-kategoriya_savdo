@@ -1993,9 +1993,125 @@ const mxCol = p => (p == null ? 'var(--so)' : p < 70 ? 'var(--bad)' : p < 85 ? '
 const mxPp = d => (d == null || !isFinite(d) ? '' : `<span class="pp ${sgn(d)}">${sgn(d) === 'up' ? '▲' : sgn(d) === 'dn' ? '▼' : '•'}${nf1.format(Math.abs(d))}</span>`);
 const mxDt = s => { if (!s) return ''; const d = new Date(s); return d.toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tashkent'}).replace(',', ''); };
 const mxBar = (p, c) => `<span class="mxbar"><i style="width:${Math.max(0, Math.min(100, p || 0))}%;background:${c || mxCol(p)}"></i></span>`;
+// ---------------------------------------------------------------- matritsa: kunlik chartlar
+const MX_HD = (() => { try { const v = +localStorage.getItem('mx_hd'); return [14, 30, 90].includes(v) ? v : 30; } catch (e) { return 30; } })();
+Object.assign(MX, {hd: MX_HD, hdm: 'usd', dl: {}, dlo: {}});
+const mxDayN = s => Math.round(Date.parse(s + 'T00:00:00Z') / 864e5);
+// Umumiy chiziq chizmasi: sanalar bo'yicha (bo'sh kunlar — oraliq), chap o'q — chiziq, o'ng o'q — ustunlar (ixtiyoriy)
+function mxChart(host, o) {
+  const dates = o.dates, n = dates.length;
+  if (n < 2) { host.innerHTML = `<div class="empty">Kunlik tarix hali yetarli emas — kamida 2 kunlik qoldiq kerak.</div>`; return; }
+  const W = Math.max(280, host.clientWidth || 340), H = o.h || 180, L = 40, R = o.bars ? 34 : 14, T = 10, Bm = 22;
+  const d0 = mxDayN(dates[0]), d1 = mxDayN(dates[n - 1]);
+  const xs = dates.map(s => L + (W - L - R) * (mxDayN(s) - d0) / Math.max(1, d1 - d0));
+  const v = o.line;
+  let lo = Math.min(...v), hi = Math.max(...v);
+  if (o.pct) { lo = Math.max(0, Math.floor((lo - 2) / 5) * 5); hi = Math.min(100, Math.ceil((hi + 2) / 5) * 5); }
+  else { const pad = (hi - lo) * 0.15 || Math.abs(hi) * 0.05 || 1; lo = Math.max(0, lo - pad); hi = hi + pad; }
+  if (hi <= lo) hi = lo + 1;
+  const y = t => T + (H - T - Bm) * (1 - (t - lo) / (hi - lo));
+  let g = '';
+  for (let k = 0; k <= 3; k++) {
+    const t = lo + (hi - lo) * k / 3;
+    g += `<line x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}" stroke="var(--line)" stroke-width="1" stroke-dasharray="2 3"/>
+      <text x="${L - 5}" y="${y(t) + 4}" text-anchor="end" font-size="10" fill="var(--muted)">${o.fmtAx(t)}</text>`;
+  }
+  if (o.bars) {
+    const bh = Math.max(...o.bars, 1), yb = t => H - Bm - (H - T - Bm) * t / bh;
+    const bw = Math.max(1.5, Math.min(10, (W - L - R) / Math.max(1, d1 - d0 + 1) * 0.6));
+    g += o.bars.map((t, i) => `<rect x="${xs[i] - bw / 2}" y="${yb(t)}" width="${bw}" height="${H - Bm - yb(t)}" rx="1.5" fill="var(--bad)" fill-opacity=".18"/>`).join('');
+    [0, bh / 2, bh].forEach(t => { g += `<text x="${W - R + 4}" y="${yb(t) + 4}" font-size="10" fill="var(--muted)">${nf0.format(Math.round(t))}</text>`; });
+  }
+  const step = Math.max(1, Math.ceil(n / 6));
+  for (let i = 0; i < n; i += step) if (xs[n - 1] - xs[i] >= 44) g += `<text x="${xs[i]}" y="${H - 6}" text-anchor="middle" font-size="10" fill="var(--muted)">${dm(dates[i])}</text>`;
+  g += `<text x="${xs[n - 1]}" y="${H - 6}" text-anchor="end" font-size="10" fill="var(--muted)">${dm(dates[n - 1])}</text>`;
+  const path = v.map((t, i) => `${i ? 'L' : 'M'}${xs[i].toFixed(1)},${y(t).toFixed(1)}`).join('');
+  const col = o.col || 'var(--accent)', base = H - Bm;
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="height:${H}px" role="img" aria-label="${esc(o.label || 'Kunlik')}">${g}
+    ${o.area ? `<path d="${path}L${xs[n - 1]},${base}L${xs[0]},${base}Z" fill="${col}" fill-opacity=".1"/>` : ''}
+    <path d="${path}" fill="none" stroke="${col}" stroke-width="2.2" stroke-linejoin="round"/>
+    <circle cx="${xs[n - 1]}" cy="${y(v[n - 1])}" r="4" fill="${col}" stroke="var(--card)" stroke-width="2"/>
+    <g class="hov" visibility="hidden"><line class="hl" y1="${T}" y2="${base}" stroke="var(--muted)" stroke-width="1"/>
+      <circle class="hc" r="4" fill="${col}" stroke="var(--card)" stroke-width="2"/></g>
+    <rect x="${L}" y="0" width="${W - L - R}" height="${H}" fill="transparent" class="hit"/></svg><div class="tip" hidden></div>`;
+  const svg = host.querySelector('svg'), tip = host.querySelector('.tip'), hov = svg.querySelector('.hov');
+  const move = ev => {
+    const rect = svg.getBoundingClientRect(), px = (ev.clientX - rect.left) * W / rect.width;
+    let i = 0; xs.forEach((t, k) => { if (Math.abs(t - px) < Math.abs(xs[i] - px)) i = k; });
+    hov.setAttribute('visibility', 'visible');
+    hov.querySelector('.hl').setAttribute('x1', xs[i]); hov.querySelector('.hl').setAttribute('x2', xs[i]);
+    hov.querySelector('.hc').setAttribute('cx', xs[i]); hov.querySelector('.hc').setAttribute('cy', y(v[i]));
+    tip.hidden = false; tip.innerHTML = o.tip(i);
+    tip.style.left = Math.max(60, Math.min(rect.width - 60, xs[i] / W * rect.width)) + 'px';
+  };
+  const hit = svg.querySelector('.hit');
+  hit.addEventListener('pointermove', move); hit.addEventListener('pointerdown', move);
+  hit.addEventListener('pointerleave', () => { hov.setAttribute('visibility', 'hidden'); tip.hidden = true; });
+}
+const mxHdSeg = () => `<div class="seg mini mxhd">${[14, 30, 90].map(k => `<button data-hd="${k}" aria-pressed="${MX.hd === k}">${k}${k === 90 ? ' kun' : ''}</button>`).join('')}</div>`;
+function mxHdWire(box, redraw) {
+  box.querySelectorAll('[data-hd]').forEach(b => b.onclick = () => {
+    const k = +b.dataset.hd; if (MX.hd === k) return; MX.hd = k;
+    try { localStorage.setItem('mx_hd', k); } catch (e) { /* */ }
+    redraw();
+  });
+}
+// Matritsa: kunlik bajarilish % + yo'q pozitsiya (filtrlar: Filial/Mini, hudud, kategoriya — ro'yxatdagi kabi)
+async function mxDailyMx() {
+  const box = $('mxDaily'); if (!box) return;
+  const seq = MX.seq, hd = MX.hd;
+  box.innerHTML = `<div class="sh"><h2>Kunlik bajarilish</h2>${mxHdSeg()}</div><div class="chartwrap"><div class="empty">Yuklanmoqda…</div></div>`;
+  mxHdWire(box, mxDailyMx);
+  if (!MX.dl[hd]) {
+    try { const r = await api('matrix/daily', {...filters(), hd}); if (seq !== MX.seq) return; MX.dl[hd] = r; }
+    catch (e) { if (seq === MX.seq && $('mxDaily')) box.querySelector('.chartwrap').innerHTML = `<div class="errbox">${esc(e.message)}</div>`; return; }
+  }
+  if ($('mxDaily') !== box || hd !== MX.hd) return;
+  const d = MX.dl[hd], g = MX.g === 'm' ? 1 : 0, N = d.dates.length;
+  const P = new Array(N).fill(0), O = new Array(N).fill(0), M = new Array(N).fill(0);
+  d.rows.forEach(r => { if (r[1] !== g || (MX.reg && r[2] !== MX.reg) || (MX.cat && r[3] !== MX.cat)) return; P[r[0]] += r[4]; O[r[0]] += r[5]; M[r[0]] += r[6]; });
+  const idx = [...Array(N).keys()].filter(i => P[i] > 0);
+  const dates = idx.map(i => d.dates[i]), pc = idx.map(i => O[i] / P[i] * 100), ms = idx.map(i => M[i]);
+  box.querySelector('.sh').insertAdjacentHTML('afterend', `<div class="legend"><span><i style="background:var(--accent)"></i>Bajarilish %</span><span><i style="background:var(--bad);opacity:.35;height:8px"></i>Yo'q pozitsiya</span></div>`);
+  mxChart(box.querySelector('.chartwrap'), {dates, line: pc, bars: ms, pct: true, label: 'Kunlik matritsa bajarilishi',
+    fmtAx: t => Math.round(t) + '%', tip: i => `<b>${dm(dates[i])}</b> · ${nf1.format(pc[i])}%<br>yo'q: ${nf0.format(ms[i])} poz.`});
+}
+// Nematritsa: filial va ombor — ikki alohida chizma (har biri o'z shkalasida)
+async function mxDailyOut() {
+  const box = $('mxDailyO'); if (!box) return;
+  const seq = MX.seq, hd = MX.hd, m = MX.hdm;
+  box.innerHTML = `<div class="sh"><h2>Kunlik nematritsa qoldig'i</h2><div class="seg mini">${[['usd', '$'], ['qty', 'Dona']].map(([k, l]) => `<button data-hm="${k}" aria-pressed="${m === k}">${l}</button>`).join('')}</div></div>
+    ${mxHdSeg()}<div class="mxdo"><div class="empty">Yuklanmoqda…</div></div>`;
+  mxHdWire(box, mxDailyOut);
+  box.querySelectorAll('[data-hm]').forEach(b => b.onclick = () => { if (MX.hdm === b.dataset.hm) return; MX.hdm = b.dataset.hm; mxDailyOut(); });
+  if (!MX.dlo[hd]) {
+    try { const r = await api('matrix/outside_daily', {...filters(), hd}); if (seq !== MX.seq) return; MX.dlo[hd] = r; }
+    catch (e) { if (seq === MX.seq && $('mxDailyO')) box.querySelector('.mxdo').innerHTML = `<div class="errbox">${esc(e.message)}</div>`; return; }
+  }
+  if ($('mxDailyO') !== box || hd !== MX.hd) return;
+  const d = MX.dlo[hd], k = m === 'usd' ? 2 : 1;
+  const fv = t => m === 'usd' ? usd(t) : nf0.format(Math.round(t)) + ' dona';
+  const fa = t => m === 'usd' ? (t >= 1e6 ? nf1.format(t / 1e6) + 'M' : Math.round(t / 1e3) + 'k') : (t >= 1e4 ? Math.round(t / 1e3) + 'k' : nf0.format(Math.round(t)));
+  const part = (key, title, col) => {
+    const s = d[key] || []; if (!s.length) return '';
+    const last = s[s.length - 1][k], dl = last - s[0][k];
+    const span = mxDayN(s[s.length - 1][0]) - mxDayN(s[0][0]) + 1;
+    const dtxt = s.length > 1 && Math.abs(dl) > 0 ? `<span style="color:${dl < 0 ? 'var(--good)' : 'var(--bad)'}">${dl < 0 ? '▼' : '▲'} ${fv(Math.abs(dl))} · ${span} kunda</span>` : '';
+    return `<div class="mxdh"><b>${title}</b><span class="num"><b>${fv(last)}</b> ${dtxt}</span></div><div class="chartwrap" data-dk="${key}"></div>`;
+  };
+  const wrap = box.querySelector('.mxdo');
+  wrap.innerHTML = part('b', '🏪 Filiallarda', 'var(--warn)') + part('w', '🏬 Omborlarda', 'var(--accent)') || `<div class="empty">Nematritsa qoldig'i yo'q</div>`;
+  wrap.querySelectorAll('[data-dk]').forEach(el => {
+    const s = d[el.dataset.dk], dates = s.map(r => r[0]), v = s.map(r => r[k]);
+    mxChart(el, {dates, line: v, area: true, h: 120, col: el.dataset.dk === 'b' ? 'var(--warn)' : 'var(--accent)', label: 'Kunlik nematritsa qoldig\'i',
+      fmtAx: fa, tip: i => `<b>${dm(dates[i])}</b> · ${fv(v[i])}`});
+  });
+  if (wrap.querySelector('[data-dk]')) wrap.insertAdjacentHTML('beforeend', `<div class="hint">Har biri o'z shkalasida · chizmani bossangiz — kun qiymati</div>`);
+}
+
 function loadMatrixTab() {
   STALE.Matritsa = false;
-  MX.data = null; MX.bd = null; MX.od = null; MX.ou = null;
+  MX.data = null; MX.bd = null; MX.od = null; MX.ou = null; MX.dl = {}; MX.dlo = {};
   renderMx();
 }
 function renderMx() { return MX.br ? (MX.view === 'vit' && MX.data && MX.data.bc ? renderMxVitBranch($('mxBody')) : renderMxBranch($('mxBody'))) : renderMxList($('mxBody')); }
@@ -2116,6 +2232,7 @@ async function renderMxOutside(host) {
       <div class="kpi"><span class="l">shundan harakatsiz</span><span class="v num" style="color:var(--bad)">${nf0.format(Math.round(K.widle || 0))}</span>
         <span class="p num">≈ ${usd(K.widle_usd)} · filiallarda sotilmagan</span></div>
     </div>
+    <section class="card dyn mxdaily" id="mxDailyO"></section>
     <div class="hint">Matritsadan tashqari: filialda — shu filial matritsasida yo'q SKU; omborda — shu ombor filiallarining birortasi matritsasida yo'q SKU. 🏪 — filiallarda, 🏬 — omborlarda.</div>
     ${cats.length ? mxBlock('tc', 'Kategoriyalar', cats.length, `eng ko'p: ${esc(cats[0].name)} <b>${usd(cats[0].busd + cats[0].wusd)}</b>`, cats.map(catT).join('')) : ''}
     ${whs.length ? mxBlock('tw', 'Omborlar', whs.length, `eng ko'p: ${esc(whs[0].name)} <b>${usd(whs[0].usd)}</b>`, whs.map(whT).join('')) : ''}
@@ -2123,6 +2240,7 @@ async function renderMxOutside(host) {
     ${!cats.length ? `<div class="card"><div class="empty">Matritsadan tashqari qoldiq yo'q 👍</div></div>` : `<button class="btn mxzx" id="mxTx">⬇ Excel — botga yuborish</button>
       <span class="hint" style="text-align:center">kategoriya × brend + filiallar (SKU) + omborlar (SKU), harakatsizlar belgilangan</span>`}`;
   mxWireView(host);
+  mxDailyOut();
   const tg2 = (sel, set, cast) => host.querySelectorAll(`[${sel}]`).forEach(b => b.onclick = () => { const k = cast(b.getAttribute(sel)); set.has(k) ? set.delete(k) : set.add(k); renderMxOutside(host); });
   tg2('data-tc', MX.tc, String); tg2('data-tb', MX.tb, String); tg2('data-tw', MX.tw, Number); tg2('data-tr', MX.tr, Number);
   host.querySelectorAll('[data-blk]').forEach(b => b.onclick = () => { const k = b.dataset.blk; MX.blk.has(k) ? MX.blk.delete(k) : MX.blk.add(k); renderMxOutside(host); });
@@ -2300,6 +2418,7 @@ async function renderMxList(host) {
       <button data-g="f" aria-pressed="${MX.g === 'f'}">Filial · ${KB.f.branches}</button><button data-g="m" aria-pressed="${MX.g === 'm'}">Mini do'kon · ${KB.m.branches}</button></div>` : ''}
     <div class="hint">matritsa ${mxDt(d.sync.at)} · qoldiq ${dm(d.snap.b)}${!vit && d.prev ? ` · ▲▼ — ${dm(d.prev)} ga nisbatan` : ''}${MX.cat ? ` · <b>${esc(catName[MX.cat])}</b>` : ''}</div>
     <div class="kpis mxk">${kpis}</div>
+    ${vit ? '' : '<section class="card dyn mxdaily" id="mxDaily"></section>'}
     ${!vit && ub && (ub.branches || ub.skus) ? `<div class="mxwarn">Bog'lanmagan: ${ub.branches ? `<b>${ub.branches}</b> filial` : ''}${ub.branches && ub.skus ? ' · ' : ''}${ub.skus ? `<b>${ub.skus}</b> SKU` : ''} — botda ${ub.branches ? '/yangi (filial)' : ''}${ub.branches && ub.skus ? ', ' : ''}${ub.skus ? "/matritsa → «⬇ Bog'lanish Excel»" : ''}</div>` : ''}
     ${cats.length > 1 ? mxBlock('c', "Kategoriyalar", cats.length, mxWorst(cats.map(c => ({name: c.name, A: c.A})), vit),
       `${cats.map(catRow).join('')}
@@ -2320,6 +2439,7 @@ async function renderMxList(host) {
   const ov = $('mxOver'); if (ov) ov.onclick = () => { MX.over = !MX.over; MX.lim = 40; renderMxList(host); };
   host.querySelectorAll('[data-b]').forEach(b => b.onclick = () => { MX.y = window.scrollY; MX.br = +b.dataset.b; MX.bd = null; MX.open = {}; MX.exLim = 15; renderMx(); syncBack(); window.scrollTo(0, 0); });
   const mo = $('mxMore'); if (mo) mo.onclick = () => { MX.lim += 40; renderMxList(host); };
+  if (!vit) mxDailyMx();
 }
 function renderMxVitBranch(host) {
   const d = MX.data, b = MX.G[MX.br];

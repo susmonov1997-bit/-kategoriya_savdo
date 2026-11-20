@@ -624,3 +624,8 @@ button.mxbr{width:100%;border:0;border-top:1px solid var(--line);background:none
 #mxView button{padding:7px 4px;font-size:12.5px}
 .kpis.mxk .kpi.mxhero .v{font-size:19px}
 #mxView button{padding:7px 2px;font-size:12px}
+/* matritsa: kunlik chartlar */
+.mxdaily{margin:2px 0}
+.mxdaily .mxhd{align-self:flex-start}
+.mxdh{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:6px;font-size:13px}
+.mxdh b{font-weight:700}

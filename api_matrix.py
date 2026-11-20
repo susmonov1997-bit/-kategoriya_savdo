@@ -46,6 +46,7 @@ class MxReq(Filters):
     days: Literal[7, 10, 14, 21, 30] = 14          # zakaz: necha kunlik savdo zahirasi
     mode: Literal["full", "mx"] = "full"          # zakaz turi: matritsa + zahira | faqat matritsa
     branch_id: int | None = None
+    hd: Literal[14, 30, 90] = 30                  # kunlik chartlar: necha kun
 
 
 async def _snaps(con) -> dict:
@@ -328,7 +329,7 @@ async def overview(req: MxReq, request: Request, user: User = Depends(current_us
     async def run():
         async with request.app.state.pool.acquire() as con:
             return await _overview(con, req, user)
-    payload = req.model_dump(mode="json", exclude={"date_from", "date_to", "compare", "share_by", "branch_id"})
+    payload = req.model_dump(mode="json", exclude={"date_from", "date_to", "compare", "share_by", "branch_id", "hd"})
     payload["_adm"] = user.is_admin
     return await _M().cached(request, user, "mx_overview", payload, run)
 
@@ -338,7 +339,7 @@ async def branch(req: MxReq, request: Request, user: User = Depends(current_user
     async def run():
         async with request.app.state.pool.acquire() as con:
             return await _branch(con, req, user)
-    payload = req.model_dump(mode="json", exclude={"date_from", "date_to", "compare", "share_by"})
+    payload = req.model_dump(mode="json", exclude={"date_from", "date_to", "compare", "share_by", "hd"})
     return await _M().cached(request, user, "mx_branch", payload, run)
 
 
@@ -610,7 +611,7 @@ async def all_flt(con):
                       User(id=0, is_admin=True, level="admin"))
 
 
-_XP = {"date_from", "date_to", "compare", "share_by", "branch_id"}
+_XP = {"date_from", "date_to", "compare", "share_by", "branch_id", "hd"}
 
 
 async def _order_full(req: MxReq, request, user: User) -> dict:
@@ -916,6 +917,131 @@ async def outside_export(req: MxReq, request: Request, user: User = Depends(curr
 
 
 # ---------------------------------------------------------------------------
+# Kunlik chartlar (matrix_hist — matritsa versiyalari; versiyadan oldingi kunlar — birinchi versiya bilan)
+_DATES = """WITH RECURSIVE t AS (
+    SELECT (SELECT min(snap_date) FROM {t} WHERE snap_date >= $1 AND snap_date <= $2) d
+    UNION ALL SELECT (SELECT min(snap_date) FROM {t} WHERE snap_date > t.d AND snap_date <= $2) FROM t WHERE t.d IS NOT NULL)
+SELECT d FROM t WHERE d IS NOT NULL"""
+_DV = """dv AS (SELECT d, COALESCE((SELECT max(ver) FROM matrix_hist WHERE ver <= d),
+                               (SELECT min(ver) FROM matrix_hist)) ver FROM unnest({DT}::date[]) d)"""
+
+
+async def _hist_ready(con) -> None:
+    if not await con.fetchval("SELECT EXISTS (SELECT 1 FROM matrix_hist)"):
+        from matrix_sync import snapshot_hist
+        await snapshot_hist(con)
+
+
+async def _dates(con, table: str, end, hd: int) -> list:
+    if end is None:
+        return []
+    return [r["d"] for r in await con.fetch(_DATES.format(t=table), end - timedelta(days=hd - 1), end)]
+
+
+async def daily_data(con, q, hd: int) -> dict:
+    """Matritsa bajarilishi kunlar bo'yicha: [kun, g(0 filial/1 mini), hudud, kategoriya, pos, ok, yo'q]."""
+    await _hist_ready(con)
+    dts = await _dates(con, "stock_branch", await con.fetchval("SELECT max(snap_date) FROM stock_branch"), hd)
+    if not dts:
+        return {"dates": [], "rows": []}
+    w_ = q.ctes()
+    DT = q.p(dts)
+    rows = await con.fetch(f"""
+WITH {w_},
+{_DV.format(DT=DT)},
+m AS MATERIALIZED (
+    SELECT dv.d, h.branch_id, h.product_id, h.category_id, h.need FROM dv JOIN matrix_hist h ON h.ver = dv.ver
+    WHERE h.branch_id IN (SELECT branch_id FROM bb) AND h.product_id IN (SELECT product_id FROM pd)),
+cov AS (SELECT d, branch_id FROM (SELECT DISTINCT d, branch_id FROM m) x
+        WHERE EXISTS (SELECT 1 FROM stock_branch c WHERE c.snap_date = x.d AND c.branch_id = x.branch_id))
+SELECT m.d, m.branch_id, m.category_id, count(*)::int pos,
+       count(*) FILTER (WHERE COALESCE(s.qty, 0) >= m.need)::int ok,
+       count(*) FILTER (WHERE COALESCE(s.qty, 0) <= 0)::int miss
+FROM m JOIN cov ON cov.d = m.d AND cov.branch_id = m.branch_id
+LEFT JOIN stock_branch s ON s.snap_date = m.d AND s.branch_id = m.branch_id AND s.product_id = m.product_id
+GROUP BY 1, 2, 3""", *q.params)
+    meta = {r["id"]: (1 if is_mini(r["name"]) else 0, r["region_id"])
+            for r in await con.fetch("SELECT id, name, region_id FROM branches")}
+    di = {d: i for i, d in enumerate(dts)}
+    agg: dict[tuple, list] = {}
+    for r in rows:
+        g, rg = meta.get(r["branch_id"], (0, None))
+        a = agg.setdefault((di[r["d"]], g, rg, r["category_id"]), [0, 0, 0])
+        a[0] += r["pos"]
+        a[1] += r["ok"]
+        a[2] += r["miss"]
+    return {"dates": [d.isoformat() for d in dts],
+            "rows": [[*k, *v] for k, v in sorted(agg.items(), key=lambda kv: kv[0][0])]}
+
+
+async def outside_daily_data(con, q, hd: int) -> dict:
+    """Nematritsa qoldig'i kunlar bo'yicha: b — filiallarda, w — omborlarda: [sana, dona, $]."""
+    await _hist_ready(con)
+    out = {"b": [], "w": []}
+    bd = await _dates(con, "stock_branch", await con.fetchval("SELECT max(snap_date) FROM stock_branch"), hd)
+    wd = await _dates(con, "stock_wh", await con.fetchval("SELECT max(snap_date) FROM stock_wh"), hd)
+    fx = "(SELECT rate FROM fx_periods WHERE dv.d >= valid_from AND dv.d < valid_to LIMIT 1)"
+    if bd:
+        w_ = q.ctes()
+        DT = q.p(bd)
+        rows = await con.fetch(f"""
+WITH {w_},
+{_DV.format(DT=DT)},
+mc AS (SELECT DISTINCT category_id FROM matrix_rows WHERE category_id IS NOT NULL),
+pdm AS (SELECT pd.product_id FROM pd JOIN mc USING (category_id))
+SELECT dv.d, sum(s.qty)::float8 q, (sum(COALESCE(s.cost_uzs, 0)) / NULLIF(max({fx}), 0))::float8 usd
+FROM dv JOIN stock_branch s ON s.snap_date = dv.d
+WHERE s.qty > 0 AND s.branch_id IN (SELECT branch_id FROM bb) AND s.product_id IN (SELECT product_id FROM pdm)
+  AND NOT EXISTS (SELECT 1 FROM matrix_hist h WHERE h.ver = dv.ver AND h.branch_id = s.branch_id
+                  AND h.product_id = s.product_id)
+GROUP BY 1 ORDER BY 1""", *q.params)
+        out["b"] = [[r["d"].isoformat(), r["q"] or 0, r["usd"] or 0] for r in rows]
+    if wd:
+        q2 = q.__class__(q.f, q.cats, q.attrs)
+        w2 = q2.ctes()
+        DT = q2.p(wd)
+        rows = await con.fetch(f"""
+WITH {w2},
+{_DV.format(DT=DT)},
+mc AS (SELECT DISTINCT category_id FROM matrix_rows WHERE category_id IS NOT NULL),
+pdm AS (SELECT pd.product_id FROM pd JOIN mc USING (category_id)),
+whs AS (SELECT DISTINCT warehouse_id FROM bb WHERE warehouse_id IS NOT NULL),
+wmx AS MATERIALIZED (SELECT DISTINCT h.ver, b.warehouse_id, h.product_id FROM matrix_hist h
+        JOIN branches b ON b.id = h.branch_id
+        WHERE b.warehouse_id IS NOT NULL AND h.ver IN (SELECT ver FROM dv))
+SELECT dv.d, sum(s.qty)::float8 q,
+       sum(CASE WHEN s.value_usd / s.qty > {USD_MAX_UNIT} THEN s.value_usd / NULLIF({fx}, 0)
+                ELSE s.value_usd END)::float8 usd
+FROM dv JOIN stock_wh s ON s.snap_date = dv.d
+WHERE s.qty > 0 AND s.warehouse_id IN (SELECT warehouse_id FROM whs) AND s.product_id IN (SELECT product_id FROM pdm)
+  AND NOT EXISTS (SELECT 1 FROM wmx WHERE wmx.ver = dv.ver AND wmx.warehouse_id = s.warehouse_id
+                  AND wmx.product_id = s.product_id)
+GROUP BY 1 ORDER BY 1""", *q2.params)
+        out["w"] = [[r["d"].isoformat(), r["q"] or 0, r["usd"] or 0] for r in rows]
+    return out
+
+
+def _dkey(req: MxReq) -> dict:
+    return req.model_dump(mode="json", exclude=(_XP - {"hd"}) | {"days", "mode"})
+
+
+@router.post("/daily")
+async def daily(req: MxReq, request: Request, user: User = Depends(current_user)):
+    async def run():
+        async with request.app.state.pool.acquire() as con:
+            return await daily_data(con, await _flt(con, req, user), req.hd)
+    return await _M().cached(request, user, "mx_daily", _dkey(req), run)
+
+
+@router.post("/outside_daily")
+async def outside_daily(req: MxReq, request: Request, user: User = Depends(current_user)):
+    async def run():
+        async with request.app.state.pool.acquire() as con:
+            return await outside_daily_data(con, await _flt(con, req, user), req.hd)
+    return await _M().cached(request, user, "mx_outside_daily", _dkey(req), run)
+
+
+# ---------------------------------------------------------------------------
 # Oldindan hisoblash: ma'lumot o'zgargach (savdo/qoldiq yuklandi, matritsa o'qildi, kurs o'zgardi) Matritsa tabining
 # standart ko'rinishlari (barcha kategoriyalar, filtrsiz) fonda hisoblanib keshga qo'yiladi — birinchi ochish ham tez.
 async def prewarm(app) -> float:
@@ -932,7 +1058,8 @@ async def prewarm(app) -> float:
         await overview(f, req, User(id=0, is_admin=adm, level="admin" if adm else "viewer"))
         steps.append(f"overview {time.time() - t:.1f}s")
     adm = User(id=0, is_admin=True, level="admin")
-    for name, fn in (("zakaz", order), ("nematritsa", outside), ("yuborish", lambda f_, r_, u_: _ship(f_, r_, u_))):
+    for name, fn in (("zakaz", order), ("nematritsa", outside), ("yuborish", lambda f_, r_, u_: _ship(f_, r_, u_)),
+                     ("kunlik", daily), ("nematritsa kunlik", outside_daily)):
         t = time.time()
         await fn(f, req, adm)
         steps.append(f"{name} {time.time() - t:.1f}s")
