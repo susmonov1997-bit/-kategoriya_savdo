@@ -1355,19 +1355,107 @@ function renderPlan() {
     ${orphan.length ? `<span class="hint">⚠ Rejada bor, tovar spravochnigida yo'q (fakt yo'q, jamiga qo'shilmadi): ${orphan.map(c => `${esc(c.name)} (${esc(c.grp)}, ${PL.mode === 'month' ? MONTHS[PL.month].toLowerCase() : 'yillik'} reja ${money(PL.mode === 'month' ? c[isG ? 'plan_gross' : 'plan_amount'][PL.month] : sum(c[isG ? 'plan_gross' : 'plan_amount']))})`).join(', ')}</span>` : ''}</div>`;
   const note = `<p class="foot">Davr rejasi = oylik reja × o'tgan kunlar / oy kunlari (ma'lumot ${dm(d.data_to)} gacha). Bajarilish = fakt / davr rejasi.
     Prognoz — hozirgi o'rtacha kunlik sur'at bilan. Reja oy × kategoriya bo'yicha, shuning uchun hudud/brend filtrlari bu yerda qo'llanmaydi.</p>`;
-  host.innerHTML = head + gcards + chart + table + note;
+  host.innerHTML = head + `<div class="card dyn pldaily" id="plDaily"></div>` + gcards + chart + table + note;
+  plDaily(live);
   stockPlanCard(host);                       // qoldiq rejaga yetadimi (joriy oy, savdo)
   host.querySelectorAll('button[data-cid]').forEach(b => b.onclick = () => {
     const c = META.categories.find(x => String(x.id) === b.dataset.cid); if (!c) return;
     goCategory(c); setTab('Umumiy');
   });
 }
+// ---------------------------------------------------------------- reja: kunlik chart (tanlangan oy)
+Object.assign(PL, {dm: 'd', dd: {}});
+async function plDaily(live) {
+  const box = $('plDaily'); if (!box || !PL.data) return;
+  const d = PL.data, y = PL.year, m = PL.month, D = dim(y, m), e = elapsed(y, m), isG = PL.metric === 'gross';
+  const total = plSumRows(live, 'Jami'), full = total[isG ? 'plan_gross' : 'plan_amount'][m];
+  const head = `<div class="sh"><h2>Kunlik dinamika</h2><div class="seg mini" id="plDm">${[['d', 'Kunlik'], ['c', 'Jamlanma']]
+    .map(([k, l]) => `<button data-v="${k}" aria-pressed="${PL.dm === k}">${l}</button>`).join('')}</div></div>`;
+  const wire = () => box.querySelectorAll('#plDm [data-v]').forEach(b => b.onclick = () => { if (PL.dm === b.dataset.v) return; PL.dm = b.dataset.v; plDaily(live); });
+  if (full == null) { box.innerHTML = head + `<div class="empty">${MONTHS[m]} uchun ${isG ? 'gross ' : ''}reja yo'q</div>`; wire(); return; }
+  const mm = String(m + 1).padStart(2, '0'), from = `${y}-${mm}-01`;
+  const to = e ? (d.data_to < `${y}-${mm}-${String(D).padStart(2, '0')}` ? d.data_to : `${y}-${mm}-${String(D).padStart(2, '0')}`) : null;
+  const ids = live.map(c => c.id).sort((a, b) => a - b);
+  const key = [y, m, st.cur, ids.join(',')].join('|');
+  if (e && !PL.dd[key]) {
+    box.innerHTML = head + `<div class="chartwrap"><div class="empty">Yuklanmoqda…</div></div>`; wire();
+    try {
+      const r = await api('daily', {scope: 'a:', category_ids: ids, date_from: from, date_to: to, compare: 'none', cur: st.cur});
+      PL.dd[key] = r.series;
+    } catch (err) { if ($('plDaily') === box) box.querySelector('.chartwrap').innerHTML = `<div class="errbox">${esc(err.message)}</div>`; return; }
+    if ($('plDaily') !== box || PL.data !== d || PL.month !== m) return;
+  }
+  const ser = e ? PL.dd[key] : [];
+  const fact = [...Array(D)].map((_, i) => { const s = ser.find(p => +p.date.slice(8, 10) === i + 1); return s ? (isG ? s.margin : s.amount) : null; });
+  const nf = fact.reduce((n, v, i) => (v != null ? i + 1 : n), 0);          // oxirgi faktli kun
+  const per = full / D, got = sum(fact.slice(0, nf));
+  const need = nf < D ? Math.max(0, full - got) / (D - nf) : null;
+  const usd = st.cur === 'usd', div = usd ? 1e3 : 1e9, unit = usd ? 'ming $' : "mlrd so'm";
+  const cum = PL.dm === 'c';
+  let c = 0; const cf = fact.map(v => (v == null ? null : (c += v)));
+  const fc = nf ? got / nf * D : null;
+  const W = Math.max(280, box.clientWidth - 28 || 340), H = 190, L = 40, R = 12, T = 12, Bm = 22;
+  const x = i => L + (W - L - R) * (i + 0.5) / D;
+  const vals = cum ? [full, fc || 0, got] : [...fact.map(v => v || 0), per, need || 0];
+  const step = niceStep(Math.max(...vals, 1) / 4), hi = Math.ceil(Math.max(...vals, 1) / step) * step;
+  const yy = v => T + (H - T - Bm) * (1 - v / hi);
+  const ax = v => { const t = v / div; return t >= 10 || t === 0 ? nf0.format(t) : nf1.format(t); };
+  let g = '';
+  for (let v = 0; v <= hi + step / 2; v += step) g += `<line x1="${L}" x2="${W - R}" y1="${yy(v)}" y2="${yy(v)}" stroke="var(--line)" stroke-width="1" ${v ? 'stroke-dasharray="2 3"' : ''}/>
+    <text x="${L - 5}" y="${yy(v) + 4}" text-anchor="end" font-size="10" fill="var(--muted)">${ax(v)}</text>`;
+  [1, 5, 10, 15, 20, 25, D].forEach(dd => { if (dd <= D && (dd === D || D - dd >= 3)) g += `<text x="${x(dd - 1)}" y="${H - 6}" text-anchor="middle" font-size="10" fill="var(--muted)">${String(dd).padStart(2, '0')}.${mm}</text>`; });
+  let body = '', leg = '', sub = '';
+  if (!cum) {
+    const bw = (W - L - R) / D * 0.66;
+    body = fact.map((v, i) => v != null
+      ? `<rect x="${x(i) - bw / 2}" y="${yy(v)}" width="${bw}" height="${Math.max(0, H - Bm - yy(v))}" rx="1.5" fill="${v >= per ? 'var(--good)' : 'var(--s4)'}"/>`
+      : `<rect x="${x(i) - bw / 2}" y="${yy(per)}" width="${bw}" height="${H - Bm - yy(per)}" rx="1.5" fill="var(--line)" fill-opacity=".7"/>`).join('')
+      + `<line x1="${L}" x2="${W - R}" y1="${yy(per)}" y2="${yy(per)}" stroke="var(--ink)" stroke-width="1.5" stroke-dasharray="5 3"/>`
+      + (need != null && nf ? `<line x1="${x(nf) - bw}" x2="${W - R}" y1="${yy(need)}" y2="${yy(need)}" stroke="var(--bad)" stroke-width="1.6"/>` : '');
+    leg = `<span><i style="background:var(--good);height:8px"></i>≥ kunlik reja</span><span><i style="background:var(--s4);height:8px"></i>kam</span>
+      <span><i style="background:var(--ink)"></i>kunlik reja ${money(per)}</span>${need != null && nf ? `<span><i style="background:var(--bad)"></i>kerak ${money(need)}</span>` : ''}`;
+    sub = `${MONTHS[m]} · ${unit} · ustunni bossangiz — kun: fakt / reja`;
+  } else {
+    const P = (a, o = 0) => a.map((v, i) => `${i ? 'L' : 'M'}${x(i + o).toFixed(1)},${yy(v).toFixed(1)}`).join('');
+    const cp = [...Array(D)].map((_, i) => per * (i + 1)), cfv = cf.slice(0, nf);
+    body = `<path d="${P(cp)}" fill="none" stroke="var(--ink)" stroke-width="1.5" stroke-dasharray="5 3"/>`;
+    if (nf) {
+      body += `<path d="${P(cfv)}L${x(nf - 1)},${yy(0)}L${x(0)},${yy(0)}Z" fill="var(--accent)" fill-opacity=".1"/>
+        <path d="${P(cfv)}" fill="none" stroke="var(--accent)" stroke-width="2.4" stroke-linejoin="round"/>
+        <circle cx="${x(nf - 1)}" cy="${yy(got)}" r="4" fill="var(--accent)" stroke="var(--card)" stroke-width="2"/>`;
+      if (nf < D) body += `<path d="M${x(nf - 1)},${yy(got)}L${x(D - 1)},${yy(fc)}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="2 3"/>
+        <circle cx="${x(D - 1)}" cy="${yy(fc)}" r="3.5" fill="var(--card)" stroke="var(--accent)" stroke-width="2"/>`;
+    }
+    leg = `<span><i style="background:var(--accent)"></i>fakt (jamlanma)</span>${nf && nf < D ? `<span><i style="background:var(--accent);opacity:.5"></i>prognoz ${money(fc)}</span>` : ''}<span><i style="background:var(--ink)"></i>reja ${money(full)}</span>`;
+    sub = `${MONTHS[m]} · o'q: ${unit}${nf ? ` · ${String(nf).padStart(2, '0')}.${mm} holatida: fakt ${money(got)} / davr rejasi ${money(per * nf)}` : ''}`;
+  }
+  box.innerHTML = head + `<div class="hint">${sub}</div><div class="legend">${leg}</div>
+    <div class="chartwrap"><svg viewBox="0 0 ${W} ${H}" style="height:${H}px" role="img" aria-label="Kunlik reja va fakt">${g}${body}
+      <g class="hov" visibility="hidden"><line class="hl" y1="${T}" y2="${H - Bm}" stroke="var(--muted)" stroke-width="1"/></g>
+      <rect x="${L}" y="0" width="${W - L - R}" height="${H}" fill="transparent" class="hit"/></svg><div class="tip" hidden></div></div>`;
+  wire();
+  const svg = box.querySelector('svg'), tip = box.querySelector('.tip'), hov = svg.querySelector('.hov');
+  const move = ev => {
+    const rect = svg.getBoundingClientRect(), px = (ev.clientX - rect.left) * W / rect.width;
+    const i = Math.max(0, Math.min(D - 1, Math.round((px - L) / (W - L - R) * D - 0.5)));
+    hov.setAttribute('visibility', 'visible');
+    hov.querySelector('.hl').setAttribute('x1', x(i)); hov.querySelector('.hl').setAttribute('x2', x(i));
+    const dt = `<b>${String(i + 1).padStart(2, '0')}.${mm}</b>`;
+    tip.innerHTML = cum ? `${dt} · jamlanma<br>fakt ${cf[i] != null ? money(cf[i]) : '—'} · reja ${money(per * (i + 1))}`
+      : `${dt}<br>fakt ${fact[i] != null ? money(fact[i]) : '—'} · reja ${money(per)}${fact[i] != null && per ? ` (${pct(fact[i] / per * 100)})` : ''}`;
+    tip.hidden = false;
+    tip.style.left = Math.max(80, Math.min(rect.width - 80, x(i) / W * rect.width)) + 'px';
+  };
+  const hit = svg.querySelector('.hit');
+  hit.addEventListener('pointermove', move); hit.addEventListener('pointerdown', move);
+  hit.addEventListener('pointerleave', () => { hov.setAttribute('visibility', 'hidden'); tip.hidden = true; });
+}
 async function loadPlan(year) {
   PL.loading = true;
   $('plBody').classList.add('loading');
   try {
     const d = await api('plan?cur=' + st.cur + (year ? `&year=${year}` : ''));
-    PL.data = d; PL.year = d.year;
+    PL.data = d; PL.year = d.year; PL.dd = {};
     if (PL.month == null || year) {
       const to = d.data_to;
       PL.month = to && +to.slice(0, 4) === d.year ? +to.slice(5, 7) - 1 : 11;
@@ -1638,7 +1726,8 @@ async function stockPlanCard(host) {
     <div class="m2">${gap > 0 ? `<span class="qp lo">${smoney(gap)} yetmaydi</span>` : `<span class="qp ok">yetadi · zaxira ${smoney(-gap)}</span>`}
       ${short.length ? `<span class="hint">yetmaydi: ${short.slice(0, 4).map(x => esc(x.name)).join(', ')}${short.length > 4 ? ` +${short.length - 4}` : ''}</span>` : ''}</div>`;
   host.querySelector('.qplan')?.remove();
-  host.insertBefore(card, host.children[1] || null);
+  const pd = $('plDaily');
+  host.insertBefore(card, pd ? pd.nextSibling : (host.children[1] || null));
 }
 
 // ---------------------------------------------------------------- Qoldiq tabi
@@ -2060,7 +2149,7 @@ function mxHdWire(box, redraw) {
 async function mxDailyMx() {
   const box = $('mxDaily'); if (!box) return;
   const seq = MX.seq, hd = MX.hd;
-  box.innerHTML = `<div class="sh"><h2>Kunlik bajarilish</h2>${mxHdSeg()}</div><div class="chartwrap"><div class="empty">Yuklanmoqda…</div></div>`;
+  box.innerHTML = `<div class="sh"><h2>Kunlik bajarilish</h2>${mxHdSeg()}</div><div class="chartwrap"><div class="empty">${MX.dl[hd] ? '' : 'Yuklanmoqda…'}</div></div>`;
   mxHdWire(box, mxDailyMx);
   if (!MX.dl[hd]) {
     try { const r = await api('matrix/daily', {...filters(), hd}); if (seq !== MX.seq) return; MX.dl[hd] = r; }
