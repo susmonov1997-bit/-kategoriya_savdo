@@ -601,6 +601,11 @@ async def _plan(request: Request, year: int | None = None, user: User = Depends(
     years = [r["year"] for r in await pool.fetch("SELECT DISTINCT year FROM sales_plan ORDER BY year")]
     span = await pool.fetchrow("SELECT min(sale_date) d1, max(sale_date) d2 FROM sales_daily")
     data_from, data_to = span["d1"], span["d2"]
+    # bugungi (Toshkent) savdo yuklangan bo'lsa — kun tugallanmagan: reja hisobi kechagacha, bugun alohida
+    from datetime import datetime as _dt, timezone as _tz
+    partial = data_to if data_to and data_to == (_dt.now(_tz.utc) + timedelta(hours=5)).date() else None
+    if partial:
+        data_to = partial - timedelta(days=1)
     if not years:
         return {"year": year, "years": [], "data_from": data_from, "data_to": data_to, "cats": []}
     if year is None or year not in years:
@@ -616,7 +621,8 @@ async def _plan(request: Request, year: int | None = None, user: User = Depends(
         d = out.setdefault(r["name_key"], {
             "key": r["name_key"], "id": c["id"] if c else None, "name": c["name"] if c else r["category"],
             "grp": r["grp"] or (c["grp"] if c else None) or "—", "in_db": c is not None,
-            "plan_amount": [None] * 12, "plan_gross": [None] * 12, "fact_amount": [0.0] * 12, "fact_gross": [0.0] * 12})
+            "plan_amount": [None] * 12, "plan_gross": [None] * 12, "fact_amount": [0.0] * 12, "fact_gross": [0.0] * 12,
+            "today_amount": 0.0, "today_gross": 0.0})
         m = r["month"] - 1
         d["plan_amount"][m] = float(r["plan_amount"]) if r["plan_amount"] is not None else None
         d["plan_gross"][m] = float(r["plan_gross"]) if r["plan_gross"] is not None else None
@@ -627,11 +633,18 @@ async def _plan(request: Request, year: int | None = None, user: User = Depends(
             f"""SELECT extract(month FROM e.sale_date)::int m, p.category_id cid, sum(e.amount) a, sum(e.margin) g
                FROM {'sales_fact_usd' if cur == 'usd' else 'sales_fact'} e JOIN products p USING (product_id)
                WHERE e.sale_date BETWEEN $1 AND $2 AND p.category_id = ANY($3::int[]) GROUP BY 1, 2""",
-            _date(year, 1, 1), _date(year, 12, 31), list(ids))
+            _date(year, 1, 1), min(_date(year, 12, 31), data_to) if data_to else _date(year, 12, 31), list(ids))
         for r in rows:
             d = ids[r["cid"]]
             d["fact_amount"][r["m"] - 1] = float(r["a"] or 0)
             d["fact_gross"][r["m"] - 1] = float(r["g"] or 0)
+        if partial and partial.year == year:
+            for r in await pool.fetch(
+                    f"""SELECT p.category_id cid, sum(e.amount) a, sum(e.margin) g
+                       FROM {'sales_fact_usd' if cur == 'usd' else 'sales_fact'} e JOIN products p USING (product_id)
+                       WHERE e.sale_date = $1 AND p.category_id = ANY($2::int[]) GROUP BY 1""", partial, list(ids)):
+                ids[r["cid"]]["today_amount"] = float(r["a"] or 0)
+                ids[r["cid"]]["today_gross"] = float(r["g"] or 0)
     if cur == "usd":                 # reja so'mda — har oy o'sha oyning 15-kunidagi kurs bilan
         from datetime import date as _d2
         mr = []
@@ -641,7 +654,7 @@ async def _plan(request: Request, year: int | None = None, user: User = Depends(
         for d in out.values():
             for k in ("plan_amount", "plan_gross"):
                 d[k] = [(v / mr[i] if v is not None and mr[i] else None) for i, v in enumerate(d[k])]
-    return {"year": year, "years": years, "data_from": data_from, "data_to": data_to, "cur": cur,
+    return {"year": year, "years": years, "data_from": data_from, "data_to": data_to, "cur": cur, "partial": partial,
             "cats": sorted(out.values(), key=lambda d: (d["grp"], -sum(v or 0 for v in d["plan_amount"])))}
 
 

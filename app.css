@@ -629,3 +629,10 @@ button.mxbr{width:100%;border:0;border-top:1px solid var(--line);background:none
 .mxdaily .mxhd{align-self:flex-start}
 .mxdh{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:6px;font-size:13px}
 .mxdh b{font-weight:700}
+/* bugungi tugallanmagan kun */
+.todaybar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-2px 0 8px;padding:7px 10px;border-radius:10px;
+  background:var(--card-2);font-size:12.5px;color:var(--ink-2);line-height:1.3}
+.todaybar.on{background:color-mix(in srgb,var(--s4) 18%,var(--card))}
+.todaybar button{flex:none;border:0;border-radius:999px;padding:5px 10px;font-weight:600;font-size:12px;background:var(--accent);color:var(--accent-ink)}
+.todaybar.on button{background:var(--card);color:var(--ink)}
+.plpart{color:var(--ink-2)}

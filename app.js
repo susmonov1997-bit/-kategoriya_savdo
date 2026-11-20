@@ -183,8 +183,12 @@ const PERIOD_SHORT = {'1': 'Kecha', '7': '7 kun', '14': '14 kun', '30': '30 kun'
                       lweek: "O'tgan hafta", month: 'Shu oy', lmonth: "O'tgan oy", year: 'Shu yil'};
 const CMP_NAME = {mom: "O'tgan oy", prev: "Oldingi kunlar", yoy: "O'tgan yil", none: "Yo'q"};
 const CMP_SHORT = {mom: "o'tgan oy", prev: 'oldingi kunlar', yoy: "o'tgan yil", none: ''};
+// bugungi (Toshkent) savdo yuklangan bo'lsa — kun tugallanmagan: standart davrlar kechagacha (st.today — qo'shilgan)
+const tashToday = () => new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10);
+const partialDay = () => (META && META.data_to && META.data_to === tashToday() ? META.data_to : null);
+const fullTo = () => { const p = partialDay(); return p && !st.today && (!META.data_from || addDays(p, -1) >= META.data_from) ? addDays(p, -1) : META.data_to; };
 function presetRange(k) {
-  const to = META.data_to, dow = (D(to).getUTCDay() + 6) % 7;          // Du = 0
+  const to = fullTo(), dow = (D(to).getUTCDay() + 6) % 7;          // Du = 0
   const clamp = s => (META.data_from && s < META.data_from ? META.data_from : s);
   if (k === 'week') return [clamp(addDays(to, -dow)), to];
   if (k === 'lweek') { const mon = addDays(to, -dow - 7); return [clamp(mon), addDays(mon, 6)]; }
@@ -414,12 +418,33 @@ function heroSpark() {
     ${prev ? `<polyline fill="none" stroke="var(--prev)" stroke-width="2" vector-effect="non-scaling-stroke" points="${pts(prev)}"/>` : ''}
     <polyline fill="none" stroke="var(--accent)" stroke-width="2.5" vector-effect="non-scaling-stroke" points="${pts(cur)}"/></svg>`;
 }
+function renderTodayBar() {
+  const bar = $('todayBar'), p = partialDay();
+  if (!p || st.from > p || addDays(st.to, 1) < p) { bar.hidden = true; return; }
+  const inc = st.to === p;
+  bar.hidden = false;
+  bar.className = 'todaybar' + (inc ? ' on' : '');
+  bar.innerHTML = inc
+    ? `<span>⚠ Bugun (${dm(p)}) qo'shilgan — kun tugamagan, solishtirish noaniq</span><button id="tdBtn">Olib tashlash</button>`
+    : `<span>⏳ Bugun (${dm(p)}) hozircha <b id="tdAmt">…</b> — kun tugamagan, hisobga kirmagan</span><button id="tdBtn">+ Qo'shish</button>`;
+  $('tdBtn').onclick = () => {
+    st.today = !inc;
+    if (st.preset) [st.from, st.to] = presetRange(st.preset);
+    else st.to = inc ? addDays(p, -1) : p;
+    if (st.from > st.to) st.from = st.to;
+    resetView(); load();
+  };
+  if (!inc) api('summary', {...filters(), date_from: p, date_to: p, compare: 'none'})
+    .then(r => { const el = $('tdAmt'); if (el) el.textContent = st.metric === 'qty' ? nf0.format(r.current.qty) + ' dona' : money(r.current.amount); })
+    .catch(() => { const el = $('tdAmt'); if (el) el.textContent = '—'; });
+}
 function renderKpis(s) {
   SUM = s;
   const C = s.current, Pv = s.previous, d = s.delta || {}, cw = CMP_SHORT[st.compare];
   $('cmpHint').textContent = s.compare_period
     ? `${dm(st.from)}–${dm(st.to)} · solishtirish: ${cw} ${dm(s.compare_period.from)}–${dm(s.compare_period.to)}`
     : `${dm(st.from)}–${dm(st.to)}`;
+  renderTodayBar();
   const neg = v => (v < 0 ? ' neg' : '');
   const incPct = C.amount ? C.income / C.amount * 100 : null;
   const pincPct = Pv && Pv.amount ? Pv.income / Pv.amount * 100 : null;
@@ -555,12 +580,16 @@ function renderChart() {
   for (let i = 0; i < n; i += every) g += `<text x="${x(i)}" y="${H - 6}" text-anchor="${i === n - 1 ? 'end' : 'middle'}" font-size="10" fill="var(--muted)">${dm(series[i].date)}</text>`;
   const path = arr => arr.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('');
   const base = y(Math.max(lo, 0));
+  const pt = n > 2 && partialDay() && series[n - 1].date === partialDay();      // oxirgi kun — bugun, tugallanmagan
   host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Kunlik dinamika">
     ${g}
     <path d="${path(cur)}L${x(n - 1)},${base}L${x(0)},${base}Z" fill="var(--accent)" fill-opacity=".08"/>
     ${prev ? `<path d="${path(prev)}" fill="none" stroke="var(--prev)" stroke-width="2" stroke-linejoin="round"/>` : ''}
-    <path d="${path(cur)}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
-    <circle cx="${x(n - 1)}" cy="${y(cur[n - 1])}" r="4" fill="var(--accent)" stroke="var(--card)" stroke-width="2"/>
+    ${pt ? `<path d="${path(cur.slice(0, n - 1))}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M${x(n - 2)},${y(cur[n - 2])}L${x(n - 1)},${y(cur[n - 1])}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="3 3"/>
+      <circle cx="${x(n - 1)}" cy="${y(cur[n - 1])}" r="4" fill="var(--card)" stroke="var(--accent)" stroke-width="2"/>`
+    : `<path d="${path(cur)}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
+    <circle cx="${x(n - 1)}" cy="${y(cur[n - 1])}" r="4" fill="var(--accent)" stroke="var(--card)" stroke-width="2"/>`}
     <g id="hov" visibility="hidden"><line id="hl" y1="${T}" y2="${H - Bm}" stroke="var(--muted)" stroke-width="1"/>
       <circle id="hc" r="4" fill="var(--accent)" stroke="var(--card)" stroke-width="2"/>
       ${prev ? '<circle id="hp" r="4" fill="var(--prev)" stroke="var(--card)" stroke-width="2"/>' : ''}</g>
@@ -576,7 +605,7 @@ function renderChart() {
     svg.querySelector('#hc').setAttribute('cx', x(i)); svg.querySelector('#hc').setAttribute('cy', y(cur[i]));
     if (prev) { svg.querySelector('#hp').setAttribute('cx', x(i)); svg.querySelector('#hp').setAttribute('cy', y(prev[i])); }
     tip.hidden = false;
-    tip.innerHTML = `<b>${dm(series[i].date)}</b> ${fmtV(cur[i])}` + (prev ? `<br>${dm(series[i].prev_date)} ${fmtV(prev[i])}` : '');
+    tip.innerHTML = `<b>${dm(series[i].date)}</b> ${fmtV(cur[i])}${pt && i === n - 1 ? ' <i>(kun tugamagan)</i>' : ''}` + (prev ? `<br>${dm(series[i].prev_date)} ${fmtV(prev[i])}` : '');
     tip.style.left = Math.max(60, Math.min(rect.width - 60, x(i) / W * rect.width)) + 'px';
   };
   const hit = svg.querySelector('#hit');
@@ -1243,9 +1272,13 @@ function plCalc(c) {
   base.pct = PL.mode === 'year' ? base.fullPct : (base.per ? fact / base.per * 100 : null);
   return base;
 }
+// bugungi tugallanmagan kun shu tanlangan davrga tegishlimi
+const plPartialOn = () => { const p = PL.data && PL.data.partial; if (!p || +p.slice(0, 4) !== PL.year) return false;
+  return PL.mode !== 'month' || +p.slice(5, 7) - 1 === PL.month; };
 function plSumRows(rows, name) {
   const z = () => Array(12).fill(null);
-  const o = {name, plan_amount: z(), plan_gross: z(), fact_amount: Array(12).fill(0), fact_gross: Array(12).fill(0)};
+  const o = {name, plan_amount: z(), plan_gross: z(), fact_amount: Array(12).fill(0), fact_gross: Array(12).fill(0),
+             today_amount: sum(rows.map(c => c.today_amount)), today_gross: sum(rows.map(c => c.today_gross))};
   for (const c of rows) for (let m = 0; m < 12; m++) {
     for (const k of ['plan_amount', 'plan_gross']) if (c[k][m] != null) o[k][m] = (o[k][m] || 0) + c[k][m];
     o.fact_amount[m] += c.fact_amount[m] || 0; o.fact_gross[m] += c.fact_gross[m] || 0;
@@ -1332,6 +1365,7 @@ function renderPlan() {
         ${mode === 'month' && T.need != null ? `<span class="p">kunlik kerak <b>${money(T.need)}</b> · hozir ${money(T.nowDaily)}</span>` : ''}
         ${mode !== 'month' && mode !== 'year' && T.full ? `<span class="p">yillik rejaning <b>${pct(T.fullPct)}</b> · kutilgan ${pct(T.expPct)}</span>` : ''}
         ${isG ? `<span class="p">${grossLine(T)}</span>` : ''}
+        ${plPartialOn() ? `<span class="p plpart">⏳ bugun (${dm(d.partial)}) hozircha <b>${money(isG ? total.today_gross : total.today_amount)}</b> — kun tugamagan, hisobga kirmagan</span>` : ''}
         ${mode !== 'month' && d.data_from && d.data_from > `${PL.year}-01-01` && d.data_from.slice(0, 4) == PL.year ? `<span class="hint">⚠ bazada savdo ${dm(d.data_from)} dan bor — davr rejasi shu kundan hisoblandi</span>` : ''}</div></div></div>`;
   const gcards = `<div class="plgs">${gnames.map(g => { const c = plCalc(plSumRows(groups[g], g));
     return `<div class="plg ${gnames.length === 1 ? 'solo' : ''}">${ring(c.pct, 80)}<b>${esc(g)}</b>
@@ -1353,9 +1387,9 @@ function renderPlan() {
     <div class="plt"><span class="n h">Kategoriya</span><span class="h">${col3}</span><span class="h">Fakt</span><span class="h">%</span>${rows}</div>
     <span class="hint">summalar — mlrd so'm</span>
     ${orphan.length ? `<span class="hint">⚠ Rejada bor, tovar spravochnigida yo'q (fakt yo'q, jamiga qo'shilmadi): ${orphan.map(c => `${esc(c.name)} (${esc(c.grp)}, ${PL.mode === 'month' ? MONTHS[PL.month].toLowerCase() : 'yillik'} reja ${money(PL.mode === 'month' ? c[isG ? 'plan_gross' : 'plan_amount'][PL.month] : sum(c[isG ? 'plan_gross' : 'plan_amount']))})`).join(', ')}</span>` : ''}</div>`;
-  const note = `<p class="foot">Davr rejasi = oylik reja × o'tgan kunlar / oy kunlari (ma'lumot ${dm(d.data_to)} gacha). Bajarilish = fakt / davr rejasi.
+  const note = `<p class="foot">Davr rejasi = oylik reja × o'tgan kunlar / oy kunlari (ma'lumot ${dm(d.data_to)} gacha${d.partial ? `; bugungi ${dm(d.partial)} — kun tugamagani uchun hisobga kirmagan` : ''}). Bajarilish = fakt / davr rejasi.
     Prognoz — hozirgi o'rtacha kunlik sur'at bilan. Reja oy × kategoriya bo'yicha, shuning uchun hudud/brend filtrlari bu yerda qo'llanmaydi.</p>`;
-  host.innerHTML = head + `<div class="card dyn pldaily" id="plDaily"></div>` + gcards + chart + table + note;
+  host.innerHTML = head + `<div class="card dyn pldaily" id="plDaily"></div>` + (gnames.length > 1 ? gcards : '') + chart + table + note;
   plDaily(live);
   stockPlanCard(host);                       // qoldiq rejaga yetadimi (joriy oy, savdo)
   host.querySelectorAll('button[data-cid]').forEach(b => b.onclick = () => {
@@ -1376,17 +1410,22 @@ async function plDaily(live) {
   const mm = String(m + 1).padStart(2, '0'), from = `${y}-${mm}-01`;
   const to = e ? (d.data_to < `${y}-${mm}-${String(D).padStart(2, '0')}` ? d.data_to : `${y}-${mm}-${String(D).padStart(2, '0')}`) : null;
   const ids = live.map(c => c.id).sort((a, b) => a - b);
-  const key = [y, m, st.cur, ids.join(',')].join('|');
-  if (e && !PL.dd[key]) {
+  const pday = d.partial && d.partial.slice(0, 7) === `${y}-${mm}` ? d.partial : null;
+  const toF = pday || to;
+  const key = [y, m, st.cur, ids.join(','), toF].join('|');
+  if (toF && !PL.dd[key]) {
     box.innerHTML = head + `<div class="chartwrap"><div class="empty">Yuklanmoqda…</div></div>`; wire();
     try {
-      const r = await api('daily', {scope: 'a:', category_ids: ids, date_from: from, date_to: to, compare: 'none', cur: st.cur});
+      const r = await api('daily', {scope: 'a:', category_ids: ids, date_from: from, date_to: toF, compare: 'none', cur: st.cur});
       PL.dd[key] = r.series;
     } catch (err) { if ($('plDaily') === box) box.querySelector('.chartwrap').innerHTML = `<div class="errbox">${esc(err.message)}</div>`; return; }
     if ($('plDaily') !== box || PL.data !== d || PL.month !== m) return;
   }
-  const ser = e ? PL.dd[key] : [];
-  const fact = [...Array(D)].map((_, i) => { const s = ser.find(p => +p.date.slice(8, 10) === i + 1); return s ? (isG ? s.margin : s.amount) : null; });
+  const ser = toF ? PL.dd[key] : [];
+  const pi = pday ? +pday.slice(8, 10) - 1 : -1;                         // bugun (tugallanmagan) — alohida
+  const all = [...Array(D)].map((_, i) => { const s = ser.find(p => +p.date.slice(8, 10) === i + 1); return s ? (isG ? s.margin : s.amount) : null; });
+  const today = pi >= 0 ? all[pi] || 0 : null;
+  const fact = all.map((v, i) => (i === pi ? null : v));
   const nf = fact.reduce((n, v, i) => (v != null ? i + 1 : n), 0);          // oxirgi faktli kun
   const per = full / D, got = sum(fact.slice(0, nf));
   const need = nf < D ? Math.max(0, full - got) / (D - nf) : null;
@@ -1396,7 +1435,7 @@ async function plDaily(live) {
   const fc = nf ? got / nf * D : null;
   const W = Math.max(280, box.clientWidth - 28 || 340), H = 190, L = 40, R = 12, T = 12, Bm = 22;
   const x = i => L + (W - L - R) * (i + 0.5) / D;
-  const vals = cum ? [full, fc || 0, got] : [...fact.map(v => v || 0), per, need || 0];
+  const vals = cum ? [full, fc || 0, got + (today || 0)] : [...fact.map(v => v || 0), per, need || 0, today || 0];
   const step = niceStep(Math.max(...vals, 1) / 4), hi = Math.ceil(Math.max(...vals, 1) / step) * step;
   const yy = v => T + (H - T - Bm) * (1 - v / hi);
   const ax = v => { const t = v / div; return t >= 10 || t === 0 ? nf0.format(t) : nf1.format(t); };
@@ -1407,12 +1446,15 @@ async function plDaily(live) {
   let body = '', leg = '', sub = '';
   if (!cum) {
     const bw = (W - L - R) / D * 0.66;
-    body = fact.map((v, i) => v != null
+    body = `<defs><pattern id="plHatch" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+        <rect width="4" height="4" fill="var(--accent)" fill-opacity=".15"/><line x1="0" y1="0" x2="0" y2="4" stroke="var(--accent)" stroke-width="1.6"/></pattern></defs>` + fact.map((v, i) => i === pi
+      ? `<rect x="${x(i) - bw / 2}" y="${yy(today)}" width="${bw}" height="${Math.max(1, H - Bm - yy(today))}" rx="1.5" fill="url(#plHatch)"/>`
+      : v != null
       ? `<rect x="${x(i) - bw / 2}" y="${yy(v)}" width="${bw}" height="${Math.max(0, H - Bm - yy(v))}" rx="1.5" fill="${v >= per ? 'var(--good)' : 'var(--s4)'}"/>`
       : `<rect x="${x(i) - bw / 2}" y="${yy(per)}" width="${bw}" height="${H - Bm - yy(per)}" rx="1.5" fill="var(--line)" fill-opacity=".7"/>`).join('')
       + `<line x1="${L}" x2="${W - R}" y1="${yy(per)}" y2="${yy(per)}" stroke="var(--ink)" stroke-width="1.5" stroke-dasharray="5 3"/>`
       + (need != null && nf ? `<line x1="${x(nf) - bw}" x2="${W - R}" y1="${yy(need)}" y2="${yy(need)}" stroke="var(--bad)" stroke-width="1.6"/>` : '');
-    leg = `<span><i style="background:var(--good);height:8px"></i>≥ kunlik reja</span><span><i style="background:var(--s4);height:8px"></i>kam</span>
+    leg = `<span><i style="background:var(--good);height:8px"></i>≥ kunlik reja</span><span><i style="background:var(--s4);height:8px"></i>kam</span>${pi >= 0 ? `<span><i style="background:var(--accent);opacity:.45;height:8px"></i>bugun (to'liq emas)</span>` : ''}
       <span><i style="background:var(--ink)"></i>kunlik reja ${money(per)}</span>${need != null && nf ? `<span><i style="background:var(--bad)"></i>kerak ${money(need)}</span>` : ''}`;
     sub = `${MONTHS[m]} · ${unit} · ustunni bossangiz — kun: fakt / reja`;
   } else {
@@ -1423,6 +1465,7 @@ async function plDaily(live) {
       body += `<path d="${P(cfv)}L${x(nf - 1)},${yy(0)}L${x(0)},${yy(0)}Z" fill="var(--accent)" fill-opacity=".1"/>
         <path d="${P(cfv)}" fill="none" stroke="var(--accent)" stroke-width="2.4" stroke-linejoin="round"/>
         <circle cx="${x(nf - 1)}" cy="${yy(got)}" r="4" fill="var(--accent)" stroke="var(--card)" stroke-width="2"/>`;
+      if (pi >= 0) body += `<circle cx="${x(pi)}" cy="${yy(got + today)}" r="3.5" fill="var(--card)" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="2 1.5"/>`;
       if (nf < D) body += `<path d="M${x(nf - 1)},${yy(got)}L${x(D - 1)},${yy(fc)}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="2 3"/>
         <circle cx="${x(D - 1)}" cy="${yy(fc)}" r="3.5" fill="var(--card)" stroke="var(--accent)" stroke-width="2"/>`;
     }
@@ -1441,7 +1484,7 @@ async function plDaily(live) {
     hov.setAttribute('visibility', 'visible');
     hov.querySelector('.hl').setAttribute('x1', x(i)); hov.querySelector('.hl').setAttribute('x2', x(i));
     const dt = `<b>${String(i + 1).padStart(2, '0')}.${mm}</b>`;
-    tip.innerHTML = cum ? `${dt} · jamlanma<br>fakt ${cf[i] != null ? money(cf[i]) : '—'} · reja ${money(per * (i + 1))}`
+    tip.innerHTML = i === pi ? `${dt} · bugun, kun tugamagan<br>hozircha ${money(today)}${cum ? ` · jamlanma ${money(got + today)}` : ''}` : cum ? `${dt} · jamlanma<br>fakt ${cf[i] != null ? money(cf[i]) : '—'} · reja ${money(per * (i + 1))}`
       : `${dt}<br>fakt ${fact[i] != null ? money(fact[i]) : '—'} · reja ${money(per)}${fact[i] != null && per ? ` (${pct(fact[i] / per * 100)})` : ''}`;
     tip.hidden = false;
     tip.style.left = Math.max(80, Math.min(rect.width - 80, x(i) / W * rect.width)) + 'px';
