@@ -197,8 +197,6 @@ async def snapshot_hist(con: asyncpg.Connection) -> bool:
         await con.execute("DELETE FROM matrix_hist WHERE ver = $1", ver)
         await con.execute(f"INSERT INTO matrix_hist (ver, branch_id, product_id, category_id, need) "
                           f"SELECT $1, branch_id, product_id, category_id, need FROM ({_CUR_MX}) x", ver)
-        # kunlik yig'indilar: shu versiya amal qiladigan sanalar qayta hisoblanadi
-        await con.execute("DELETE FROM mx_dsum_meta WHERE snap_date >= $1", ver)
     return True
 
 
