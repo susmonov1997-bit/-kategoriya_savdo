@@ -938,8 +938,8 @@ async def _dates(con, table: str, end, hd: int) -> list:
     return [r["d"] for r in await con.fetch(_DATES.format(t=table), end - timedelta(days=hd - 1), end)]
 
 
-async def daily_data(con, q, hd: int) -> dict:
-    """Matritsa bajarilishi kunlar bo'yicha: [kun, g(0 filial/1 mini), hudud, kategoriya, pos, ok, yo'q]."""
+async def _daily_live(con, q, hd: int) -> dict:
+    """(jonli) Matritsa bajarilishi kunlar bo'yicha: [kun, g(0 filial/1 mini), hudud, kategoriya, pos, ok, yo'q]."""
     await _hist_ready(con)
     dts = await _dates(con, "stock_branch", await con.fetchval("SELECT max(snap_date) FROM stock_branch"), hd)
     if not dts:
@@ -960,6 +960,10 @@ SELECT m.d, m.branch_id, m.category_id, count(*)::int pos,
 FROM m JOIN cov ON cov.d = m.d AND cov.branch_id = m.branch_id
 LEFT JOIN stock_branch s ON s.snap_date = m.d AND s.branch_id = m.branch_id AND s.product_id = m.product_id
 GROUP BY 1, 2, 3""", *q.params)
+    return await _daily_pack(con, dts, rows)
+
+
+async def _daily_pack_impl(con, dts, rows) -> dict:
     meta = {r["id"]: (1 if is_mini(r["name"]) else 0, r["region_id"])
             for r in await con.fetch("SELECT id, name, region_id FROM branches")}
     di = {d: i for i, d in enumerate(dts)}
@@ -974,8 +978,8 @@ GROUP BY 1, 2, 3""", *q.params)
             "rows": [[*k, *v] for k, v in sorted(agg.items(), key=lambda kv: kv[0][0])]}
 
 
-async def outside_daily_data(con, q, hd: int) -> dict:
-    """Nematritsa qoldig'i kunlar bo'yicha: b — filiallarda, w — omborlarda: [sana, dona, $]."""
+async def _outside_daily_live(con, q, hd: int) -> dict:
+    """(jonli) Nematritsa qoldig'i kunlar bo'yicha: b — filiallarda, w — omborlarda: [sana, dona, $]."""
     await _hist_ready(con)
     out = {"b": [], "w": []}
     bd = await _dates(con, "stock_branch", await con.fetchval("SELECT max(snap_date) FROM stock_branch"), hd)
@@ -1021,6 +1025,139 @@ GROUP BY 1 ORDER BY 1""", *q2.params)
     return out
 
 
+# --- oldindan hisoblangan kunlik yig'indilar (019_matrix_dsum.sql): har sana bir marta hisoblanadi ---
+_DSUM_LOCK = None
+
+
+def _dlock():
+    global _DSUM_LOCK
+    if _DSUM_LOCK is None:
+        import asyncio
+        _DSUM_LOCK = asyncio.Lock()
+    return _DSUM_LOCK
+
+
+async def _ver_for(con, d):
+    return await con.fetchval("SELECT COALESCE((SELECT max(ver) FROM matrix_hist WHERE ver <= $1), "
+                              "(SELECT min(ver) FROM matrix_hist))", d)
+
+
+async def _calc_day(con, kind: str, d) -> None:
+    ver = await _ver_for(con, d)
+    async with con.transaction():
+        if kind == "m":
+            await con.execute("DELETE FROM mx_dsum WHERE snap_date = $1", d)
+            if ver is not None:
+                await con.execute("""
+INSERT INTO mx_dsum (snap_date, branch_id, category_id, brand, pos, ok, miss)
+SELECT $1, h.branch_id, h.category_id, COALESCE(p.brand, '—'), count(*),
+       count(*) FILTER (WHERE COALESCE(s.qty, 0) >= h.need), count(*) FILTER (WHERE COALESCE(s.qty, 0) <= 0)
+FROM matrix_hist h JOIN products p USING (product_id)
+LEFT JOIN stock_branch s ON s.snap_date = $1 AND s.branch_id = h.branch_id AND s.product_id = h.product_id
+WHERE h.ver = $2 AND h.branch_id IN (SELECT DISTINCT branch_id FROM stock_branch WHERE snap_date = $1)
+GROUP BY 2, 3, 4""", d, ver)
+        else:
+            await con.execute("DELETE FROM mx_osum WHERE kind = $1 AND snap_date = $2", kind, d)
+            rate = float(await con.fetchval("SELECT rate FROM fx_periods WHERE $1 >= valid_from AND $1 < valid_to", d) or 0)
+            if ver is not None and kind == "b":
+                await con.execute("""
+INSERT INTO mx_osum (kind, snap_date, loc_id, category_id, brand, qty, usd)
+SELECT 'b', $1, s.branch_id, p.category_id, COALESCE(p.brand, '—'), sum(s.qty),
+       COALESCE(sum(COALESCE(s.cost_uzs, 0)) / NULLIF($3::float8, 0), 0)
+FROM stock_branch s JOIN products p USING (product_id)
+WHERE s.snap_date = $1 AND s.qty > 0
+  AND p.category_id IN (SELECT DISTINCT category_id FROM matrix_hist WHERE ver = $2)
+  AND NOT EXISTS (SELECT 1 FROM matrix_hist h WHERE h.ver = $2 AND h.branch_id = s.branch_id
+                  AND h.product_id = s.product_id)
+GROUP BY 3, 4, 5""", d, ver, rate)
+            elif ver is not None:
+                await con.execute(f"""
+WITH wmx AS MATERIALIZED (SELECT DISTINCT b.warehouse_id, h.product_id FROM matrix_hist h
+         JOIN branches b ON b.id = h.branch_id WHERE h.ver = $2 AND b.warehouse_id IS NOT NULL)
+INSERT INTO mx_osum (kind, snap_date, loc_id, category_id, brand, qty, usd)
+SELECT 'w', $1, s.warehouse_id, p.category_id, COALESCE(p.brand, '—'), sum(s.qty),
+       COALESCE(sum(CASE WHEN s.value_usd / s.qty > {USD_MAX_UNIT} THEN s.value_usd / NULLIF($3::float8, 0)
+                         ELSE s.value_usd END), 0)
+FROM stock_wh s JOIN products p USING (product_id)
+WHERE s.snap_date = $1 AND s.qty > 0
+  AND p.category_id IN (SELECT DISTINCT category_id FROM matrix_hist WHERE ver = $2)
+  AND NOT EXISTS (SELECT 1 FROM wmx WHERE wmx.warehouse_id = s.warehouse_id AND wmx.product_id = s.product_id)
+GROUP BY 3, 4, 5""", d, ver, rate)
+        await con.execute("""INSERT INTO mx_dsum_meta (kind, snap_date) VALUES ($1, $2)
+                             ON CONFLICT (kind, snap_date) DO UPDATE SET computed_at = now()""", kind, d)
+
+
+async def ensure_dsum(con, kind: str, dates: list) -> None:
+    """Hali hisoblanmagan sanalarni hisoblaydi (bir vaqtda bitta — parallel so'rovlar kutadi)."""
+    if not dates:
+        return
+    async with _dlock():
+        have = {r[0] for r in await con.fetch("SELECT snap_date FROM mx_dsum_meta WHERE kind = $1 "
+                                               "AND snap_date = ANY($2::date[])", kind, dates)}
+        for d in sorted(set(dates) - have, reverse=True):   # avval eng yangi kunlar
+            await _calc_day(con, kind, d)
+
+
+def _live_only(f) -> bool:
+    """Yig'indida yo'q tovar filtrlari (status, mas'ul, SKU, xususiyat) — jonli hisob."""
+    return bool(f.statuses or f.product_ids or f.owners or any(v for v in f.attrs.values()))
+
+
+def _sum_where(q, loc_col: str, loc_sql: str) -> str:
+    f = q.f
+    cats = q.cats if not f.category_ids else [c for c in q.cats if c in set(f.category_ids)]
+    w = [f"category_id = ANY({q.p(cats)}::int[])", f"{loc_col} IN ({loc_sql})"]
+    if f.brands:
+        w.append(f"brand = ANY({q.p(f.brands)}::text[])")
+    return " AND ".join(w)
+
+
+async def daily_data(con, q, hd: int) -> dict:
+    """Matritsa bajarilishi kunlar bo'yicha: [kun, g(0 filial/1 mini), hudud, kategoriya, pos, ok, yo'q]."""
+    if _live_only(q.f):
+        return await _daily_live(con, q, hd)
+    await _hist_ready(con)
+    dts = await _dates(con, "stock_branch", await con.fetchval("SELECT max(snap_date) FROM stock_branch"), hd)
+    if not dts:
+        return {"dates": [], "rows": []}
+    await ensure_dsum(con, "m", dts)
+    w_ = q.ctes()
+    DT = q.p(dts)
+    rows = await con.fetch(f"""WITH {w_}
+SELECT snap_date d, branch_id, category_id, sum(pos)::int pos, sum(ok)::int ok, sum(miss)::int miss
+FROM mx_dsum WHERE snap_date = ANY({DT}::date[]) AND {_sum_where(q, 'branch_id', 'SELECT branch_id FROM bb')}
+GROUP BY 1, 2, 3""", *q.params)
+    return await _daily_pack(con, dts, rows)
+
+
+async def outside_daily_data(con, q, hd: int) -> dict:
+    """Nematritsa qoldig'i kunlar bo'yicha: b — filiallarda, w — omborlarda: [sana, dona, $]."""
+    if _live_only(q.f):
+        return await _outside_daily_live(con, q, hd)
+    await _hist_ready(con)
+    out = {"b": [], "w": []}
+    mc = [r[0] for r in await con.fetch("SELECT DISTINCT category_id FROM matrix_rows WHERE category_id IS NOT NULL")]
+    for kind, table, loc in (("b", "stock_branch", "SELECT branch_id FROM bb"),
+                             ("w", "stock_wh", "SELECT warehouse_id FROM bb WHERE warehouse_id IS NOT NULL")):
+        dts = await _dates(con, table, await con.fetchval(f"SELECT max(snap_date) FROM {table}"), hd)
+        if not dts:
+            continue
+        await ensure_dsum(con, kind, dts)
+        q2 = q.__class__(q.f, [c for c in q.cats if c in set(mc)], q.attrs)
+        w_ = q2.ctes()
+        K, DT = q2.p(kind), q2.p(dts)
+        rows = await con.fetch(f"""WITH {w_}
+SELECT snap_date d, sum(qty)::float8 q, sum(usd)::float8 usd FROM mx_osum
+WHERE kind = {K} AND snap_date = ANY({DT}::date[]) AND {_sum_where(q2, 'loc_id', loc)}
+GROUP BY 1 ORDER BY 1""", *q2.params)
+        out[kind] = [[r["d"].isoformat(), r["q"] or 0, r["usd"] or 0] for r in rows]
+    return out
+
+
+async def _daily_pack(con, dts, rows) -> dict:
+    return await _daily_pack_impl(con, dts, rows)
+
+
 def _dkey(req: MxReq) -> dict:
     return req.model_dump(mode="json", exclude=(_XP - {"hd"}) | {"days", "mode"})
 
@@ -1063,6 +1200,11 @@ async def prewarm(app) -> float:
         t = time.time()
         await fn(f, req, adm)
         steps.append(f"{name} {time.time() - t:.1f}s")
+    t = time.time()                                    # 90 kunlik tarix (sanalar bir marta hisoblanadi)
+    f90 = MxReq(scope="a:", date_from=today, date_to=today, hd=90)
+    await daily(f90, req, adm)
+    await outside_daily(f90, req, adm)
+    steps.append(f"kunlik 90 {time.time() - t:.1f}s")
     import logging
     logging.getLogger(__name__).info("prewarm: %s", ", ".join(steps))
     return time.time() - t0

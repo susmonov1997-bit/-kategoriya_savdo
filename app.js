@@ -2060,7 +2060,7 @@ function mxHdWire(box, redraw) {
 async function mxDailyMx() {
   const box = $('mxDaily'); if (!box) return;
   const seq = MX.seq, hd = MX.hd;
-  box.innerHTML = `<div class="sh"><h2>Kunlik bajarilish</h2>${mxHdSeg()}</div><div class="chartwrap"><div class="empty">Yuklanmoqda…</div></div>`;
+  box.innerHTML = `<div class="sh"><h2>Kunlik bajarilish</h2>${mxHdSeg()}</div><div class="chartwrap"><div class="empty">${MX.dl[hd] ? '' : 'Yuklanmoqda…'}</div></div>`;
   mxHdWire(box, mxDailyMx);
   if (!MX.dl[hd]) {
     try { const r = await api('matrix/daily', {...filters(), hd}); if (seq !== MX.seq) return; MX.dl[hd] = r; }
