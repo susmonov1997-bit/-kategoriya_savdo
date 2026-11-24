@@ -1651,7 +1651,7 @@ function upSec(k) {
 }
 $('upSeg').querySelectorAll('[data-u]').forEach(b => b.onclick = () => upSec(b.dataset.u));
 const pkChips = x => [x.sales_amount ? `<span class="pkc s">savdo ${x.sales_days} kun · ${money(x.sales_amount)}</span>` : '',
-  x.stock_qty ? `<span class="pkc q">qoldiq ${nf0.format(Math.round(x.stock_qty))} dona</span>` : '',
+  x.stock_qty ? `<span class="pkc q">qoldiq ${nf0.format(Math.round(x.stock_qty))} dona${x.stock_amount ? ' · ' + money(x.stock_amount) : ''}</span>` : '',
   x.mx_branches ? `<span class="pkc x">matritsa ${x.mx_branches} filial</span>` : ''].join('');
 async function pkLoad() {
   if (!META || !META.can_upload) return;
@@ -1669,7 +1669,7 @@ function pkRenderList() {
   if (L.err) { host.innerHTML = `<div class="errbox">${esc(L.err)}</div>`; return; }
   const res = PK.res ? `<div class="card pkok">${PK.res}</div>` : '';
   if (!L.items.length) { host.innerHTML = res + `<div class="card"><div class="empty">Kutayotgan tovar yo'q 👍</div></div>`; return; }
-  host.innerHTML = res + `<div class="sh"><h2>⏳ Kutayotgan tovarlar <span class="hint">${L.items.length}</span></h2><span class="hint">summa bo'yicha</span></div>
+  host.innerHTML = res + `<div class="sh"><h2>⏳ Kutayotgan tovarlar <span class="hint">${L.items.length}</span></h2><span class="hint">savdo, keyin qoldiq summasi</span></div>
     <div class="hint pkh">Spravochnikda yo'q ID'lar — to'ldirsangiz savdo, qoldiq va matritsa darhol ulanadi${L.branches ? ` · noma'lum filiallar (${L.branches}) — botda /yangi` : ''}</div>
     <div class="pkl">${L.items.slice(0, PK.lim).map(x => `<div class="pkr"><div><b>${esc(x.name || '—')}</b>
         <span class="m">ID ${x.id}${x.category || x.brand ? ` · faylda: ${esc(x.category || '—')} · ${esc(x.brand || '—')}` : ''}</span><div>${pkChips(x)}</div></div>

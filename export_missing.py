@@ -227,9 +227,16 @@ async def pending_report(con: asyncpg.Connection) -> dict:
         x["src"] = "savdo"
     for r in await con.fetch(
             """WITH last AS (SELECT kind, max(snap_date) d FROM stock_pending GROUP BY kind)
+               , fx AS (SELECT l.kind, (SELECT rate FROM fx_periods WHERE l.d >= valid_from AND l.d < valid_to LIMIT 1) r
+                        FROM last l)
                SELECT sp.product_id pid, max(sp.product_name) name, max(sp.category) cat, max(sp.brand) brand,
-                      sum(sp.qty) FILTER (WHERE sp.kind = 'b') qb, sum(sp.qty) FILTER (WHERE sp.kind = 'w') qw
+                      sum(sp.qty) FILTER (WHERE sp.kind = 'b') qb, sum(sp.qty) FILTER (WHERE sp.kind = 'w') qw,
+                      -- qoldiq summasi, so'm: filial — tannarx; ombor — A sektor narxi ($ → kurs; birligi >10 000 — so'mda)
+                      coalesce(sum(sp.cost_uzs) FILTER (WHERE sp.kind = 'b'), 0)
+                      + coalesce(sum(CASE WHEN sp.qty > 0 AND sp.value_usd / sp.qty > 10000 THEN sp.value_usd
+                                          ELSE sp.value_usd * coalesce(fx.r, 0) END) FILTER (WHERE sp.kind = 'w'), 0) sv
                FROM stock_pending sp JOIN last l ON l.kind = sp.kind AND l.d = sp.snap_date
+               LEFT JOIN fx ON fx.kind = sp.kind
                WHERE NOT EXISTS (SELECT 1 FROM products p WHERE p.product_id = sp.product_id)
                GROUP BY sp.product_id"""):
         pid = int(r["pid"])
@@ -243,6 +250,7 @@ async def pending_report(con: asyncpg.Connection) -> dict:
         elif src:
             x["src"] += ", " + src
         x["stock_qty"] = stock
+        x["stock_amount"] = float(r["sv"] or 0)
     # matritsadagi «Товар ИД» spravochnikda yo'q — kutayotgan (filiallar soni)
     try:
         mrows = await con.fetch(

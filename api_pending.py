@@ -34,7 +34,8 @@ async def _report(con) -> dict:
 def _item(s: dict) -> dict:
     return {"id": s["product_id"], "name": s.get("name"), "category": s.get("category"), "brand": s.get("brand"),
             "sales_days": s.get("days") or 0, "sales_amount": s.get("amount") or 0, "sales_rows": s.get("rows") or 0,
-            "stock_qty": s.get("stock_qty") or 0, "mx_branches": s.get("mx_branches") or 0}
+            "stock_qty": s.get("stock_qty") or 0,
+            "stock_amount": s.get("stock_amount") or 0, "mx_branches": s.get("mx_branches") or 0}
 
 
 @router.get("/list")
@@ -42,7 +43,9 @@ async def pending_list(request: Request, user: User = Depends(uploader)):
     async with request.app.state.pool.acquire() as con:
         rep = await _report(con)
     items = [_item(s) for s in rep.get("unknown_skus") or []]
-    items.sort(key=lambda x: (-x["sales_amount"], -x["stock_qty"], -x["mx_branches"]))
+    # savdo summasi bo'yicha; savdosi yo'qlar — qoldiq summasi bo'yicha (kamayish tartibida)
+    items.sort(key=lambda x: (0 if x["sales_amount"] > 0 else 1, -x["sales_amount"], -x["stock_amount"], -x["stock_qty"],
+                              -x["mx_branches"]))
     return {"items": items, "branches": len(rep.get("unknown_branches") or []),
             "sum": {"amount": sum(x["sales_amount"] for x in items), "stock": sum(x["stock_qty"] for x in items),
                     "mx": sum(1 for x in items if x["mx_branches"])}}
