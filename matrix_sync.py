@@ -46,6 +46,17 @@ COLS = {  # ichki nom → varaqdagi sarlavha
 REQUIRED = ("branch_name", "category", "product_name", "need_qty", "vitrina_cap")
 
 
+def _is_id_header(c) -> bool:
+    """«Товар ИД» / «Товар Ид» / «Товар ID» / «Tovar ID» — kirill va lotin, katta-kichik harf farqi yo'q."""
+    k = (name_key(c) or "").replace("товар", "tovar").replace("ид", "id").replace(" ", "")
+    return k in ("tovarid", "idtovar", "idtovara")
+
+
+def _to_id(v) -> int | None:
+    n = to_number(v)
+    return int(n) if n is not None and n > 0 and float(n).is_integer() else None
+
+
 class MatrixError(Exception):
     """Sheet'ni o'qib/tushunib bo'lmadi — eski matritsa saqlanadi."""
 
@@ -132,6 +143,7 @@ def parse_rows(values: list[list]) -> list[dict]:
     hdr_i, idx = None, {}
     for i, row in enumerate(values[:10]):
         found = {want[name_key(c)]: j for j, c in enumerate(row) if name_key(c) in want}
+        found.update({"product_ext": j for j, c in enumerate(row) if _is_id_header(c)})
         if all(k in found for k in REQUIRED):
             hdr_i, idx = i, found
             break
@@ -156,7 +168,7 @@ def parse_rows(values: list[list]) -> list[dict]:
             "category": clean_text(g("category")) or "—", "vitrina_cap": to_number(g("vitrina_cap")),
             "sub0": clean_text(g("sub0")), "sub1": clean_text(g("sub1")), "sub2": clean_text(g("sub2")),
             "sub3": clean_text(g("sub3")), "product_name": name, "brand": clean_text(g("brand")),
-            "need_qty": need,
+            "need_qty": need, "product_ext": _to_id(g("product_ext")),
         })
     if not out:
         raise MatrixError("Varaqda birorta to'liq qator yo'q (Filial, Tovar nomi, Turishi)")
@@ -197,6 +209,8 @@ async def snapshot_hist(con: asyncpg.Connection) -> bool:
         await con.execute("DELETE FROM matrix_hist WHERE ver = $1", ver)
         await con.execute(f"INSERT INTO matrix_hist (ver, branch_id, product_id, category_id, need) "
                           f"SELECT $1, branch_id, product_id, category_id, need FROM ({_CUR_MX}) x", ver)
+        # kunlik yig'indilar: shu versiya amal qiladigan sanalar qayta hisoblanadi
+        await con.execute("DELETE FROM mx_dsum_meta WHERE snap_date >= $1", ver)
     return True
 
 
@@ -264,6 +278,40 @@ async def rebind_branches(con: asyncpg.Connection) -> int:
     return n
 
 
+def _name_differs(a: str, b: str) -> bool:
+    """ID topildi, lekin nomlar butunlay boshqa — ehtimol ID xato yozilgan."""
+    import difflib
+    ka, kb = loose_key(a) or "", loose_key(b) or ""
+    if not ka or not kb or ka == kb or ka in kb or kb in ka:
+        return False
+    return difflib.SequenceMatcher(None, ka, kb).ratio() < 0.6
+
+
+async def rebind_products(con: asyncpg.Connection) -> int:
+    """Spravochnikka yangi tovar qo'shilgach — ID bo'yicha kutayotgan matritsa qatorlarini darhol ulaydi."""
+    r = await con.execute(
+        """UPDATE matrix_rows m SET product_id = p.product_id, match_tier = 0,
+                  category_id = COALESCE(m.category_id, p.category_id)
+           FROM products p WHERE m.product_id IS NULL AND m.product_ext = p.product_id""")
+    n = int(r.split()[-1])
+    if n:
+        exts = await con.fetchval("SELECT count(DISTINCT product_ext) FROM matrix_rows "
+                                  "WHERE product_id IS NULL AND product_ext IS NOT NULL")
+        await con.execute(
+            """UPDATE matrix_syncs SET stats = coalesce(stats, '{}'::jsonb) || jsonb_build_object(
+                   'skus_pending', $1::int,
+                   'skus_id', (SELECT count(DISTINCT product_ext) FROM matrix_rows WHERE match_tier = 0),
+                   'skus_miss', coalesce((stats->>'skus_name_miss')::int, 0) + $1::int,
+                   'rows_ok', (SELECT count(*) FROM matrix_rows WHERE branch_id IS NOT NULL AND product_id IS NOT NULL))
+               WHERE id = (SELECT max(id) FROM matrix_syncs WHERE status = 'ok')""", exts)
+        await con.execute("DELETE FROM matrix_daily WHERE snap_date = (SELECT max(snap_date) FROM stock_branch)")
+        try:
+            await snapshot_hist(con)
+        except Exception:  # noqa: BLE001
+            log.exception("matrix_hist yozilmadi")
+    return n
+
+
 async def bind_and_store(con: asyncpg.Connection, rows: list[dict]) -> dict:
     exact: dict[str, list[int]] = defaultdict(list)
     loose: dict[str, list[int]] = defaultdict(list)
@@ -280,7 +328,7 @@ async def bind_and_store(con: asyncpg.Connection, rows: list[dict]) -> dict:
     cats = {name_key(c["name"]): c["id"] for c in await con.fetch("SELECT id, name FROM categories")}
 
     pmatch: dict[str, tuple[int | None, int | None, str | None]] = {}  # nom → (pid, tier, izoh)
-    for name in {r["product_name"] for r in rows}:
+    for name in {r["product_name"] for r in rows if not r.get("product_ext")}:
         ids = exact.get(name_key(name), [])
         if len(ids) == 1:
             pmatch[name] = (ids[0], 1, None)
@@ -298,19 +346,25 @@ async def bind_and_store(con: asyncpg.Connection, rows: list[dict]) -> dict:
 
     recs = []
     for r in rows:
-        pid, tier, _ = pmatch[r["product_name"]]
+        ext, note = r.get("product_ext"), None
+        if ext:                                   # ID bo'yicha (tier 0); spravochnikda yo'q — kutayotgan
+            pid, tier = (ext, 0) if ext in pcat else (None, None)
+            if pid and _name_differs(r["product_name"], pname[pid]):
+                note = "mismatch"
+        else:
+            pid, tier, _ = pmatch[r["product_name"]]
         b = br.get(name_key(r["branch_name"]))
         cid = cats.get(name_key(r["category"])) or (pcat.get(pid) if pid else None)
         recs.append((r["region"], r["branch_name"], r["branch_ext_id"], r["format"], r["cluster"], r["category"],
                      r["vitrina_cap"], r["sub0"], r["sub1"], r["sub2"], r["sub3"], r["product_name"], r["brand"],
-                     r["need_qty"], b[0] if b else None, pid, tier, cid))
+                     r["need_qty"], b[0] if b else None, pid, tier, cid, ext, note))
     async with con.transaction():
         await con.execute("TRUNCATE matrix_rows RESTART IDENTITY")
         await con.copy_records_to_table(
             "matrix_rows", records=recs,
             columns=["region", "branch_name", "branch_ext_id", "format", "cluster", "category", "vitrina_cap",
                      "sub0", "sub1", "sub2", "sub3", "product_name", "brand", "need_qty", "branch_id",
-                     "product_id", "match_tier", "category_id"])
+                     "product_id", "match_tier", "category_id", "product_ext", "id_note"])
 
     # statistika
     bnames = {r["branch_name"] for r in rows}
@@ -319,6 +373,9 @@ async def bind_and_store(con: asyncpg.Connection, rows: list[dict]) -> dict:
     names = set(pmatch)
     t1 = sum(1 for n in names if pmatch[n][1] == 1)
     t2 = sum(1 for n in names if pmatch[n][1] == 2)
+    exts = {r["product_ext"] for r in rows if r.get("product_ext")}
+    id_ok = {x for x in exts if x in pcat}
+    mism = {x[18] for x in recs if x[19] == "mismatch"}
     rows_ok = sum(1 for x in recs if x[14] and x[15])
     cats_cnt: dict[str, int] = defaultdict(int)
     for r in rows:
@@ -326,7 +383,10 @@ async def bind_and_store(con: asyncpg.Connection, rows: list[dict]) -> dict:
     return {
         "rows": len(rows), "rows_ok": rows_ok,
         "branches": len(bnames), "branches_ok": len(b_ok), "branches_no_wh": len(no_wh),
-        "skus": len(names), "skus_exact": t1, "skus_loose": t2, "skus_miss": len(names) - t1 - t2,
+        "skus": len(names) + len(exts), "skus_exact": t1, "skus_loose": t2,
+        "skus_miss": len(names) - t1 - t2 + len(exts - id_ok),
+        "skus_id": len(id_ok), "skus_pending": len(exts - id_ok), "skus_byname": len(names),
+        "skus_name_miss": len(names) - t1 - t2, "skus_mismatch": len(mism),
         "cat_unknown": sorted(c for c in cats_cnt if name_key(c) not in cats),
         "categories": dict(sorted(cats_cnt.items(), key=lambda kv: -kv[1])),
     }
@@ -390,6 +450,24 @@ def _pct(a, b) -> str:
     return f"{a / b * 100:.1f}%".replace(".", ",") if b else "—"
 
 
+def _sku_lines(s: dict) -> list[str]:
+    """SKU bog'lanishi: avval ID bo'yicha, ID bo'sh bo'lsa — nom bo'yicha."""
+    if not s.get("skus_id") and not s.get("skus_pending"):        # varaqda ID ustuni yo'q — eski ko'rinish
+        return [f"📦 SKU: {_n(s['skus_exact'])} aynan" + (f" + {_n(s['skus_loose'])} taxminiy" if s['skus_loose'] else "")
+                + (f" · ⚠️ <b>{_n(s['skus_miss'])} topilmadi</b>" if s['skus_miss'] else " ✓")]
+    out = [f"📦 <b>Tovarlar (SKU): {_n(s['skus'])}</b>", f"✅ ID bo'yicha bog'landi: <b>{_n(s['skus_id'])}</b>"]
+    if s.get("skus_pending"):
+        out.append(f"⏳ ID spravochnikda yo'q: <b>{_n(s['skus_pending'])}</b> — kutayotganlarga qo'shildi "
+                   "(📥 → ⏳ Kutayotgan: to'ldirsangiz darhol ulanadi)")
+    if s.get("skus_byname"):
+        nm = s['skus_byname'] - s.get('skus_name_miss', 0)
+        out.append(f"🔤 ID bo'sh, nom bo'yicha: <b>{_n(s['skus_byname'])}</b> (topildi {_n(nm)}"
+                   + (f", topilmadi {_n(s['skus_name_miss'])}" if s.get('skus_name_miss') else "") + ")")
+    if s.get("skus_mismatch"):
+        out.append(f"⚠️ ID va nomi mos emas: <b>{_n(s['skus_mismatch'])}</b> — Bog'lanish Excel'da")
+    return out
+
+
 def summary_text(s: dict, title: str = "🧩 <b>Matritsa yangilandi</b>") -> str:
     e = lambda v: html.escape(str(v), quote=False)  # noqa: E731
     lines = [f"{title} · {s['at']:%d.%m.%Y %H:%M}",
@@ -399,13 +477,12 @@ def summary_text(s: dict, title: str = "🧩 <b>Matritsa yangilandi</b>") -> str
              f"🏬 Filial: {_n(s['branches_ok'])} bog'landi" + (
                  f" · ⚠️ <b>{_n(s['branches'] - s['branches_ok'])} topilmadi</b>"
                  if s['branches'] > s['branches_ok'] else " ✓"),
-             f"📦 SKU: {_n(s['skus_exact'])} aynan" + (f" + {_n(s['skus_loose'])} taxminiy" if s['skus_loose'] else "")
-             + (f" · ⚠️ <b>{_n(s['skus_miss'])} topilmadi</b>" if s['skus_miss'] else " ✓")]
+             *_sku_lines(s)]
     if s.get("branches_no_wh"):
         lines.append(f"🚚 Ombori ko'rsatilmagan filial: {s['branches_no_wh']} (zakaz hisobiga kirmaydi)")
     if s.get("cat_unknown"):
         lines.append("🗂 Botda yo'q kategoriya nomi: " + ", ".join(e(c) for c in s["cat_unknown"][:6]))
-    if s['skus_miss'] or s['skus_loose'] or s['branches'] > s['branches_ok'] or s.get("branches_no_wh"):
+    if s['skus_miss'] or s['skus_loose'] or s.get('skus_mismatch') or s['branches'] > s['branches_ok'] or s.get("branches_no_wh"):
         lines += ["", "Ro'yxat — «⬇ Bog'lanish Excel» tugmasida."]
     return "\n".join(lines)
 
@@ -433,8 +510,16 @@ async def binding_xlsx(con: asyncpg.Connection) -> bytes:
 
     sheet("Tovar topilmadi", ["Категория", "Brend", "Tovar nomi (matritsada)", "Filiallar soni", "Jami turishi"],
           await con.fetch("""SELECT category, brand, product_name, count(DISTINCT branch_name), sum(need_qty)::float
-                             FROM matrix_rows WHERE product_id IS NULL
+                             FROM matrix_rows WHERE product_id IS NULL AND product_ext IS NULL
                              GROUP BY 1,2,3 ORDER BY 1,2,3"""), first=True)
+    sheet("ID spravochnikda yo'q", ["Товар ИД", "Категория", "Brend", "Tovar nomi (matritsada)", "Filiallar soni"],
+          await con.fetch("""SELECT product_ext, max(category), max(brand), max(product_name), count(DISTINCT branch_name)
+                             FROM matrix_rows WHERE product_id IS NULL AND product_ext IS NOT NULL
+                             GROUP BY 1 ORDER BY 2, 4"""))
+    sheet("ID va nom mos emas", ["Товар ИД", "Tovar nomi (matritsada)", "Botdagi nom (shu ID)", "Filiallar soni"],
+          await con.fetch("""SELECT m.product_ext, m.product_name, p.name, count(DISTINCT m.branch_name)
+                             FROM matrix_rows m JOIN products p ON p.product_id = m.product_id
+                             WHERE m.id_note = 'mismatch' GROUP BY 1, 2, 3 ORDER BY 2"""))
     sheet("Taxminiy bog'langan", ["Категория", "Tovar nomi (matritsada)", "Botdagi nom", "Tovar ID"],
           await con.fetch("""SELECT DISTINCT m.category, m.product_name, p.name, p.product_id
                              FROM matrix_rows m JOIN products p ON p.product_id = m.product_id
@@ -480,7 +565,7 @@ def result_kb(s: dict | None = None):
         top.append(InlineKeyboardButton(text="📱 Mini App'da ochish", web_app=WebAppInfo(url=config.WEBAPP_URL)))
     top.append(InlineKeyboardButton(text="⬇ Zakaz Excel", callback_data="mx:zx"))
     rows.append(top)
-    unb = s and (s.get("skus_miss") or s.get("branches", 0) > s.get("branches_ok", 0) or s.get("branches_no_wh"))
+    unb = s and (s.get("skus_miss") or s.get("skus_mismatch") or s.get("branches", 0) > s.get("branches_ok", 0) or s.get("branches_no_wh"))
     rows.append(([InlineKeyboardButton(text="⚠️ Bog'lanish Excel", callback_data="mx:xl")] if unb else [])
                 + [InlineKeyboardButton(text="🔄 Qayta o'qish", callback_data="mx:sync")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -518,6 +603,8 @@ def digest_text(s: dict, dg: dict | None) -> str:
              + (f" · ⚠️ bog'lanmagan: {', '.join(unb)}" if unb else " ✓")]
     if s.get("branches_no_wh"):
         lines.append(f"🚚 Ombori ko'rsatilmagan filial: {s['branches_no_wh']} (zakazga kirmaydi)")
+    if s.get("skus_id") or s.get("skus_pending"):
+        lines += [""] + _sku_lines(s)
     ov = (dg or {}).get("ov") or {}
     if not ov.get("snap", {}).get("b"):
         lines += ["", "Filial qoldig'i hali yuklanmagan — bajarilish hisoblanmadi."]

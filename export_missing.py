@@ -243,6 +243,25 @@ async def pending_report(con: asyncpg.Connection) -> dict:
         elif src:
             x["src"] += ", " + src
         x["stock_qty"] = stock
+    # matritsadagi «Товар ИД» spravochnikda yo'q — kutayotgan (filiallar soni)
+    try:
+        mrows = await con.fetch(
+            """SELECT product_ext pid, max(product_name) name, max(category) cat, max(brand) brand,
+                      count(DISTINCT branch_name) nb
+               FROM matrix_rows m WHERE product_id IS NULL AND product_ext IS NOT NULL
+                 AND NOT EXISTS (SELECT 1 FROM products p WHERE p.product_id = m.product_ext)
+               GROUP BY product_ext""")
+    except asyncpg.UndefinedColumnError:
+        mrows = []
+    for r in mrows:
+        pid = int(r["pid"])
+        x = by_id.get(pid) or next((s for s in skus if s["product_id"] == pid), None)
+        if x is None:
+            x = {"product_id": pid, "name": r["name"], "category": r["cat"], "brand": r["brand"],
+                 "rows": 0, "qty": 0.0, "amount": 0.0, "first": None, "last": None, "days": 0, "src": ""}
+            skus.append(x)
+        x["src"] = ", ".join(t for t in (x.get("src"), f"matritsa {r['nb']} filial") if t)
+        x["mx_branches"] = int(r["nb"])
     brs = [{"name": r["name"], "rows": int(r["n"]), "amount": float(r["amount"]),
             "first": r["d1"].isoformat(), "last": r["d2"].isoformat(), "days": int(r["days"])}
            for r in await con.fetch(

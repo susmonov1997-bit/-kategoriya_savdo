@@ -78,7 +78,7 @@ async def matrix_xl_cb(c: CallbackQuery, pool: asyncpg.Pool) -> None:
         data = await binding_xlsx(con)
     await c.message.answer_document(
         BufferedInputFile(data, filename=f"matritsa_boglanish_{date.today():%d.%m.%Y}.xlsx"),
-        caption="Varaqlar: Tovar topilmadi · Taxminiy bog'langan · Filial topilmadi · Ombori yo'q filial")
+        caption="Varaqlar: Tovar topilmadi · ID spravochnikda yo'q · ID va nom mos emas · Taxminiy bog'langan · Filial topilmadi · Ombori yo'q filial")
 
 
 @router.callback_query(F.data == "mx:zx")

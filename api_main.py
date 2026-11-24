@@ -766,6 +766,8 @@ from api_stock import router as stock_router  # noqa: E402
 app.include_router(stock_router)
 from api_matrix import router as matrix_router  # noqa: E402
 app.include_router(matrix_router)
+from api_pending import router as pending_router  # noqa: E402
+app.include_router(pending_router)
 
 
 @app.get("/", include_in_schema=False)

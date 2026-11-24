@@ -1546,7 +1546,7 @@ function setView(v) {
   $('viewUpload').hidden = v !== 'upload';
   $('tabbar').hidden = v !== 'analytics';
   $('topFil').hidden = v !== 'analytics' || TAB !== 'Matritsa';
-  if (v === 'upload') loadHistory();
+  if (v === 'upload') { if (PK.sec === 't') loadHistory(); pkLoad(); }
   if (v === 'analytics' && NEED_REFRESH) { NEED_REFRESH = false; PL.data = null; refreshMeta(); }
   if (v === 'analytics' && TAB === 'Reja') setTab('Reja');
   syncBack();
@@ -1621,7 +1621,7 @@ function poll() {
       if (UP.status === 'failed') UP.status_before = prev;
       renderUp(UP.status);
       if (UP.status === 'checking' || UP.status === 'loading') poll();
-      if (UP.status === 'done') { NEED_REFRESH = true; loadHistory(); try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred('success'); } catch (e) {} }
+      if (UP.status === 'done') { NEED_REFRESH = true; loadHistory(); pkLoad(); try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred('success'); } catch (e) {} }
     } catch (e) { UP.status_before = UP.status; UP.error = e.message; renderUp('failed'); }
   }, 1500);
 }
@@ -1638,6 +1638,127 @@ async function sendMissing(btn, path) {
   const t = btn.textContent; btn.disabled = true; btn.textContent = 'Yuborilmoqda…';
   try { await api(path, {}); btn.textContent = '✅ Botga yuborildi — chatni oching'; try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred('success'); } catch (e) {} }
   catch (e) { btn.textContent = '❌ ' + e.message; btn.disabled = false; setTimeout(() => { btn.textContent = t; }, 4000); }
+}
+// ---------------------------------------------------------------- 📥 bo'limlari + ⏳ kutayotgan tovarlar (qo'lda to'ldirish)
+const PK = {sec: 'u', list: null, lim: 30, form: null, f: null, cat: {}, res: null, busy: false};
+function upSec(k) {
+  PK.sec = k;
+  $('upSeg').querySelectorAll('[data-u]').forEach(b => b.setAttribute('aria-pressed', b.dataset.u === k));
+  $('upU').hidden = k !== 'u'; $('upK').hidden = k !== 'k'; $('upT').hidden = k !== 't';
+  if (k === 't') loadHistory();
+  if (k === 'k') { if (PK.form) pkRenderForm(); else pkRenderList(); }
+  window.scrollTo(0, 0);
+}
+$('upSeg').querySelectorAll('[data-u]').forEach(b => b.onclick = () => upSec(b.dataset.u));
+const pkChips = x => [x.sales_amount ? `<span class="pkc s">savdo ${x.sales_days} kun · ${money(x.sales_amount)}</span>` : '',
+  x.stock_qty ? `<span class="pkc q">qoldiq ${nf0.format(Math.round(x.stock_qty))} dona</span>` : '',
+  x.mx_branches ? `<span class="pkc x">matritsa ${x.mx_branches} filial</span>` : ''].join('');
+async function pkLoad() {
+  if (!META || !META.can_upload) return;
+  try { PK.list = await api('pending/list'); } catch (e) { PK.list = {items: [], err: e.message}; }
+  const L = PK.list, n = L.items.length;
+  $('upKn').textContent = n ? ` · ${n}` : '';
+  $('upKsum').innerHTML = n ? `<div class="card pksum"><span>⏳ <b>${n} ta tovar</b> spravochnikda yo'q${L.sum.amount || L.sum.stock ? ` — ${[L.sum.amount ? 'savdo ' + money(L.sum.amount) : '', L.sum.stock ? 'qoldiq ' + nf0.format(Math.round(L.sum.stock)) + ' dona' : ''].filter(Boolean).join(', ')} kutmoqda` : ''}</span>
+      <button class="pkgo" id="pkSumGo">Ko'rish ›</button></div>` : '';
+  const g = $('pkSumGo'); if (g) g.onclick = () => upSec('k');
+  if (PK.sec === 'k' && !PK.form) pkRenderList();
+}
+function pkRenderList() {
+  const host = $('pkBody'), L = PK.list;
+  if (!L) { host.innerHTML = `<div class="empty">Yuklanmoqda…</div>`; return; }
+  if (L.err) { host.innerHTML = `<div class="errbox">${esc(L.err)}</div>`; return; }
+  const res = PK.res ? `<div class="card pkok">${PK.res}</div>` : '';
+  if (!L.items.length) { host.innerHTML = res + `<div class="card"><div class="empty">Kutayotgan tovar yo'q 👍</div></div>`; return; }
+  host.innerHTML = res + `<div class="sh"><h2>⏳ Kutayotgan tovarlar <span class="hint">${L.items.length}</span></h2><span class="hint">summa bo'yicha</span></div>
+    <div class="hint pkh">Spravochnikda yo'q ID'lar — to'ldirsangiz savdo, qoldiq va matritsa darhol ulanadi${L.branches ? ` · noma'lum filiallar (${L.branches}) — botda /yangi` : ''}</div>
+    <div class="pkl">${L.items.slice(0, PK.lim).map(x => `<div class="pkr"><div><b>${esc(x.name || '—')}</b>
+        <span class="m">ID ${x.id}${x.category || x.brand ? ` · faylda: ${esc(x.category || '—')} · ${esc(x.brand || '—')}` : ''}</span><div>${pkChips(x)}</div></div>
+        <button class="pkgo" data-pk="${x.id}">To'ldirish</button></div>`).join('')}
+    ${L.items.length > PK.lim ? `<button class="more" id="pkMore">Yana ${L.items.length - PK.lim} ta ▾</button>` : ''}</div>`;
+  host.querySelectorAll('[data-pk]').forEach(b => b.onclick = () => pkOpen(+b.dataset.pk));
+  const mo = $('pkMore'); if (mo) mo.onclick = () => { PK.lim += 30; pkRenderList(); };
+}
+async function pkCat(cid) {
+  if (!cid) return null;
+  if (!PK.cat[cid]) PK.cat[cid] = await api('pending/cat/' + cid);
+  return PK.cat[cid];
+}
+async function pkOpen(id) {
+  PK.res = null;
+  $('pkBody').innerHTML = `<div class="empty">Yuklanmoqda…</div>`; window.scrollTo(0, 0);
+  try {
+    const d = await api('pending/item/' + id);
+    PK.form = d;
+    PK.f = {name: d.item.name || '', category_id: d.cat_id, brand: d.item.brand || '', status: '', attrs: {}};
+    await pkCat(d.cat_id);
+  } catch (e) { PK.form = null; $('pkBody').innerHTML = `<div class="errbox">${esc(e.message)}</div>`; return; }
+  pkRenderForm();
+}
+function pkBack() { PK.form = null; PK.f = null; pkRenderList(); window.scrollTo(0, 0); }
+async function pkCopy(s) {
+  const f = PK.f;
+  f.category_id = s.category_id; f.brand = s.brand || f.brand; f.status = s.status || f.status;
+  await pkCat(s.category_id);
+  f.attrs = {};
+  for (const [k, v] of Object.entries(s.attrs || {})) if (/^a\d+$/.test(k) && v != null) f.attrs[+k.slice(1)] = String(v);
+  pkRenderForm();
+}
+function pkRenderForm() {
+  const d = PK.form, f = PK.f, x = d.item, C = PK.cat[f.category_id];
+  const grp = {}; d.categories.forEach(c => (grp[c.grp] = grp[c.grp] || []).push(c));
+  const dl = (id, vals) => `<datalist id="${id}">${(vals || []).map(v => `<option value="${esc(v)}">`).join('')}</datalist>`;
+  const attrsHtml = !f.category_id ? `<div class="hint">Avval kategoriyani tanlang — xususiyatlar shundan keyin chiqadi</div>`
+    : !C ? `<div class="empty">Yuklanmoqda…</div>`
+    : !C.attrs.length ? `<div class="hint">Bu kategoriyada xususiyat yo'q</div>`
+    : `<div class="pkg2">${C.attrs.map(a => `<div class="pkf"><label>${esc(a.name)}${a.unit ? ', ' + esc(a.unit) : ''}</label>
+        <input class="pkin" data-a="${a.slot}" ${a.type === 'number' ? 'inputmode="decimal"' : ''} list="pkA${a.slot}" value="${esc(f.attrs[a.slot] ?? '')}" placeholder="${a.values.length ? 'tanlang yoki yozing' : ''}">
+        ${dl('pkA' + a.slot, a.values)}</div>`).join('')}</div>
+      <div class="hint">Ro'yxatda — bazadagi mavjud qiymatlar; yangisini ham yozish mumkin</div>`;
+  $('pkBody').innerHTML = `<button class="tchip back" id="pkBack">‹ Kutayotganlar</button>
+  <div class="card pkform">
+    <div><b class="pkt">${esc(x.name || '—')}</b><div class="hint">ID ${x.id}${x.category || x.brand ? ` · faylda: ${esc(x.category || '—')} · ${esc(x.brand || '—')}` : ''}</div><div>${pkChips(x)}</div></div>
+    ${d.similar.length ? `<div class="pksim"><span class="hint">📋 O'xshash tovardan to'ldirish — kategoriya, brend, status va xususiyatlar ko'chiriladi:</span>
+      ${d.similar.map((s, i) => `<button class="pkcp" data-cp="${i}"><b>${esc(s.name)}</b> <span class="hint">${s.score}% · ID ${s.id}</span></button>`).join('')}</div>` : ''}
+    <div class="pkf"><label>Tovar nomi *</label><input class="pkin" id="pkName" value="${esc(f.name)}"></div>
+    <div class="pkg2">
+      <div class="pkf"><label>Kategoriya *</label><select class="pkin" id="pkCat"><option value="">— tanlang —</option>
+        ${Object.keys(grp).map(g => `<optgroup label="${esc(g)}">${grp[g].map(c => `<option value="${c.id}" ${c.id === f.category_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</optgroup>`).join('')}</select></div>
+      <div class="pkf"><label>Brend *</label><input class="pkin" id="pkBrand" list="pkBr" value="${esc(f.brand)}">${dl('pkBr', C ? C.brands : [])}</div>
+    </div>
+    <div class="pkf"><label>Status</label><div class="pkst">${d.statuses.map(s => `<button class="${s === f.status ? 'on' : ''}" data-st="${esc(s)}">${esc(s)}</button>`).join('')}
+      <input class="pkin sm" id="pkStatus" placeholder="boshqa" value="${d.statuses.includes(f.status) ? '' : esc(f.status)}"></div></div>
+    <div class="pksec">Xususiyatlar${C && f.category_id ? ' — ' + esc((d.categories.find(c => c.id === f.category_id) || {}).name || '') : ''}</div>
+    ${attrsHtml}
+    <div id="pkErr"></div>
+    <button class="btn primary" id="pkSave" ${PK.busy ? 'disabled' : ''}>${PK.busy ? 'Saqlanmoqda…' : 'Saqlash va ulash'}</button>
+  </div>`;
+  $('pkBack').onclick = pkBack;
+  $('pkName').oninput = e => { f.name = e.target.value; };
+  $('pkBrand').oninput = e => { f.brand = e.target.value; };
+  $('pkStatus').oninput = e => { f.status = e.target.value; document.querySelectorAll('.pkst [data-st]').forEach(b => b.classList.remove('on')); };
+  document.querySelectorAll('.pkst [data-st]').forEach(b => b.onclick = () => { f.status = f.status === b.dataset.st ? '' : b.dataset.st; pkRenderForm(); });
+  document.querySelectorAll('.pkin[data-a]').forEach(i => i.oninput = () => { f.attrs[+i.dataset.a] = i.value; });
+  $('pkCat').onchange = async e => { f.category_id = +e.target.value || null; f.attrs = {}; pkRenderForm(); if (f.category_id) { await pkCat(f.category_id); pkRenderForm(); } };
+  document.querySelectorAll('[data-cp]').forEach(b => b.onclick = () => pkCopy(d.similar[+b.dataset.cp]));
+  $('pkSave').onclick = pkSave;
+}
+async function pkSave() {
+  const f = PK.f, x = PK.form.item, err = m => { $('pkErr').innerHTML = `<div class="errbox">${esc(m)}</div>`; };
+  if (!f.name.trim()) return err('Tovar nomini yozing');
+  if (!f.category_id) return err('Kategoriyani tanlang');
+  if (!f.brand.trim()) return err('Brendni yozing');
+  PK.busy = true; pkRenderForm();
+  try {
+    const r = await api('pending/save', {product_id: x.id, name: f.name.trim(), category_id: f.category_id, brand: f.brand.trim(),
+                                         status: f.status || null, attrs: f.attrs});
+    const parts = [r.sales_rows ? `savdo ${nf0.format(r.sales_rows)} qator (${money(r.sales_amount)})` : '',
+                   r.stock_rows ? `qoldiq ${nf0.format(Math.round(r.stock_qty))} dona` : '', r.mx_rows ? `matritsa ${nf0.format(r.mx_rows)} qator` : ''].filter(Boolean);
+    PK.res = `<b>✅ Saqlandi: ${esc(f.name)}</b><div class="hint">${parts.length ? 'Ulandi: ' + parts.join(' · ') : 'Kutayotgan qator yo\'q edi'}</div>`;
+    NEED_REFRESH = true;
+    try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred('success'); } catch (e) {}
+    PK.busy = false; PK.form = null; PK.f = null; PK.list = null;
+    pkRenderList(); window.scrollTo(0, 0); pkLoad();
+  } catch (e) { PK.busy = false; pkRenderForm(); err(e.message); }
 }
 async function loadHistory() {
   const host = $('upHist');

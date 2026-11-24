@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="app.css?v=20261125a">
+<link rel="stylesheet" href="app.css?v=20261126a">
 </head>
 <body>
 <div id="gate" hidden></div>
@@ -33,6 +33,9 @@
   </div>
 
   <section id="viewUpload" aria-labelledby="upH" hidden>
+    <div class="seg upseg" id="upSeg" role="group" aria-label="Bo'lim">
+      <button data-u="u" aria-pressed="true">Yuklash</button><button data-u="k" aria-pressed="false">⏳ Kutayotgan<span id="upKn"></span></button><button data-u="t" aria-pressed="false">Tarix</button></div>
+    <div id="upU">
     <div class="sh"><h2 id="upH">Yangi fayl</h2><span class="hint" id="upLimit">.xlsx</span></div>
     <label class="drop" id="drop" for="fileIn">
       <input type="file" id="fileIn" accept=".xlsx,.xlsm">
@@ -42,13 +45,20 @@
         Avval tekshiriladi, siz tasdiqlaganingizdan keyin bazaga yoziladi.</span>
     </label>
     <div id="upState"></div>
-    <div class="sh" style="margin-top:6px"><h2>Bazadan yuklab olish</h2><span class="hint">Excel botga keladi</span></div>
-    <div class="expbtns">
+    <div id="upKsum"></div>
+    </div>
+    <div id="upK" hidden>
+      <div id="pkBody"><div class="empty">Yuklanmoqda…</div></div>
+      <div class="expbtns one"><button class="expbtn" id="expPending">⬇ Excel orqali to'ldirish<small>hamma kutayotgan SKU va filiallar spravochnik formatida botga keladi — to'ldirib, shu yerga qayta yuklaysiz</small></button></div>
+    </div>
+    <div id="upT" hidden>
+    <div class="sh"><h2>Bazadan yuklab olish</h2><span class="hint">Excel botga keladi</span></div>
+    <div class="expbtns one">
       <button class="expbtn" id="expProducts">⬇ Tovar spravochnigi<small>bazadagi hamma SKU, yuklash formatida</small></button>
-      <button class="expbtn" id="expPending">⏳ Kutayotganlar<small>spravochnikda yo'q SKU va filiallar</small></button>
     </div>
     <div class="sh" style="margin-top:6px"><h2>Yuklashlar tarixi</h2><button class="linkbtn" id="upRefresh">Yangilash</button></div>
     <div class="list" id="upHist"><div class="empty">Yuklanmoqda…</div></div>
+    </div>
   </section>
 
   <div id="viewAnalytics">
@@ -144,6 +154,6 @@
   <button data-t="Matritsa" aria-pressed="false"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>Matritsa</button>
 </nav>
 <div id="sheetHost"></div>
-<script src="app.js?v=20261125a"></script>
+<script src="app.js?v=20261126a"></script>
 </body>
 </html>

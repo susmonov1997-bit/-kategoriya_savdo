@@ -636,3 +636,28 @@ button.mxbr{width:100%;border:0;border-top:1px solid var(--line);background:none
 .todaybar button{flex:none;border:0;border-radius:999px;padding:5px 10px;font-weight:600;font-size:12px;background:var(--accent);color:var(--accent-ink)}
 .todaybar.on button{background:var(--card);color:var(--ink)}
 .plpart{color:var(--ink-2)}
+/* 📥 bo'limlari + kutayotgan tovarlar */
+.upseg{display:flex;margin:0 0 12px}.upseg button{flex:1}
+.expbtns.one{grid-template-columns:1fr}
+.pksum{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:10px;font-size:13.5px}
+.pkh{margin:-4px 0 8px}
+.pkl{display:flex;flex-direction:column;gap:8px;margin:0 0 10px}
+.pkr{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--card);border-radius:14px;padding:10px 12px;box-shadow:var(--shadow)}
+.pkr b{font-size:14px;display:block;word-break:break-word}.pkr .m{font-size:12px;color:var(--muted)}
+.pkc{display:inline-block;font-size:11px;padding:2px 7px;border-radius:999px;margin:3px 4px 0 0;background:var(--card-2);color:var(--ink-2)}
+.pkc.s{background:color-mix(in srgb,var(--good) 14%,var(--card));color:var(--good)}
+.pkc.q{background:var(--accent-soft);color:var(--accent)}
+.pkc.x{background:color-mix(in srgb,var(--s4) 20%,var(--card));color:var(--ink-2)}
+.pkgo{flex:none;border:0;border-radius:999px;background:var(--accent);color:var(--accent-ink);font-weight:600;font-size:12.5px;padding:7px 12px}
+.pkform{display:flex;flex-direction:column;gap:10px;margin-top:8px}.pkt{font-size:16px;word-break:break-word}
+.pkf{display:flex;flex-direction:column;gap:4px;min-width:0}.pkf label{font-size:12px;color:var(--muted);font-weight:600}
+.pkin{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:10px;padding:9px 11px;font:15px var(--font);background:var(--card);color:var(--ink)}
+.pkin.sm{width:110px;padding:5px 9px;font-size:13px}
+.pkg2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pkst{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.pkst button{font-size:12.5px;border:1px solid var(--line);border-radius:999px;padding:5px 10px;background:var(--card);color:var(--ink)}
+.pkst button.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.pksec{font:700 13px var(--font);margin-top:2px}
+.pksim{display:flex;flex-direction:column;gap:6px;border:1px dashed var(--accent);border-radius:12px;padding:9px 11px;background:var(--accent-soft)}
+.pkcp{text-align:left;border:1px solid var(--line);border-radius:10px;padding:7px 10px;background:var(--card);color:var(--ink);font-size:13px}
+.pkok{background:color-mix(in srgb,var(--good) 12%,var(--card));margin-bottom:10px}

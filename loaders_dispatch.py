@@ -78,7 +78,15 @@ async def _resolve(pool, upload_id: int) -> str:
             if r["rows"] or r["comp_rows"] or r.get("stock_rows"):
                 await con.execute("UPDATE uploads SET report = COALESCE(report, '{}'::jsonb) || jsonb_build_object('pending_resolved', $2::jsonb) "
                                   "WHERE id = $1", upload_id, json.dumps(r, default=str))
-        return format_resolved(r)
+            mx = ""
+            try:                                    # matritsadagi ID bo'yicha kutayotgan qatorlar
+                from matrix_sync import rebind_products
+                n = await rebind_products(con)
+                if n:
+                    mx = f"\n🧩 <b>Matritsa ulandi:</b> {n} qator (Товар ИД bo'yicha)"
+            except Exception:  # noqa: BLE001
+                log.exception("Matritsa ID bo'yicha qayta bog'lanmadi")
+        return format_resolved(r) + mx
     except Exception:  # noqa: BLE001
         log.exception("Kutayotgan ma'lumotni ulab bo'lmadi")
         return "\n⚠️ Spravochnik saqlandi, lekin kutayotgan savdo/qoldiqni ulashda xato — keyingi yuklashda qayta uriniladi."
