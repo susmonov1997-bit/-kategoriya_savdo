@@ -695,3 +695,14 @@ button.mxbr{width:100%;border:0;border-top:1px solid var(--line);background:none
 .tmsg.l2{padding-left:24px}.tmsg.l3{padding-left:36px}.tmsig.l4{padding-left:48px}
 .tmsg.l1 .a b{font-size:15px}.tmsg.l3 .a b{font-weight:600;font-size:13.5px}
 .tmbulk{display:block;margin:8px 14px 8px auto;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--ink);font:600 12px var(--font);padding:5px 11px}
+/* kirim: matritsa / nematritsa */
+.tmmx{display:flex;height:7px;border-radius:4px;overflow:hidden;background:var(--card-2);margin:4px 0 2px;width:100%;max-width:260px}
+.tmmxc .tmmx{max-width:none;height:10px;margin:8px 0}
+.tmmx i{display:block;height:100%}
+.tmmx i.m1,.tmmxl i.m1{background:var(--accent)}.tmmx i.m0,.tmmxl i.m0{background:var(--bad)}.tmmx i.m2,.tmmxl i.m2{background:color-mix(in srgb,var(--muted) 45%,var(--card))}
+.tmmxl{display:flex;flex-direction:column;gap:4px;font-size:13px}
+.tmmxl i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.pill2.g2{background:var(--card-2);color:var(--muted)}
+.tmmxl>span{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.tmmxl i{margin-right:0}
+#tmDim{overflow-x:auto;max-width:100%;scrollbar-width:none}#tmDim button{white-space:nowrap;padding:6px 10px}
+.tmgrp{min-width:0}

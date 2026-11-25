@@ -44,9 +44,15 @@ async def _kirim(con, f: Filters, user: User) -> dict:
         A, B = q.p(d1), q.p(d2)
         wcond = "AND r.warehouse_id IN (SELECT warehouse_id FROM bb WHERE warehouse_id IS NOT NULL)" if locf else ""
         oc = ", r.order_code" if by_order else ""
-        return await con.fetch(f"""WITH {w_}
-SELECT r.product_id, r.warehouse_id, r.supplier{oc}, sum(r.qty)::float8 qty, coalesce(sum(r.value_usd), 0)::float8 usd
-FROM wh_receipts r WHERE r.rec_date BETWEEN {A} AND {B} AND r.product_id IN (SELECT product_id FROM pd) {wcond}
+        # m: 1 — shu ombor filiallaridan birortasining matritsasida bor, 0 — nematritsa, 2 — kategoriyasi matritsada yo'q
+        return await con.fetch(f"""WITH {w_},
+mc AS (SELECT DISTINCT category_id FROM matrix_rows WHERE category_id IS NOT NULL),
+wmx AS (SELECT DISTINCT b.warehouse_id, m.product_id FROM matrix_rows m JOIN branches b ON b.id = m.branch_id
+        WHERE m.product_id IS NOT NULL AND b.warehouse_id IS NOT NULL)
+SELECT r.product_id, r.warehouse_id, r.supplier{oc}, sum(r.qty)::float8 qty, coalesce(sum(r.value_usd), 0)::float8 usd,
+       CASE WHEN EXISTS (SELECT 1 FROM wmx WHERE wmx.warehouse_id = r.warehouse_id AND wmx.product_id = r.product_id) THEN 1
+            WHEN max(p.category_id) IN (SELECT category_id FROM mc) THEN 0 ELSE 2 END m
+FROM wh_receipts r JOIN pd p USING (product_id) WHERE r.rec_date BETWEEN {A} AND {B} {wcond}
 GROUP BY 1, 2, 3{', 4' if by_order else ''}""", *q.params)
 
     async def daily(d1, d2):
@@ -65,8 +71,9 @@ GROUP BY 1 ORDER BY 1""", *q.params)
     sups, orders = {}, {}
     si = lambda s: sups.setdefault(s, len(sups))  # noqa: E731
     oi = lambda s: orders.setdefault(s, len(orders))  # noqa: E731
-    out["rows"] = [[r["product_id"], r["warehouse_id"], si(r["supplier"]), oi(r["order_code"]), r["qty"], r["usd"]] for r in cur]
-    out["prev"] = [[r["product_id"], r["warehouse_id"], si(r["supplier"]), r["qty"], r["usd"]] for r in prev]
+    out["rows"] = [[r["product_id"], r["warehouse_id"], si(r["supplier"]), oi(r["order_code"]), r["qty"], r["usd"], r["m"]]
+                   for r in cur]
+    out["prev"] = [[r["product_id"], r["warehouse_id"], si(r["supplier"]), r["qty"], r["usd"], r["m"]] for r in prev]
     n = (f.date_to - f.date_from).days + 1
     out["daily"] = [[(f.date_from + timedelta(days=i)).isoformat(),
                      dd[f.date_from + timedelta(days=i)]["usd"] if f.date_from + timedelta(days=i) in dd else 0,

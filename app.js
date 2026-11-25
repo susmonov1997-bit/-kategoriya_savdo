@@ -1968,15 +1968,16 @@ async function renderTm() {
 }
 function tmAgg(d) {
   const P = d.prods, S = d.sups, W = d.whs;
-  const key = {cat: r => P[r[0]] ? P[r[0]][1] : 0, sup: r => r[2], wh: r => r[1], brand: r => P[r[0]] ? P[r[0]][3] || '—' : '—'}[TM.dim];
-  const nm = {cat: (k, r) => P[r[0]] ? P[r[0]][2] : '—', sup: k => S[k] || '—', wh: k => W[k] || '—', brand: k => k}[TM.dim];
+  const key = {cat: r => P[r[0]] ? P[r[0]][1] : 0, sup: r => r[2], wh: r => r[1], brand: r => P[r[0]] ? P[r[0]][3] || '—' : '—', mx: r => r[r.length - 1] ?? 2}[TM.dim];
+  const nm = {cat: (k, r) => P[r[0]] ? P[r[0]][2] : '—', sup: k => S[k] || '—', wh: k => W[k] || '—', brand: k => k, mx: k => ['🚫 Nematritsa', 'Matritsada', 'Matritsasiz kategoriya'][k]}[TM.dim];
   const G = new Map();
-  const g = (r) => { const k = key(r); if (!G.has(k)) G.set(k, {k, name: nm(k, r), usd: 0, qty: 0, pu: 0, pq: 0, ord: new Set(), sku: new Map()}); return G.get(k); };
+  const g = (r) => { const k = key(r); if (!G.has(k)) G.set(k, {k, name: nm(k, r), usd: 0, qty: 0, pu: 0, pq: 0, mu: [0, 0, 0], ord: new Set(), sku: new Map()}); return G.get(k); };
   for (const r of d.rows) {
-    const x = g(r); x.usd += r[5]; x.qty += r[4]; if (d.orders[r[3]]) x.ord.add(r[3]);
-    const s = x.sku.get(r[0]) || {pid: r[0], usd: 0, qty: 0, wh: new Map()}; s.usd += r[5]; s.qty += r[4]; s.wh.set(r[1], (s.wh.get(r[1]) || 0) + r[4]); x.sku.set(r[0], s);
+    const x = g(r), m = r[6] ?? 2; x.usd += r[5]; x.qty += r[4]; x.mu[m] += r[5]; if (d.orders[r[3]]) x.ord.add(r[3]);
+    const s = x.sku.get(r[0]) || {pid: r[0], usd: 0, qty: 0, mu: [0, 0, 0], wh: new Map(), wm: new Map()}; s.usd += r[5]; s.qty += r[4]; s.mu[m] += r[5];
+    s.wh.set(r[1], (s.wh.get(r[1]) || 0) + r[4]); s.wm.set(r[1], m); x.sku.set(r[0], s);
   }
-  for (const r of d.prev || []) { const x = g([r[0], r[1], r[2], 0]); x.pu += r[4]; x.pq += r[3]; }
+  for (const r of d.prev || []) { const x = g([r[0], r[1], r[2], 0, 0, 0, r[5]]); x.pu += r[4]; x.pq += r[3]; }
   return [...G.values()].filter(x => x.qty || x.pq).sort((a, b) => b.usd - a.usd || b.pu - a.pu);
 }
 function tmChart(daily) {
@@ -1994,16 +1995,21 @@ function tmKirim(host) {
     host.innerHTML = `${tmSeg()}<div class="card tmwait"><b>Omborga kirim hali yuklanmagan</b><span>«📥» orqali kirim faylini yuklang (kirim_tovarlar_….xlsx) — ustunlar: Буюртма коди, Таъминотчи, Омбор, Товар коди, Товар, Миқдори, Кабул вақти…</span></div>`;
     return tmWire(host);
   }
-  const G = tmAgg(d), T = G.reduce((a, x) => ({usd: a.usd + x.usd, qty: a.qty + x.qty, pu: a.pu + x.pu}), {usd: 0, qty: 0, pu: 0});
+  const G = tmAgg(d), T = G.reduce((a, x) => ({usd: a.usd + x.usd, qty: a.qty + x.qty, pu: a.pu + x.pu, mu: a.mu.map((v, i) => v + x.mu[i])}), {usd: 0, qty: 0, pu: 0, mu: [0, 0, 0]});
+  // matritsa bo'yicha: 1 — matritsada, 0 — nematritsa, 2 — kategoriyasi matritsada yo'q
+  const mxBar = (mu, tot) => `<span class="tmmx">${[1, 0, 2].map(i => mu[i] > 0 ? `<i class="m${i}" style="width:${(mu[i] / (tot || 1) * 100).toFixed(1)}%"></i>` : '').join('')}</span>`;
+  const mpct = (v, tot) => (tot ? Math.round(v / tot * 100) : 0) + '%';
   const ords = new Set(d.rows.map(r => r[3]).filter(i => d.orders[i])), sups = new Set(d.rows.map(r => r[2]));
   const noOrd = d.rows.filter(r => !d.orders[r[3]]).reduce((a, r) => a + r[5], 0);
   const dp = (c, p) => (p > 0 ? (c - p) / p * 100 : null);
   const pill2 = v => (v == null ? '' : `<span class="num ${v >= 0 ? 'good' : 'bad'}">${v >= 0 ? '▲' : '▼'} ${nf1.format(Math.abs(v))}%</span>`);
   const cw = d.cmp ? `${CMP_SHORT[st.compare]} ${dm(d.cmp[0])}–${dm(d.cmp[1])}` : '';
-  const skuRow = s => { const p = d.prods[s.pid] || ['ID ' + s.pid]; const wh = [...s.wh.entries()].sort((a, b) => b[1] - a[1]).map(([w, q]) => `${esc((d.whs[w] || '').replace(/ омбори$/, ''))} ${nf0.format(q)}`).join(' · ');
-    return `<div class="tmrow"><span class="a"><b>${esc(p[0])}</b><span class="h">${wh}</span></span><span class="r"><b class="num">${usd(s.usd)}</b><span class="h num">${nf0.format(s.qty)} dona</span></span></div>`; };
+  const skuRow = s => { const p = d.prods[s.pid] || ['ID ' + s.pid]; const wh = [...s.wh.entries()].sort((a, b) => b[1] - a[1]).map(([w, q]) => `${s.wm.get(w) === 0 ? '<b class="bad">🚫 ' : ''}${esc((d.whs[w] || '').replace(/ омбори$/, ''))} ${nf0.format(q)}${s.wm.get(w) === 0 ? '</b>' : ''}`).join(' · ');
+    const tag = TM.dim === 'mx' ? '' : s.mu[1] === 0 && s.mu[0] > 0 ? '<span class="pill2 r">nematritsa</span>' : s.mu[0] > 0 ? '<span class="pill2 y">qisman nematritsa</span>' : '';
+    return `<div class="tmrow"><span class="a"><b>${esc(p[0])}</b>${tag}<span class="h">${wh}</span></span><span class="r"><b class="num">${usd(s.usd)}</b><span class="h num">${nf0.format(s.qty)} dona</span></span></div>`; };
   const rows = G.slice(0, TM.lim).map(x => { const op = TM.open.has(x.k);
-    return `<button class="tmrow tmb" data-k="${esc(String(x.k))}"><span class="a"><b>${op ? '▾' : '▸'} ${esc(x.name || '—')}</b><span class="h">${nf0.format(x.qty)} dona${x.ord.size ? ` · ${x.ord.size} zakaz` : ''}</span></span>
+    return `<button class="tmrow tmb" data-k="${esc(String(x.k))}"><span class="a"><b>${op ? '▾' : '▸'} ${esc(x.name || '—')}</b><span class="h">${nf0.format(x.qty)} dona${x.ord.size ? ` · ${x.ord.size} zakaz` : ''}</span>
+      ${TM.dim === 'mx' ? '' : x.mu[0] + x.mu[1] > 0 ? `${mxBar(x.mu, x.usd)}<span class="h">matritsa ${mpct(x.mu[1], x.usd)}${x.mu[0] ? ` · <b class="bad">nematritsa ${usd(x.mu[0])} (${mpct(x.mu[0], x.usd)})</b>` : ''}${x.mu[2] ? ` · matritsasiz ${mpct(x.mu[2], x.usd)}` : ''}</span>` : `<span class="h">kategoriya matritsada yo'q</span>`}</span>
       <span class="r"><b class="num">${usd(x.usd)}</b><span class="h">${d.cmp && T.pu ? pill2(dp(x.usd, x.pu)) || '<span class="hint">yangi</span>' : ''}</span></span></button>
       ${op ? `<div class="tmsub">${[...x.sku.values()].sort((a, b) => b.usd - a.usd).slice(0, 40).map(skuRow).join('')}</div>` : ''}`; }).join('');
   host.innerHTML = `${tmSeg()}
@@ -2014,8 +2020,13 @@ function tmKirim(host) {
       <div class="kpi"><span class="l">Zakazsiz kirim</span><span class="v num">${usd(noOrd)}</span><span class="p">«Буюртма коди» bo'sh</span></div>
       <button class="kpi tmkb" id="tmPend"><span class="l">⏳ Nomi topilmagan ›</span><span class="v num ${d.pending.skus ? 'bad' : ''}">${d.pending.skus} tovar</span><span class="p num">${nf0.format(d.pending.qty)} dona · hisobga kirmagan</span></button>
     </div>
+    <div class="card tmmxc"><div class="sh"><span class="label">Matritsa bo'yicha kirim</span><span class="hint">ombor filiallari matritsasi</span></div>
+      ${mxBar(T.mu, T.usd)}
+      <div class="tmmxl"><span><i class="m1"></i>Matritsada <b class="num">${usd(T.mu[1])}</b> <span class="hint">${mpct(T.mu[1], T.usd)}</span></span>
+        <span><i class="m0"></i>Nematritsa <b class="num bad">${usd(T.mu[0])}</b> <span class="hint">${mpct(T.mu[0], T.usd)}</span></span>
+        ${T.mu[2] ? `<span><i class="m2"></i>Matritsasiz kategoriya <b class="num">${usd(T.mu[2])}</b> <span class="hint">${mpct(T.mu[2], T.usd)}</span></span>` : ''}</div></div>
     ${tmChart(d.daily)}
-    <div class="tmgrp"><span class="seg mini" id="tmDim">${[['cat', 'Kategoriya'], ['sup', "Ta'minotchi"], ['wh', 'Ombor'], ['brand', 'Brend']].map(([k, l]) => `<button data-d="${k}" aria-pressed="${TM.dim === k}">${l}</button>`).join('')}</span></div>
+    <div class="tmgrp"><span class="seg mini" id="tmDim">${[['cat', 'Kategoriya'], ['mx', 'Matritsa'], ['sup', "Ta'minotchi"], ['wh', 'Ombor'], ['brand', 'Brend']].map(([k, l]) => `<button data-d="${k}" aria-pressed="${TM.dim === k}">${l}</button>`).join('')}</span></div>
     ${G.length ? `<div class="ablock">${rows}</div>${G.length > TM.lim ? `<button class="more" id="tmMore">Yana ${G.length - TM.lim} ta ▾</button>` : ''}` : `<div class="card"><div class="empty">Bu davrda kirim yo'q</div></div>`}`;
   tmWire(host);
   host.querySelectorAll('#tmDim [data-d]').forEach(b => b.onclick = () => { if (TM.dim === b.dataset.d) return; TM.dim = b.dataset.d; TM.open.clear(); TM.lim = 30; tmKirim(host); });
