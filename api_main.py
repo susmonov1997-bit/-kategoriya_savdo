@@ -102,6 +102,8 @@ async def lifespan(app: FastAPI):
     app.state.pool = await create_pool()
     await migrate(app.state.pool)
     await ensure_fact(app.state.pool)          # tayyor hisob-kitob jadvali (birinchi ishga tushishda quriladi)
+    from suppliers import safe_refresh
+    await safe_refresh(app.state.pool)         # ta'minotchilar: yangi spravochnik tovarlari ham qoidadan oladi
     warm = asyncio.create_task(_warm_loop(app), name="warm")
     yield
     warm.cancel()
@@ -263,7 +265,12 @@ async def _meta_core(request: Request, user: User) -> dict:
         "categories": out, "scopes": scopes,
         "location_path": LOCATION_PATH,
         "dimensions": {"region": "Hudud", "cluster": "Klaster", "branch": "Filial", "brand": "Brend",
-                       "sku": "SKU", "status": "Status", "category": "Kategoriya", "owner": "Mas'ul"},
+                       "sku": "SKU", "status": "Status", "category": "Kategoriya", "owner": "Mas'ul",
+                       "supg": "Ta'minotchi guruhi", "sup": "Ta'minotchi"},
+        # ta'minotchilar: guruhlar va ta'minotchi → guruh (filtrdagi daraxt uchun)
+        "sup": {"groups": [[r["id"], r["name"]] for r in await pool.fetch("SELECT id, name FROM sup_groups ORDER BY name")],
+                "items": [[r["id"], r["name"], r["group_id"]] for r in await pool.fetch(
+                    "SELECT id, name, group_id FROM suppliers ORDER BY name")]},
         "data_from": span["d1"], "data_to": span["d2"],
         "last_upload": last["finished_at"] if last else None,
         "plan_years": [r["year"] for r in await pool.fetch("SELECT DISTINCT year FROM sales_plan ORDER BY year")],
@@ -279,7 +286,8 @@ def _active(f: Filters, dim: str):
     if dim.startswith("attr:"):
         return f.attrs.get(int(dim[5:]))
     return {"region": f.region_ids, "cluster": f.cluster_ids, "branch": f.branch_ids, "brand": f.brands,
-            "status": f.statuses, "category": f.category_ids, "owner": f.owners, "sku": f.product_ids}.get(dim)
+            "status": f.statuses, "category": f.category_ids, "owner": f.owners, "sku": f.product_ids,
+            "supg": f.sup_groups, "sup": f.suppliers}.get(dim)
 
 
 async def facet_rows(con, f: Filters, attrs, cats, dims: list[str], metrics: bool, with_cmp: bool = True) -> dict:
@@ -315,7 +323,7 @@ async def _options(f: Filters, request: Request, user: User = Depends(current_us
     async with pool.acquire() as con:
         cats, attrs, multi = await scope_ctx(con, f, user)
         dims = (["region", "cluster", "branch"] + (["category", "owner"] if multi else []) + ["brand", "status"]
-                + [f"attr:{s}" for s in attrs])
+                + [f"attr:{s}" for s in attrs] + ["supg", "sup"])
         rows_by = await facet_rows(con, f, attrs, cats, dims, metrics=False, with_cmp=False)
         result = {}
         for dim in dims:
@@ -770,6 +778,8 @@ from api_pending import router as pending_router  # noqa: E402
 app.include_router(pending_router)
 from api_supply import router as supply_router  # noqa: E402
 app.include_router(supply_router)
+from api_suppliers import router as suppliers_router  # noqa: E402
+app.include_router(suppliers_router)
 
 
 @app.get("/", include_in_schema=False)

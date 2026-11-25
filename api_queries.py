@@ -122,6 +122,11 @@ DIMENSIONS: dict[str, dict[str, str]] = {
                  "title": "Kategoriya"},
     "owner":   {"key": "x.owner", "label": "x.owner", "sort": "NULL::numeric", "sub": "NULL::text",
                 "title": "Mas'ul"},
+    "supg":    {"key": "x.supg::text",
+                "label": "CASE WHEN x.supg < 0 THEN 'Ta''minotchi aniqlanmagan' ELSE COALESCE(sgx.name, 'Guruhsiz') END",
+                "sort": "NULL::numeric", "sub": "NULL::text", "title": "Ta'minotchi guruhi"},
+    "sup":     {"key": "x.sup::text", "label": "COALESCE(sux.name, 'Ta''minotchi aniqlanmagan')", "sort": "NULL::numeric",
+                "sub": "sgx.name", "title": "Ta'minotchi"},
     "sku":     {"key": "x.product_id::text", "label": "x.pname", "sort": "NULL::numeric", "sub": "x.brand",
                 "title": "SKU"},
 }
@@ -145,6 +150,8 @@ JOINS = """
 LEFT JOIN regions rg  ON rg.id = x.region_id
 LEFT JOIN clusters cl ON cl.id = x.cluster_id
 LEFT JOIN branches br ON br.id = x.branch_id
+LEFT JOIN sup_groups sgx ON sgx.id = x.supg
+LEFT JOIN suppliers sux ON sux.id = x.sup
 """
 
 
@@ -177,8 +184,12 @@ class Q:
         return f"""
 WITH pd AS (
     SELECT p.product_id, p.name AS pname, p.brand, p.status, p.category_id, c.name AS cname,
-           COALESCE(c.owner, '—') AS owner{_attr_cols(self.attrs)}
-    FROM products p JOIN categories c ON c.id = p.category_id WHERE p.category_id = ANY({cat}::int[])
+           COALESCE(c.owner, '—') AS owner{_attr_cols(self.attrs)},
+           CASE WHEN ps.product_id IS NULL THEN -1 ELSE COALESCE(ps.group_id, 0) END AS supg,
+           COALESCE(ps.supplier_id, -1) AS sup
+    FROM products p JOIN categories c ON c.id = p.category_id
+    LEFT JOIN product_supplier ps ON ps.product_id = p.product_id
+    WHERE p.category_id = ANY({cat}::int[])
 ), cdays AS (
     SELECT DISTINCT c.sale_date AS d FROM company_daily c WHERE {cd_period}
 ), x AS (
@@ -207,6 +218,10 @@ WITH pd AS (
             c.append(f"{alias_p}.category_id = ANY({self.p(f.category_ids)}::int[])")
         if f.owners and exclude != "owner":
             c.append(f"{alias_p}.owner = ANY({self.p(f.owners)}::text[])")
+        if f.sup_groups and exclude != "supg":
+            c.append(f"{alias_p}.supg = ANY({self.p(f.sup_groups)}::int[])")
+        if f.suppliers and exclude != "sup":
+            c.append(f"{alias_p}.sup = ANY({self.p(f.suppliers)}::int[])")
         if f.product_ids and exclude != "sku":
             c.append(f"{alias_p}.product_id = ANY({self.p(f.product_ids)}::bigint[])")
         for slot, vals in f.attrs.items():

@@ -39,10 +39,11 @@ async def _kirim(con, f: Filters, user: User) -> dict:
     locf = bool(f.region_ids or f.cluster_ids or f.branch_ids)
 
     async def fetch(d1, d2, by_order: bool):
-        q = _SQL(f, cats, attrs)
+        q = _SQL(f, cats, attrs, sup=False)
         w_ = q.ctes()
         A, B = q.p(d1), q.p(d2)
         wcond = "AND r.warehouse_id IN (SELECT warehouse_id FROM bb WHERE warehouse_id IS NOT NULL)" if locf else ""
+        wcond += " " + q.sup_cond()
         oc = ", r.order_code" if by_order else ""
         # m: 1 — shu ombor filiallaridan birortasining matritsasida bor, 0 — nematritsa, 2 — kategoriyasi matritsada yo'q
         return await con.fetch(f"""WITH {w_},
@@ -56,10 +57,11 @@ FROM wh_receipts r JOIN pd p USING (product_id) WHERE r.rec_date BETWEEN {A} AND
 GROUP BY 1, 2, 3{', 4' if by_order else ''}""", *q.params)
 
     async def daily(d1, d2):
-        q = _SQL(f, cats, attrs)
+        q = _SQL(f, cats, attrs, sup=False)
         w_ = q.ctes()
         A, B = q.p(d1), q.p(d2)
         wcond = "AND r.warehouse_id IN (SELECT warehouse_id FROM bb WHERE warehouse_id IS NOT NULL)" if locf else ""
+        wcond += " " + q.sup_cond()
         return await con.fetch(f"""WITH {w_}
 SELECT r.rec_date d, sum(r.qty)::float8 qty, coalesce(sum(r.value_usd), 0)::float8 usd
 FROM wh_receipts r WHERE r.rec_date BETWEEN {A} AND {B} AND r.product_id IN (SELECT product_id FROM pd) {wcond}

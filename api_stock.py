@@ -100,12 +100,22 @@ def _end(d: date | None, last_sale: date | None) -> date | None:
 class _SQL:
     """Parametrli SQL yig'uvchi: mahsulot va joy filtrlari."""
 
-    def __init__(self, f: Filters, cats: list[int], attrs: dict):
-        self.f, self.cats, self.attrs, self.params = f, cats, attrs, []
+    def __init__(self, f: Filters, cats: list[int], attrs: dict, sup: bool = True):
+        # sup=False — ta'minotchi filtri tovarga emas (kirim: qator ta'minotchisi bo'yicha alohida — sup_cond)
+        self.f, self.cats, self.attrs, self.params, self.sup = f, cats, attrs, [], sup
 
     def p(self, v) -> str:
         self.params.append(v)
         return f"${len(self.params)}"
+
+    def sup_cond(self, col: str = "r.supplier") -> str:
+        """Kirim qatorining o'z ta'minotchisi bo'yicha filtr (sup=False bilan): «AND …» yoki ''."""
+        f, c = self.f, []
+        if f.suppliers:
+            c.append(f"s.id = ANY({self.p(f.suppliers)}::int[])")
+        if f.sup_groups:
+            c.append(f"COALESCE(s.group_id, 0) = ANY({self.p(f.sup_groups)}::int[])")
+        return f"AND {col} IN (SELECT s.name FROM suppliers s WHERE {' AND '.join(c)})" if c else ""
 
     def ctes(self) -> str:
         f = self.f
@@ -120,6 +130,10 @@ class _SQL:
             pc.append(f"owner = ANY({self.p(f.owners)}::text[])")
         if f.product_ids:
             pc.append(f"product_id = ANY({self.p(f.product_ids)}::bigint[])")
+        if f.sup_groups and self.sup:
+            pc.append(f"supg = ANY({self.p(f.sup_groups)}::int[])")
+        if f.suppliers and self.sup:
+            pc.append(f"sup = ANY({self.p(f.suppliers)}::int[])")
         for slot, vals in f.attrs.items():
             if vals and slot in self.attrs:
                 pc.append(f"d_a{int(slot)} = ANY({self.p(vals)}::text[])")
@@ -133,8 +147,12 @@ class _SQL:
         return f"""
 pd0 AS (
     SELECT p.product_id, p.name AS pname, p.brand, p.status, p.category_id, c.name AS cname,
-           COALESCE(c.owner, '—') AS owner{_attr_cols(self.attrs)}
-    FROM products p JOIN categories c ON c.id = p.category_id WHERE p.category_id = ANY({cats}::int[])
+           COALESCE(c.owner, '—') AS owner{_attr_cols(self.attrs)},
+           CASE WHEN ps.product_id IS NULL THEN -1 ELSE COALESCE(ps.group_id, 0) END AS supg,
+           COALESCE(ps.supplier_id, -1) AS sup
+    FROM products p JOIN categories c ON c.id = p.category_id
+    LEFT JOIN product_supplier ps ON ps.product_id = p.product_id
+    WHERE p.category_id = ANY({cats}::int[])
 ), pd AS (SELECT * FROM pd0 {'WHERE ' + ' AND '.join(pc) if pc else ''}
 ), bb AS (
     SELECT id AS branch_id, region_id, cluster_id, warehouse_id FROM branches
@@ -623,6 +641,7 @@ SELECT {stock_sql}::float8 sq,
 
 # ---------------------------------------------------------------------------
 BY_DIMS = {"category": "pd.category_id::text", "brand": "pd.brand", "sku": "pd.product_id::text",
+           "supg": "pd.supg::text", "sup": "pd.sup::text",
            "region": "bb.region_id::text", "cluster": "bb.cluster_id::text", "branch": "bb.branch_id::text",
            "all": "'all'"}
 

@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 KIND_NAMES = {"products": "Tovar spravochnigi", "branches": "Filial spravochnigi", "sales": "Savdo fayli",
               "bonus": "Qo'shimcha daromad %", "owners": "Mas'ullar ro'yxati",
               "plan": "Savdo rejasi", "stock_branch": "Filial qoldig'i", "stock_wh": "Ombor qoldig'i",
-              "receipts": "Omborga kirim"}
+              "receipts": "Omborga kirim", "sup_rules": "Ta'minotchi qoidalari"}
 
 
 def detect_kind(data: bytes) -> str | None:
@@ -33,6 +33,8 @@ def detect_kind(data: bytes) -> str | None:
     except Exception:  # noqa: BLE001
         return None
     for h in rows:
+        if {"Kategoriya ID", "Brend"} <= set(h) and any("minotchi" in x for x in h):
+            return "sup_rules"
         if receipts.is_receipts_file(h):
             return "receipts"
         if stock.is_wh_stock_file(h):
@@ -72,6 +74,18 @@ async def load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int 
     return res
 
 
+async def _sup_note(pool) -> str:
+    """Kirimdan keyin: yangi ta'minotchilar (guruh taklif qilingan) va tovar → ta'minotchi qayta hisobi."""
+    from html import escape
+    from suppliers import safe_refresh
+    r = await safe_refresh(pool)
+    if not r or not r["new"]:
+        return ""
+    names = ", ".join(escape(n) for n in r["new"][:8]) + (f" va yana {len(r['new']) - 8} ta" if len(r["new"]) > 8 else "")
+    return (f"\n\n🏭 <b>Yangi ta'minotchilar: {len(r['new'])}</b> — {names}\n"
+            "<i>Guruh avtomatik taklif qilindi — Mini App → Ta'minot → Ta'minotchi'da tasdiqlang.</i>")
+
+
 async def _resolve(pool, upload_id: int) -> str:
     """Spravochnik yuklangach — kutayotgan savdo/qoldiqni ulash; natija upload hisobotiga ham yoziladi.
     Spravochnik allaqachon saqlangan — bu qadam xato bersa ham yuklash muvaffaqiyatli hisoblanadi."""
@@ -90,6 +104,8 @@ async def _resolve(pool, upload_id: int) -> str:
                     mx = f"\n🧩 <b>Matritsa ulandi:</b> {n} qator (Товар ИД bo'yicha)"
             except Exception:  # noqa: BLE001
                 log.exception("Matritsa ID bo'yicha qayta bog'lanmadi")
+            from suppliers import safe_refresh
+            await safe_refresh(con)                 # yangi tovarlar — brend + kategoriya qoidasidan ta'minotchi
         return format_resolved(r) + mx
     except Exception:  # noqa: BLE001
         log.exception("Kutayotgan ma'lumotni ulab bo'lmadi")
@@ -115,7 +131,11 @@ async def _load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int
         return kind, stock.format_report(r), r.upload_id
     if kind == "receipts":
         r = await receipts.load_receipts(pool, data, file_name, tg_user_id)
-        return kind, receipts.format_report(r), r.upload_id
+        return kind, receipts.format_report(r) + await _sup_note(pool), r.upload_id
+    if kind == "sup_rules":
+        import loaders_suprules
+        r = await loaders_suprules.load_rules(pool, data, file_name, tg_user_id)
+        return kind, loaders_suprules.format_report(r), r["upload_id"]
     if kind == "owners":
         r = await owners.load_owners(pool, data, file_name, tg_user_id)
         return kind, owners.format_report(r), r.upload_id

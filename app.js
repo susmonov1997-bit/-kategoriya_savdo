@@ -121,7 +121,7 @@ function compLine(word, cs) {
 const isMulti = () => cat().kind !== 'cat';
 const attrDims = () => cat().attributes.map(a => a.dim);
 const DIM_NAMES = {region: 'Hudud', cluster: 'Klaster', branch: 'Filial', brand: 'Brend', status: 'Status', sku: 'SKU',
-                   category: 'Kategoriya', owner: "Mas'ul"};
+                   category: 'Kategoriya', owner: "Mas'ul", supg: "Ta'minotchi guruhi", sup: "Ta'minotchi"};
 function dimName(d) {
   if (d.startsWith('attr:')) { const a = cat().attributes.find(a => a.dim === d); return a ? a.name : d; }
   return DIM_NAMES[d] || d;
@@ -130,13 +130,26 @@ const LOC_PATH = ['region', 'cluster', 'branch'];
 const prodPath = () => cat().product_path;
 const drillPath = () => cat().drill_path;
 function nextDim(d) {
-  const path = LOC_PATH.includes(d) ? drillPath() : prodPath();
+  const path = LOC_PATH.includes(d) ? drillPath() : (d === 'supg' || d === 'sup') ? SUP_PATH : prodPath();
   const i = path.indexOf(d);
   if (i < 0) return null;
   for (let j = i + 1; j < path.length; j++) if (!(st.f[path[j]] && st.f[path[j]].size === 1)) return path[j];
   return null;
 }
-const NUM_DIMS = {region: 'region_ids', cluster: 'cluster_ids', branch: 'branch_ids', sku: 'product_ids', category: 'category_ids'};
+const NUM_DIMS = {region: 'region_ids', cluster: 'cluster_ids', branch: 'branch_ids', sku: 'product_ids', category: 'category_ids',
+                  supg: 'sup_groups', sup: 'suppliers'};
+// ta'minotchi (022_suppliers.sql): guruh → ta'minotchilar (META.sup); -1 — aniqlanmagan, 0 — guruhsiz
+const SUP_PATH = ['supg', 'sup', 'brand', 'sku'];
+const supItems = () => (META && META.sup ? META.sup.items : []);
+const supMembers = gk => (gk === '-1' ? ['-1'] : supItems().filter(x => String(x[2] ?? 0) === gk).map(x => String(x[0])));
+const supGroupName = gk => (gk === '-1' ? "Ta'minotchi aniqlanmagan" : gk === '0' ? 'Guruhsiz'
+  : ((META && META.sup ? META.sup.groups : []).find(x => String(x[0]) === gk) || [0, '?'])[1]);
+const supGroupOf = sk => (sk === '-1' ? '-1' : String((supItems().find(x => String(x[0]) === sk) || [0, 0, 0])[2] ?? 0));
+function supChip(s) {          // tanlangan ta'minotchilar bitta guruhning hammasi bo'lsa — guruh nomi
+  const ks = [...s], gk = supGroupOf(ks[0]), m = supMembers(gk);
+  if (ks.length > 1 && m.length === ks.length && m.every(k => s.has(k))) return supGroupName(gk);
+  return ks.length === 1 ? (labels['sup|' + ks[0]] || ks[0]) : `${ks.length} ta`;
+}
 
 function filters() {
   const F = {scope: st.cat, date_from: st.from, date_to: st.to, compare: st.compare,
@@ -222,9 +235,9 @@ function renderHeader() {
   });
   $('filBtn').classList.toggle('acc', nf > 0);
   const chips = [];
-  for (const d of [...LOC_DIMS, ...prodDims()]) {
+  for (const d of [...LOC_DIMS, ...prodDims(), 'supg', 'sup']) {
     const s = st.f[d]; if (!s || !s.size) continue;
-    const val = s.size === 1 ? (labels[d + '|' + [...s][0]] || [...s][0]) : `${s.size} ta`;
+    const val = d === 'sup' ? supChip(s) : s.size === 1 ? (labels[d + '|' + [...s][0]] || [...s][0]) : `${s.size} ta`;
     chips.push(s.size === 1
       ? `<button class="fchip" data-d="${d}" title="${esc(dimName(d))} — olib tashlash">${esc(val)} ✕</button>`
       : `<button class="fchip" data-d="${d}" title="Olib tashlash"><b>${esc(dimName(d))}:</b> ${esc(val)} ✕</button>`);
@@ -335,7 +348,13 @@ async function openFilterSheet() {
   catch (e) { if (host.firstChild === box) { closeSheet(); showError(e); } return; }
   if (host.firstChild !== box) return;
   const draft = {}; for (const d in st.f) draft[d] = new Set(st.f[d]);
+  if (draft.supg) {                            // guruh (Qirqimdan) → shu guruh ta'minotchilari
+    draft.sup = draft.sup || new Set();
+    for (const g of draft.supg) supMembers(g).forEach(k => draft.sup.add(k));
+    delete draft.supg;
+  }
   const open = new Set();                     // sukut: barcha bo'limlar yig'ilgan
+  const sgOpen = new Set();                   // ta'minotchi daraxtida ochiq guruhlar
   for (const d in opts) opts[d].forEach(o => remember(d, o.key, o.label));
   for (const d in draft) for (const k of draft[d]) if (opts[d] && !opts[d].some(o => o.key === k)) opts[d].push({key: k, label: labels[d + '|' + k] || k, amount: 0});
   let q = '';
@@ -351,11 +370,37 @@ async function openFilterSheet() {
         ${list.length > 200 ? `<div class="hint" style="padding:6px 16px">Yana ${list.length - 200} ta — qidiruvdan foydalaning</div>` : ''}</div>` : ''}
     </div>`;
   };
+  // Ta'minotchi: guruh → ichida alohida. Guruhni belgilash — uning barcha ta'minotchilari
+  const supBlock = () => {
+    const so = opts.sup || [];
+    if (!so.length || (so.length === 1 && so[0].key === '-1')) return '';
+    const sel = draft.sup || new Set(), gam = new Map((opts.supg || []).map(o => [o.key, o.amount]));
+    const G = new Map();
+    for (const o of so) { const gk = supGroupOf(o.key); if (!G.has(gk)) G.set(gk, []); G.get(gk).push(o); }
+    const groups = [...G.entries()].map(([gk, list]) => ({gk, name: supGroupName(gk), list, amount: gam.get(gk) ?? list.reduce((a, o) => a + o.amount, 0)}))
+      .filter(g => !q || fold(g.name).includes(q) || g.list.some(o => fold(o.label).includes(q)))
+      .sort((a, b) => (a.gk === '-1') - (b.gk === '-1') || b.amount - a.amount);
+    if (q && !groups.length) return '';
+    const isOpen = q ? true : open.has('sup');
+    const nsel = new Set([...sel].map(supGroupOf)).size;
+    return `<div class="fgrp">
+      <button class="fgrp-h" data-d="sup"><span>Ta'minotchi</span><span class="s">${sel.size ? `${nsel} guruh · ${sel.size} tanlangan · ` : ''}${groups.length} guruh ${isOpen ? '▾' : '▸'}</span></button>
+      ${isOpen ? `<div class="opts">${groups.map(g => {
+        const m = supMembers(g.gk), n = m.filter(k => sel.has(k)).length, all = n && n === m.length, go = q || sgOpen.has(g.gk);
+        const rows = go ? g.list.filter(o => !q || fold(o.label).includes(q) || fold(g.name).includes(q)).map(o => `<label class="opt fsub ${o.amount ? '' : 'zero'}">
+          <input type="checkbox" data-d="sup" data-k="${esc(o.key)}" ${sel.has(o.key) ? 'checked' : ''}><span>${esc(o.label)}</span><span class="a num">${money(o.amount)}</span></label>`).join('') : '';
+        return `<label class="opt fsg"><input type="checkbox" data-sg="${esc(g.gk)}" ${all ? 'checked' : ''} ${n && !all ? 'data-half="1"' : ''}>
+          <span><b>${esc(g.name)}</b></span>${g.gk !== '-1' && m.length > 1 ? `<button class="fsgx" data-sgo="${esc(g.gk)}">${go ? '▾' : '▸'} ${m.length}</button>` : ''}
+          <span class="a num">${money(g.amount)}</span></label>${rows}`;
+      }).join('')}</div>` : ''}
+    </div>`;
+  };
   // ro'yxat qismi alohida chiziladi: qidiruv maydoni qayta yaratilmaydi, oyna balandligi o'zgarmaydi — sakramaydi
   const listHtml = () => {
-    const loc = LOC_DIMS.map(dimBlock).join(''), prod = prodDims().map(dimBlock).join('');
+    const loc = LOC_DIMS.map(dimBlock).join(''), prod = prodDims().map(dimBlock).join(''), sup = supBlock();
     return `${loc ? `<div class="fsec">📍 Joy</div>${loc}` : ''}${prod ? `<div class="fsec">📦 Tovar</div>${prod}` : ''}
-      ${!loc && !prod ? `<div class="empty">Hech narsa topilmadi</div>` : ''}`;
+      ${sup ? `<div class="fsec">🏭 Ta'minotchi</div>${sup}` : ''}
+      ${!loc && !prod && !sup ? `<div class="empty">Hech narsa topilmadi</div>` : ''}`;
   };
   const sb = host.querySelector('.sbody');
   sb.innerHTML = `<input type="search" id="fQ" class="fq" placeholder="Qidirish: hudud, filial, brend, qiymat…" autocomplete="off">
@@ -367,9 +412,19 @@ async function openFilterSheet() {
   const redraw = () => { fl.innerHTML = listHtml(); wireList(); };
   const wireList = () => {
     fl.querySelectorAll('.fgrp-h').forEach(b => b.onclick = () => { const d = b.dataset.d; open.has(d) ? open.delete(d) : open.add(d); redraw(); });
-    fl.querySelectorAll('input[type=checkbox]').forEach(i => i.onchange = () => {
+    fl.querySelectorAll('input[data-half]').forEach(i => { i.indeterminate = true; });
+    fl.querySelectorAll('[data-sgo]').forEach(b => b.onclick = e => {
+      e.preventDefault(); e.stopPropagation(); const g = b.dataset.sgo; sgOpen.has(g) ? sgOpen.delete(g) : sgOpen.add(g); redraw();
+    });
+    fl.querySelectorAll('input[data-sg]').forEach(i => i.onchange = () => {
+      draft.sup = draft.sup || new Set();
+      supMembers(i.dataset.sg).forEach(k => (i.checked ? draft.sup.add(k) : draft.sup.delete(k)));
+      redraw();
+    });
+    fl.querySelectorAll('input[type=checkbox][data-d]').forEach(i => i.onchange = () => {
       const d = i.dataset.d, k = i.dataset.k; draft[d] = draft[d] || new Set();
       i.checked ? draft[d].add(k) : draft[d].delete(k);
+      if (d === 'sup') return redraw();
       const h = i.closest('.fgrp').querySelector('.fgrp-h .s');
       h.textContent = `${draft[d].size ? `${draft[d].size} tanlangan · ` : ''}${(opts[d] || []).length} ta ▾`;
     });
@@ -620,7 +675,7 @@ let FOCUS = null;       // ulush kartasi ko'rsatadigan tugun
 const OPEN = new Set(); // qirqim daraxtining ochiq tugunlari (qayta yuklanganda saqlanadi)
 const SLOTS = 8, CHILD_LIMIT = 15;
 function dimOptions(sel, includeNone) {
-  const dims = [...LOC_PATH, ...(cat().extra_dims || []), ...attrDims(), 'brand', 'status', 'sku'];
+  const dims = [...LOC_PATH, ...(cat().extra_dims || []), ...attrDims(), 'brand', 'status', 'sku', ...(supItems().length ? ['supg', 'sup'] : [])];
   return (includeNone ? `<option value="">—</option>` : '') + dims.map(d => `<option value="${d}" ${d === sel ? 'selected' : ''}>${esc(dimName(d))}</option>`).join('');
 }
 // Umumiy daraxt yadrosi: qirqim (m), xususiyat qiymatlari (a:…) va TOP-10 SKU (s:…) uchun bir xil
@@ -629,7 +684,7 @@ const nsig = n => n.root + '|' + psig(n.path);
 // s tuguni n ning o'zi yoki uning ichidami ("brand=LG" ≠ "brand=LG2")
 const isUnder = (s, n) => s === n || (n.endsWith('|') ? s.startsWith(n) : s.startsWith(n + '/'));
 const ROOTS = new Map();           // root id -> ildiz tugun
-const ORDERS = {drill: () => drillPath(), prod: () => prodPath(), loc: () => LOC_PATH};
+const ORDERS = {drill: () => drillPath(), prod: () => prodPath(), loc: () => LOC_PATH, sup: () => SUP_PATH};
 function childDimFor(path, order = 'drill') {
   // yo'lda bor yoki filtrda bitta qiymat tanlangan daraja o'tkaziladi
   const used = new Set(path.map(p => p.dim));
@@ -678,7 +733,7 @@ async function fetchChildren(node) {
 async function buildTree(cur = () => true) {
   // ilova ochilganda hammasi yig'ilgan; foydalanuvchi ochgan bo'lsa (shu seansda) ochiq qoladi.
   // Daraxt avval alohida quriladi; eskirgan so'rov (cur() = false) TREE'ni almashtirmaydi.
-  const root = newRoot('m', 'drill', [], {label: 'Jami', depth: 0, open: false});
+  const root = newRoot('m', st.treeBy === 'sup' ? 'sup' : 'drill', [], {label: 'Jami', depth: 0, open: false});
   root.open = OPEN.has(nsig(root));
   if (root.childDim) await fetchChildren(root);
   if (!cur()) return false;
@@ -731,6 +786,8 @@ function renderBreakdown() {
     const q = $('sortBy').querySelector('option[value="qty"]'); if (q) q.hidden = MQ(); }
   document.querySelectorAll('#brMode button').forEach(b => b.setAttribute('aria-pressed', b.dataset.m === st.mode));
   $('pvCtl').hidden = st.mode !== 'pivot';
+  $('tbCtl').hidden = st.mode === 'pivot' || !supItems().length;
+  $('treeBy').value = st.treeBy === 'sup' ? 'sup' : 'drill';
   if (st.mode === 'pivot') {
     $('rowsDim').innerHTML = dimOptions(st.rows, false);
     $('colsDim').innerHTML = dimOptions(st.cols, false);
@@ -1159,7 +1216,7 @@ async function loadTab(t) {
     if (!host.firstChild) host.innerHTML = `<div class="empty">Yuklanmoqda…</div>`;
     try {
       if (st.mode === 'pivot') {
-        const avail = [...LOC_PATH, ...(cat().extra_dims || []), ...attrDims(), 'brand', 'status', 'sku'];
+        const avail = [...LOC_PATH, ...(cat().extra_dims || []), ...attrDims(), 'brand', 'status', 'sku', 'supg', 'sup'];
         if (!avail.includes(st.rows)) st.rows = 'region';
         if (!st.cols || st.cols === st.rows || !avail.includes(st.cols))
           st.cols = attrDims().find(d => d !== st.rows) || (cat().extra_dims || []).find(d => d !== st.rows) || (st.rows === 'brand' ? 'region' : 'brand');
@@ -1200,6 +1257,7 @@ const reloadQirqim = () => { STALE.Qirqim = true; loadTab('Qirqim'); };
 $('rowsDim').onchange = e => { st.rows = e.target.value; if (st.cols === st.rows) st.cols = ''; st.showAll = false; reloadQirqim(); };
 $('colsDim').onchange = e => { st.cols = e.target.value === st.rows ? '' : e.target.value; st.showAll = false; reloadQirqim(); };
 $('sortBy').onchange = e => { st.sort = e.target.value; resetTree(); reloadQirqim(); };
+$('treeBy').onchange = e => { st.treeBy = e.target.value; resetTree(); reloadQirqim(); };
 document.querySelectorAll('#brMode button').forEach(b => b.onclick = () => { if (st.mode === b.dataset.m) return; st.mode = b.dataset.m; resetTree(); renderBreakdown(); reloadQirqim(); });
 function syncBack() {
   const nb = $('navBack');
@@ -1931,7 +1989,7 @@ const TM_WAIT = {
   p: ['Oylik kirim prognozi', "prognoz bajarilishi, orqada qolgan SKU'lar, prognozdan tashqari kirim", '1_kirim_prognozi'],
   t: ["Ta'minotchilar reytingi", "o'z vaqtida va to'liq yetkazish, haqiqiy muddat (zakaz fayli kerak)", '2_taminotchiga_zakaz'],
 };
-function loadSupplyTab() { STALE.Taminot = false; TM.data = null; TM.sig = null; renderTm(); }
+function loadSupplyTab() { STALE.Taminot = false; TM.data = null; TM.sig = null; SUP.g = null; SUP.r = null; renderTm(); }
 function tmSeg() {
   const n = TM.sig ? TM.sig.count.new : 0;
   return `<div class="seg tmseg" id="tmSeg">${TM_SEC.map(([k, l]) => `<button data-s="${k}" aria-pressed="${TM.sec === k}" class="${k === 's' ? 'tms' : ''}${k === 's' && n ? ' hot' : ''}">${k === 's' ? `⚠${n ? ' ' + n : ''}` : l}</button>`).join('')}</div>`;
@@ -1943,6 +2001,7 @@ async function renderTm() {
   const host = $('tmBody'), seq = ++TM.seq;
   if (!TM.sig) api('supply/signals?status=all', filters()).then(r => { if (seq !== TM.seq && TM.sig) return; TM.sig = r; const s = $('tmSeg'); if (s) { s.outerHTML = tmSeg(); tmWire(host); } if (TM.sec === 's') renderTm(); }).catch(() => {});
   if (TM.sec === 's') return tmSignals(host);
+  if (TM.sec === 't') return tmSup(host);
   if (TM.sec !== 'k') {
     const w = TM_WAIT[TM.sec];
     host.innerHTML = `${tmSeg()}<div class="card tmwait"><b>${w[0]}</b><span>${w[1]}</span>
@@ -2094,6 +2153,162 @@ function tmSignals(host) {
     S.count.new -= n; tmSignals(host);
   });
 }
+// ---- Ta'minotchi: Guruhlar · Qoidalar · Reyting (022_suppliers.sql)
+const SUP = {sub: 'g', g: null, r: null, open: new Set(), bopen: new Set(), rf: 'all', blim: 30, seq: 0};
+function supSeg() {
+  return `<div class="seg mini supseg" id="supSeg">${[['g', 'Guruhlar'], ['q', 'Qoidalar'], ['r', 'Reyting']]
+    .map(([k, l]) => `<button data-u="${k}" aria-pressed="${SUP.sub === k}">${l}</button>`).join('')}</div>`;
+}
+function supChanged(d, metaOnly) {
+  // guruh / qoida o'zgardi: filtr daraxti (META.sup) va boshqa tablar yangilansin
+  if (d && d.all_groups && META && META.sup) {
+    META.sup.groups = d.all_groups.map(g => [g.id, g.name]);
+    META.sup.items = d.sups.map(s => [s.id, s.name, s.group_id || null]);
+  }
+  if (!metaOnly) for (const k in STALE) if (k !== 'Taminot') STALE[k] = true;
+}
+async function tmSup(host) {
+  const head = tmSeg() + supSeg();
+  const wire = () => { tmWire(host); host.querySelectorAll('#supSeg [data-u]').forEach(b => b.onclick = () => { if (SUP.sub === b.dataset.u) return; SUP.sub = b.dataset.u; tmSup(host); }); };
+  if (SUP.sub === 'r') {
+    const w = TM_WAIT.t;
+    host.innerHTML = `${head}<div class="card tmwait"><b>${w[0]}</b><span>${w[1]}</span>
+      <span class="hint">Bu bo'lim «${w[2]}» fayli botga yuklangach ishlaydi. Fayl formatini kelishib olamiz — shablon bor.</span></div>`;
+    return wire();
+  }
+  const k = SUP.sub === 'g' ? 'g' : 'r';
+  if (!SUP[k]) {
+    host.innerHTML = `${head}<div class="empty">Yuklanmoqda…</div>`; wire();
+    const seq = ++SUP.seq;
+    try { const d = await api(k === 'g' ? 'supply/sup/groups' : 'supply/sup/rules'); if (seq !== SUP.seq) return; SUP[k] = d; if (k === 'g') supChanged(d, true); }
+    catch (e) { if (seq === SUP.seq) { host.innerHTML = `${head}<div class="errbox">${esc(e.message)}</div>`; wire(); } return; }
+    if (TM.sec !== 't' || SUP.sub !== (k === 'g' ? 'g' : 'q')) return;
+  }
+  return k === 'g' ? supGroups(host, head, wire) : supRules(host, head, wire);
+}
+// pastki oyna: ro'yxatdan tanlash (ta'minotchi / guruh)
+function supPick(title, items, extraHtml, onPick) {
+  const host = openSheetBox(esc(title), `${extraHtml || ''}<div class="optlist">${items.map(x => x.head
+    ? `<div class="fsec">${esc(x.head)}</div>`
+    : `<button class="optrow ${x.on ? 'on' : ''}" data-pk="${esc(String(x.id))}"><span class="ol"><span>${esc(x.label)}</span>${x.sub ? `<span class="os">${esc(x.sub)}</span>` : ''}</span>${x.right ? `<span class="a num">${esc(x.right)}</span>` : ''}</button>`).join('')}</div>`);
+  host.querySelectorAll('[data-pk]').forEach(b => b.onclick = () => onPick(b.dataset.pk, b));
+  return host;
+}
+async function supSend(path, body, key) {
+  try { const d = await api(path, body); SUP[key] = d; closeSheet(); supChanged(key === 'g' ? d : null); if (key === 'g') SUP.r = null; else SUP.g = null; renderTm(); }
+  catch (e) { const h = $('sheetHost').querySelector('.sbody'); if (h) h.insertAdjacentHTML('afterbegin', `<div class="errbox">${esc(e.message)}</div>`); }
+}
+function supGroups(host, head, wire) {
+  const d = SUP.g, S = new Map(d.sups.map(s => [s.id, s]));
+  const real = d.groups.filter(g => g.id);
+  const rows = d.groups.map(g => {
+    const ss = g.sups.map(i => S.get(i)), op = SUP.open.has(g.id);
+    const brands = [...new Set(ss.flatMap(s => s.brands))];
+    return `<button class="tmrow tmsg l1" data-g="${g.id}"><span class="a"><b>${op ? '▾' : '▸'} ${esc(g.name)}</b>${g.new ? `<span class="pill2 y">${g.new} yangi</span>` : ''}
+        <span class="h">${ss.length} ta'minotchi${brands.length ? ' · ' + esc(brands.slice(0, 4).join(', ')) + (brands.length > 4 ? '…' : '') : ''}</span></span>
+      <span class="r"><b class="num">${g.usd ? usd(g.usd) : '—'}</b><span class="h num">${nf0.format(g.skus)} SKU</span></span></button>`
+      + (op ? `<div class="tmsub">${d.can_edit && g.id ? `<button class="tmbulk" data-ren="${g.id}">✎ Guruh nomini o'zgartirish</button>` : ''}${ss.map(s => `<div class="tmrow l2">
+          <span class="a"><b>${esc(s.name)}</b>${s.confirmed ? '' : '<span class="pill2 y">yangi</span>'}
+            <span class="h">${esc(s.brands.join(', ') || '—')}${s.ncat ? ` · ${s.ncat} kategoriya` : ''}</span></span>
+          <span class="r"><b class="num">${s.usd ? usd(s.usd) : '—'}</b>${d.can_edit ? `<button class="ed" data-mv="${s.id}">guruh ▾</button>` : `<span class="h num">${nf0.format(s.skus)} SKU</span>`}</span></div>`).join('')}</div>` : '');
+  }).join('');
+  host.innerHTML = `${head}
+    <div class="hint">Guruhlar kirim faylidagi nomlardan avtomatik taklif qilinadi — tekshirib tasdiqlang. Guruh — hisobotlarda yig'ma qator, ichida ta'minotchilar alohida.</div>
+    <div class="card supsum"><span class="a"><b>${real.length} guruh · ${d.sups.length} ta'minotchi</b>
+      <span class="hint">${d.unconfirmed ? `${d.unconfirmed} tasi tasdiqlanmagan` : 'hammasi tasdiqlangan ✓'}${d.span ? ` · kirim ${dm(d.span[0])}–${dm(d.span[1])}` : ''}</span></span>
+      ${d.can_edit && d.unconfirmed ? `<button class="pkgo" id="supOk">✓ Tasdiqlash</button>` : ''}</div>
+    ${d.sups.length ? `<div class="ablock">${rows}</div>
+      <div class="hint">«guruh ▾» — boshqa guruhga o'tkazish yoki yangi guruh ochish. Filtr va Qirqimda «Ta'minotchi» shu guruhlar bo'yicha.</div>`
+      : `<div class="card tmwait"><b>Ta'minotchilar hali yo'q</b><span>Omborga kirim fayli yuklangach, undagi ta'minotchilar shu yerda guruhlanadi.</span></div>`}`;
+  wire();
+  host.querySelectorAll('[data-g]').forEach(b => b.onclick = () => { const g = +b.dataset.g; SUP.open.has(g) ? SUP.open.delete(g) : SUP.open.add(g); supGroups(host, head, wire); });
+  const ok = $('supOk');
+  if (ok) ok.onclick = async () => { ok.disabled = true; try { SUP.g = await api('supply/sup/confirm', {ids: []}); supChanged(SUP.g); } catch (e) { ok.disabled = false; return; } supGroups(host, head, wire); };
+  host.querySelectorAll('[data-mv]').forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const s = S.get(+b.dataset.mv);
+    const items = d.all_groups.map(g => ({id: g.id, label: g.name, on: g.id === s.group_id,
+      right: (d.groups.find(x => x.id === g.id) || {sups: []}).sups.length + ' ta'}));
+    const h = supPick(s.name, items, `<div class="supnew"><input class="pkin" id="supNew" placeholder="Yangi guruh nomi" maxlength="80"><button class="pkgo" id="supNewB">+ Ochish</button></div><div class="fsec">Guruhga o'tkazish</div>`,
+      id => supSend(`supply/sup/${s.id}/group`, {group_id: +id}, 'g'));
+    h.querySelector('#supNewB').onclick = () => { const v = h.querySelector('#supNew').value.trim(); if (v) supSend(`supply/sup/${s.id}/group`, {new_name: v}, 'g'); };
+  });
+  host.querySelectorAll('[data-ren]').forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const g = d.groups.find(x => x.id === +b.dataset.ren);
+    const h = openSheetBox("Guruh nomi", `<div class="supnew"><input class="pkin" id="supRn" value="${esc(g.name)}" maxlength="80"><button class="pkgo" id="supRnB">Saqlash</button></div>
+      <div class="hint" style="padding:8px 16px">Boshqa guruh nomini yozsangiz — ikki guruh birlashadi.</div>`);
+    h.querySelector('#supRnB').onclick = () => { const v = h.querySelector('#supRn').value.trim(); if (v && v !== g.name) supSend(`supply/sup/group/${g.id}/rename`, {name: v}, 'g'); else closeSheet(); };
+  });
+}
+function supRules(host, head, wire) {
+  const d = SUP.r, SN = id => (d.sups[id] ? d.sups[id][0] : '—');
+  const need = r => r.st === 'd' || r.st === 'n';
+  const list = d.rules.filter(r => SUP.rf === 'all' || (SUP.rf === 'need' ? need(r) : r.st === 'm'));
+  const B = new Map();
+  for (const r of list) { const b = B.get(r.brand) || {name: r.brand, usd: 0, rules: [], need: 0}; b.usd += r.usd; b.rules.push(r); b.need += need(r) ? 1 : 0; B.set(r.brand, b); }
+  const bs = [...B.values()].sort((a, b) => b.usd - a.usd || b.rules.length - a.rules.length);
+  const cnt = {all: d.rules.length, need: d.rules.filter(need).length, m: d.rules.filter(r => r.st === 'm').length};
+  const shares = r => r.auto.length > 1 ? r.auto.map(a => `${esc(SN(a[0]))} ${r.usd ? Math.round(a[1] / r.usd * 100) : 0}%`).join(' · ') : '';
+  const tag = r => {
+    const [c, l] = r.st === 'm' ? ['b', "qo'lda ✎"] : r.st === 'k' ? ['g', 'kirimdan ✓'] : r.st === 'd' ? ['y', `${r.auto.length} ta — tanlang ▾`] : ['y', 'tanlang ▾'];
+    return d.can_edit ? `<button class="pill2 ${c}" data-rk="${r.cid}|${esc(r.brand)}">${l}</button>` : `<span class="pill2 ${c}">${l}</span>`;
+  };
+  const rule = r => `<div class="tmrow l2"><span class="a"><b>${esc(r.brand)} · ${esc(r.cname)}</b>
+      <span class="h">→ ${r.eff ? esc(SN(r.eff)) : "? (kirim yo'q)"}</span>${shares(r) ? `<span class="h">kirim: ${shares(r)}</span>` : ''}</span>
+      <span class="r">${tag(r)}<span class="h num">${r.usd ? usd(r.usd) + ' · ' : ''}${nf0.format(r.skus)} SKU</span></span></div>`;
+  const brands = bs.slice(0, SUP.blim).map(b => { const op = SUP.bopen.has(b.name) || bs.length === 1;
+    return `<button class="tmrow tmsg l1" data-bo="${esc(b.name)}"><span class="a"><b>${op ? '▾' : '▸'} ${esc(b.name)}</b>
+        <span class="h">${b.rules.length} qoida${b.need ? ` · <b class="bad">${b.need} tasi tanlanmagan</b>` : ''}</span></span>
+      <span class="r"><b class="num">${b.usd ? usd(b.usd) : ''}</b></span></button>${op ? `<div class="tmsub">${b.rules.map(rule).join('')}</div>` : ''}`; }).join('');
+  const multi = d.multi.map(m => `<div class="tmrow l2"><span class="a"><b>${esc(m.name)}</b>
+      <span class="h">${esc(m.brand)} · ${esc(m.cname)}</span>
+      <span class="h">${m.ks.map(a => `${esc(SN(a[0]))} ${nf0.format(a[1])} dona`).join(' · ')}</span></span>
+      <span class="r">${d.can_edit ? `<button class="pill2 ${m.ovr ? 'b' : 'y'}" data-pp="${m.pid}">${esc(SN(m.eff))}${m.ovr ? ' (asosiy)' : ''} ▾</button>` : `<span class="h">${esc(SN(m.eff))}</span>`}</span></div>`).join('');
+  host.innerHTML = `${head}
+    <div class="hint">Qoida: <b>brend + kategoriya → ta'minotchi</b>. Kirim tarixidan avtomatik; kirimi yo'q yangi tovar ham shu qoidadan oladi. Ustuvorlik: tovar istisnosi → qoida (qo'lda) → tovarning o'z kirimi → avtomatik qoida.</div>
+    <div class="tmgrp"><span class="seg mini" id="supRf">${[['all', `Hammasi ${cnt.all}`], ['need', `Tanlash kerak ${cnt.need}`], ['m', `Qo'lda ${cnt.m}`]]
+      .map(([k, l]) => `<button data-f="${k}" aria-pressed="${SUP.rf === k}">${l}</button>`).join('')}</span></div>
+    ${bs.length ? `<div class="ablock">${brands}</div>${bs.length > SUP.blim ? `<button class="more" id="supMore">Yana ${bs.length - SUP.blim} ta brend</button>` : ''}`
+      : `<div class="card"><div class="empty">${SUP.rf === 'need' ? "Tanlash kerak qoida yo'q 👍" : "Qoida yo'q"}</div></div>`}
+    ${d.multi.length ? `<div class="card supmulti"><div class="sh"><span class="label">⚠️ Bir nechta ta'minotchidan kelgan tovarlar · ${d.multi.length}</span><span class="hint">asosiysini tanlang</span></div>${multi}</div>` : ''}
+    <button class="btn mxzx" id="supX">⬇ Qoidalar Excel — botga yuborish</button>
+    <div class="hint">Excel'da sariq ustunni tuzatib, faylni botga qayta yuborsangiz — qoidalar, guruhlar va tovar istisnolari yangilanadi.</div>`;
+  wire();
+  host.querySelectorAll('#supRf [data-f]').forEach(b => b.onclick = () => { SUP.rf = b.dataset.f; supRules(host, head, wire); });
+  host.querySelectorAll('[data-bo]').forEach(b => b.onclick = () => { const k = b.dataset.bo; SUP.bopen.has(k) ? SUP.bopen.delete(k) : SUP.bopen.add(k); supRules(host, head, wire); });
+  const mo = $('supMore'); if (mo) mo.onclick = () => { SUP.blim += 30; supRules(host, head, wire); };
+  const supList = (first, cur) => {
+    const fs = new Set(first.map(a => a[0]));
+    const all = Object.entries(d.sups).map(([id, v]) => ({id: +id, label: v[0], sub: d.groups[v[1]] || '', on: +id === cur}))
+      .filter(x => !fs.has(x.id)).sort((a, b) => (a.sub || '').localeCompare(b.sub || '') || a.label.localeCompare(b.label));
+    return [...(first.length ? [{head: 'Kirimda bor'}] : []), ...first.map(a => ({id: a[0], label: SN(a[0]), sub: a[3], on: a[0] === cur})),
+            {head: "Boshqa ta'minotchilar"}, ...all];
+  };
+  host.querySelectorAll('[data-rk]').forEach(b => b.onclick = () => {
+    const [cid, brand] = [+b.dataset.rk.split('|')[0], b.dataset.rk.slice(b.dataset.rk.indexOf('|') + 1)];
+    const r = d.rules.find(x => x.cid === cid && x.brand === brand);
+    const first = r.auto.map(a => [a[0], 0, 0, `${usd(a[1])} · ${nf0.format(a[2])} dona${r.usd ? ` · ${Math.round(a[1] / r.usd * 100)}%` : ''}`]);
+    const h = supPick(`${brand} · ${r.cname}`, supList(first, r.manual),
+      r.manual ? `<button class="optrow" id="supAuto"><span class="ol"><span>↺ Avtomatik (kirimdan)</span><span class="os">qo'lda qoidani o'chirish</span></span></button>` : '',
+      id => supSend('supply/sup/rule', {category_id: cid, brand, supplier_id: +id}, 'r'));
+    const au = h.querySelector('#supAuto'); if (au) au.onclick = () => supSend('supply/sup/rule', {category_id: cid, brand, supplier_id: null}, 'r');
+  });
+  host.querySelectorAll('[data-pp]').forEach(b => b.onclick = () => {
+    const m = d.multi.find(x => x.pid === +b.dataset.pp);
+    const first = m.ks.map(a => [a[0], 0, 0, `${nf0.format(a[1])} dona · ${usd(a[2])}`]);
+    const h = supPick(m.name, supList(first, m.ovr),
+      m.ovr ? `<button class="optrow" id="supAuto"><span class="ol"><span>↺ Istisnoni olib tashlash</span><span class="os">qoida / kirim tarixidan olinadi</span></span></button>` : '',
+      id => supSend('supply/sup/product', {product_id: m.pid, supplier_id: +id}, 'r'));
+    const au = h.querySelector('#supAuto'); if (au) au.onclick = () => supSend('supply/sup/product', {product_id: m.pid, supplier_id: null}, 'r');
+  });
+  const x = $('supX');
+  x.onclick = async () => {
+    const t0 = x.textContent; x.disabled = true; x.textContent = '⏳ Tayyorlanmoqda…';
+    try { await api('supply/sup/export', {}); x.textContent = '✅ Botga yuborildi'; } catch (e) { x.textContent = '❌ ' + e.message; }
+    setTimeout(() => { x.disabled = false; x.textContent = t0; }, 4000);
+  };
+}
 // ============================================================ QOLDIQ
 // «Qoldiq» tabi (⚠ Signallar · ▦ Xarita · 📦 Qoldiq) va boshqa tablardagi «📦 qoldiq» qatorlari.
 
@@ -2101,7 +2316,7 @@ const QS = {mapVal: 'days', view: 'sig', level: null, loc: 'all', limit: 30, row
             detail: null, sig: null, map: null, ov: null, seq: 0, scrollY: 0};
 const STK = {list: null, top: null};
 const LV = [{n: 'Tugadi', s: '< 3 kun', i: '🔴'}, {n: 'Tugayapti', s: '< 7 kun', i: '🟠'}, {n: 'Kamaymoqda', s: 'savdo tezlashgan', i: '🟡'}];
-const STOCK_DIMS = {region: 1, cluster: 1, branch: 1, brand: 1, sku: 1, category: 1};
+const STOCK_DIMS = {region: 1, cluster: 1, branch: 1, brand: 1, sku: 1, category: 1, supg: 1, sup: 1};
 
 const dTxtK = d => (d == null ? 'sotilmayapti' : `${d >= 100 ? nf0.format(d) : nf0.format(Math.round(d))} kunga`);
 const dCls = d => (d == null ? 'hi' : d < 3 ? 'lo' : d < 7 ? 'or' : d < 15 ? 'ye' : d > 90 ? 'hi' : 'ok');
