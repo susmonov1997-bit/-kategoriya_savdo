@@ -73,15 +73,19 @@ class StockReq(Filters):
 async def snapshots(con, date_to: date) -> dict:
     """Qoldiq sanalari: joriy (date_to gacha eng so'nggi) va solishtirma (~bir hafta oldingi)."""
     out = {}
+    last_sale = await con.fetchval("SELECT max(sale_date) FROM sales_fact")
+    # joriy davr (savdoning oxirgi kuni yoki undan bir kun oldingacha — «bugun» chiqarilgan bo'lsa ham) — qoldiq
+    # eng so'nggi fayldan: qoldiq savdodan bir kun oldin yuklanishi mumkin (ombor 25.11, savdo 24.11 gacha)
+    current = last_sale is None or date_to >= last_sale - timedelta(days=1)
     for k, t in (("b", "stock_branch"), ("w", "stock_wh")):
-        d = await con.fetchval(f"SELECT max(snap_date) FROM {t} WHERE snap_date <= $1", date_to) \
+        d = (await con.fetchval(f"SELECT max(snap_date) FROM {t}") if current else None) \
+            or await con.fetchval(f"SELECT max(snap_date) FROM {t} WHERE snap_date <= $1", date_to) \
             or await con.fetchval(f"SELECT max(snap_date) FROM {t}")
         p = None
         if d:
             p = await con.fetchval(f"SELECT max(snap_date) FROM {t} WHERE snap_date <= $1", d - timedelta(days=6)) \
                 or await con.fetchval(f"SELECT max(snap_date) FROM {t} WHERE snap_date < $1", d)
         out[k], out["p" + k] = d, p
-    last_sale = await con.fetchval("SELECT max(sale_date) FROM sales_fact")
     out["sales_to"] = last_sale
     return out
 
