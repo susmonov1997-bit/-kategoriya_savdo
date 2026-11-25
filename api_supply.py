@@ -153,3 +153,91 @@ async def signals_seen(req: BulkSeenReq, request: Request, user: User = Depends(
             "UPDATE supply_signals SET seen_at = CASE WHEN $3 THEN NULL ELSE now() END, seen_by = $2 "
             "WHERE id = ANY($1::int[])", req.ids[:2000], user.id, req.unseen)
     return {"ok": True, "n": int(r.split()[-1])}
+
+
+# ---------------------------------------------------------------------------
+# Signallar Excel'i (botga yuboriladi)
+def signals_xlsx(items: list[dict], status: str) -> bytes:
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+    B, H = Font(name="Arial", bold=True), PatternFill("solid", fgColor="DDE7F5")
+    F = Font(name="Arial")
+    wb = Workbook()
+
+    def sheet(ws, head, rows, money_cols=(), widths=None):
+        ws.append(head)
+        for c in ws[1]:
+            c.font, c.fill = B, H
+        for r in rows:
+            ws.append(r)
+        for row in ws.iter_rows(min_row=2):
+            for c in row:
+                c.font = F
+                if c.column in money_cols:
+                    c.number_format = "#,##0"
+        for i, w in enumerate(widths or [], 1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+        ws.freeze_panes = "A2"
+        if rows:
+            ws.auto_filter.ref = ws.dimensions
+
+    # 1. Kategoriya bo'yicha jami
+    agg: dict[str, list] = {}
+    for x in items:
+        d = x["data"]
+        a = agg.setdefault(x["cat"] or "—", [x["cat"] or "—", set(), set(), 0, 0.0, 0.0])
+        a[1].add(x["brand"] or "—")
+        a[2].add(x["pid"])
+        a[3] += 1
+        a[4] += float(d.get("qty") or 0)
+        a[5] += float(d.get("usd") or 0)
+    ws = wb.active
+    ws.title = "Kategoriya"
+    sheet(ws, ["Kategoriya", "Brendlar", "Tovarlar", "Signallar", "Dona", "Summa, $"],
+          [[a[0], len(a[1]), len(a[2]), a[3], a[4], round(a[5])] for a in sorted(agg.values(), key=lambda a: -a[5])],
+          money_cols=(5, 6), widths=[34, 10, 10, 10, 10, 14])
+    # 2. Batafsil: kategoriya → brend → tovar → ombor
+    rows = []
+    for x in sorted(items, key=lambda x: (x["cat"] or "", x["brand"] or "", x["name"] or "", -(x["data"].get("usd") or 0))):
+        d = x["data"]
+        rows.append([x["cat"], x["brand"], x["pid"], x["name"], x["wh"], d.get("qty"), round(float(d.get("usd") or 0)),
+                     str(d.get("date") or "")[:10], d.get("supplier"), d.get("order"),
+                     "ko'rilgan" if x["seen"] else "yangi", x["note"]])
+    sheet(wb.create_sheet("Signallar"),
+          ["Kategoriya", "Brend", "Товар Ид", "Tovar", "Ombor", "Dona", "Summa, $", "Oxirgi kirim", "Ta'minotchi",
+           "Zakazlar", "Holat", "Izoh"], rows, money_cols=(6, 7), widths=[28, 14, 11, 44, 20, 8, 12, 12, 24, 36, 11, 28])
+    wi = wb.create_sheet("Izoh")
+    for r in [["Signal", "Matritsada yo'q tovar kirimi — tovar kategoriyasi matritsada bor, lekin shu ombor filiallarining birortasi matritsasida bu tovar yo'q."],
+              ["Birlik", "bitta signal = ombor × tovar × oy (oy ichida qayta kelsa — dona va summa yangilanadi)"],
+              ["Ro'yxat", {"new": "faqat yangi (ko'rilmagan) signallar", "seen": "faqat ko'rilgan signallar"}.get(status, "barcha signallar")]]:
+        wi.append(r)
+    wi.column_dimensions["A"].width, wi.column_dimensions["B"].width = 12, 110
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+@router.post("/signals/export")
+async def signals_export(request: Request, status: str = "new", user: User = Depends(current_user)):
+    import config
+    from datetime import datetime, timezone
+    from aiogram import Bot
+    from aiogram.types import BufferedInputFile
+    d = await signals(request, status, user)
+    if not d["items"]:
+        raise HTTPException(404, "Signal yo'q")
+    if not config.BOT_TOKEN:
+        raise HTTPException(503, "Bot sozlanmagan")
+    fname = f"signallar_{datetime.now(timezone(timedelta(hours=5))):%d.%m.%Y}.xlsx"
+    bot = Bot(config.BOT_TOKEN)
+    try:
+        await bot.send_document(user.id, BufferedInputFile(signals_xlsx(d["items"], status), filename=fname),
+                                caption=f"⚠️ Ta'minot signallari ({len(d['items'])}): kategoriya bo'yicha jami + batafsil "
+                                        "(kategoriya → brend → tovar → ombor)")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(503, f"Botga yuborib bo'lmadi — botga /start bosilganini tekshiring ({e})")
+    finally:
+        await bot.session.close()
+    return {"ok": True}

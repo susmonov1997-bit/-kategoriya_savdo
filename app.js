@@ -2068,9 +2068,17 @@ function tmSignals(host) {
   TM.sgIdx = new Map(); for (const c of C.values()) { TM.sgIdx.set(c.k, c.ids); for (const b of c.B.values()) TM.sgIdx.set(b.k, b.ids); }
   host.innerHTML = `${tmSeg()}<div class="hint">🚫 matritsada yo'q tovar kirimi — shu ombor filiallarining birortasi matritsasida yo'q · yangilari botga ham keladi</div>
     <div class="tmgrp"><span class="seg mini" id="tmSf">${[['new', `Yangi ${S.count.new}`], ['seen', "Ko'rilgan"], ['all', `Hammasi ${S.count.all}`]].map(([k, l]) => `<button data-f="${k}" aria-pressed="${TM.sigF === k}">${l}</button>`).join('')}</span></div>
-    ${items.length ? `<div class="ablock">${tree}</div><div class="hint">Kategoriya → brend → tovar → ombor. Ombor qatorini bossangiz — «✓ Ko'rildi» va izoh.</div>` : `<div class="card"><div class="empty">${TM.sigF === 'new' ? "Yangi signal yo'q 👍" : "Signal yo'q"}</div></div>`}`;
+    ${items.length ? `<div class="ablock">${tree}</div><div class="hint">Kategoriya → brend → tovar → ombor. Ombor qatorini bossangiz — «✓ Ko'rildi» va izoh.</div>
+      <button class="btn mxzx" id="tmSx">⬇ Excel — botga yuborish (${items.length})</button>` : `<div class="card"><div class="empty">${TM.sigF === 'new' ? "Yangi signal yo'q 👍" : "Signal yo'q"}</div></div>`}`;
   tmWire(host);
   host.querySelectorAll('#tmSf [data-f]').forEach(b => b.onclick = () => { TM.sigF = b.dataset.f; tmSignals(host); });
+  const sx = $('tmSx');
+  if (sx) sx.onclick = async () => {
+    const t0 = sx.textContent; sx.disabled = true; sx.textContent = '⏳ Tayyorlanmoqda…';
+    try { await api('supply/signals/export?status=' + TM.sigF, {}); sx.textContent = '✅ Botga yuborildi'; }
+    catch (e) { sx.textContent = '❌ ' + e.message; }
+    setTimeout(() => { sx.disabled = false; sx.textContent = t0; }, 4000);
+  };
   host.querySelectorAll('[data-tk]').forEach(b => b.onclick = () => { const k = b.dataset.tk; TM.so.has(k) ? TM.so.delete(k) : TM.so.add(k); tmSignals(host); });
   host.querySelectorAll('.tmsig').forEach(r => r.onclick = e => { if (e.target.closest('.tmsact')) return; const id = +r.dataset.sid; TM.sigOpen = TM.sigOpen === id ? null : id; tmSignals(host); });
   host.querySelectorAll('[data-seen]').forEach(b => b.onclick = async e => {
