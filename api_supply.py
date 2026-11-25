@@ -103,7 +103,7 @@ async def signals(request: Request, status: str = "all", user: User = Depends(cu
                 LEFT JOIN categories c ON c.id = p.category_id LEFT JOIN warehouses w ON w.id = s.warehouse_id
                 WHERE {cond} AND ($1::int[] IS NULL OR p.category_id = ANY($1::int[]))
                 ORDER BY s.seen_at IS NOT NULL, s.created_at DESC, (s.data->>'usd')::float8 DESC NULLS LAST
-                LIMIT 300""", list(allowed) if allowed is not None else None)
+                LIMIT 3000""", list(allowed) if allowed is not None else None)
         cnt = await con.fetchrow(
             """SELECT count(*) n, count(*) FILTER (WHERE s.seen_at IS NULL) new FROM supply_signals s
                LEFT JOIN products p ON p.product_id = s.product_id
@@ -129,3 +129,20 @@ async def signal_seen(sid: int, req: SeenReq, request: Request, user: User = Dep
     if r.endswith(" 0"):
         raise HTTPException(404, "Signal topilmadi")
     return {"ok": True}
+
+
+class BulkSeenReq(BaseModel):
+    ids: list[int]
+    unseen: bool = False
+
+
+@router.post("/signals/seen")
+async def signals_seen(req: BulkSeenReq, request: Request, user: User = Depends(current_user)):
+    """Bir nechta signal birdan «✓ Ko'rildi» (kategoriya / brend bo'yicha)."""
+    if not req.ids:
+        return {"ok": True, "n": 0}
+    async with request.app.state.pool.acquire() as con:
+        r = await con.execute(
+            "UPDATE supply_signals SET seen_at = CASE WHEN $3 THEN NULL ELSE now() END, seen_by = $2 "
+            "WHERE id = ANY($1::int[])", req.ids[:2000], user.id, req.unseen)
+    return {"ok": True, "n": int(r.split()[-1])}

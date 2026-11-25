@@ -2024,29 +2024,55 @@ function tmKirim(host) {
   const pe = $('tmPend'); if (pe) pe.onclick = () => { if (!META.can_upload) return; PK.kind = 'kir'; PK.form = null; PK.bind = null; setView('upload'); upSec('k'); };
   host.querySelectorAll('.tmbars rect').forEach((r, i) => r.addEventListener('pointerdown', () => { const x = d.daily[i]; $('tmTip').textContent = `${dm(x[0])} · ${usd(x[1])} · ${nf0.format(x[2])} dona`; }));
 }
-const TM_SIG = {kirim_nomx: ["🚫 matritsada yo'q — kirim", 'r']};
 function tmSignals(host) {
   const S = TM.sig;
   if (!S) { host.innerHTML = `${tmSeg()}<div class="empty">Yuklanmoqda…</div>`; return tmWire(host); }
   const items = S.items.filter(x => TM.sigF === 'all' || (TM.sigF === 'new' ? !x.seen : x.seen));
-  const row = x => { const k = TM_SIG[x.kind] || [x.kind, 'y'], D = x.data || {}, op = TM.sigOpen === x.id;
-    return `<div class="tmrow tmsig${x.seen ? ' seen' : ''}" data-sid="${x.id}"><span class="a"><span class="pill2 ${k[1]}">${k[0]}</span><b>${esc(x.name || 'ID ' + x.pid)}</b>
-      <span class="h">${esc(x.wh || '')} · ${nf0.format(D.qty || 0)} dona${D.date ? ` · oxirgi kirim ${dm(D.date)}` : ''}</span>
-      <span class="h">${D.supplier ? esc(D.supplier) : ''}${D.order ? ` · ${esc(String(D.order).split(', ').slice(0, 3).join(', '))}${String(D.order).split(', ').length > 3 ? '…' : ''}` : ''}</span>
-      <span class="h">${esc(x.cat || '')} · shu ombor filiallarining birortasi matritsasida yo'q</span>
+  TM.so = TM.so || new Set();
+  // kategoriya → brend → tovar → ombor (har ombor qatori — bitta signal)
+  const C = new Map();
+  for (const x of items) {
+    const D = x.data || {}, ck = x.cat || '—', bk = x.brand || '—', pk = x.pid;
+    const c = C.get(ck) || {k: 'c|' + ck, name: ck, usd: 0, qty: 0, ids: [], B: new Map()}; C.set(ck, c);
+    const b = c.B.get(bk) || {k: c.k + '|' + bk, name: bk, usd: 0, qty: 0, ids: [], P: new Map()}; c.B.set(bk, b);
+    const p = b.P.get(pk) || {k: b.k + '|' + pk, name: x.name || 'ID ' + pk, usd: 0, qty: 0, ids: [], W: []}; b.P.set(pk, p);
+    for (const g of [c, b, p]) { g.usd += D.usd || 0; g.qty += D.qty || 0; g.ids.push(x.id); }
+    p.W.push(x);
+  }
+  const by = m => [...m.values()].sort((a, b) => b.usd - a.usd || b.qty - a.qty);
+  const head = (g, lvl, sub) => { const op = TM.so.has(g.k);
+    return `<button class="tmrow tmsg l${lvl}" data-tk="${esc(g.k)}"><span class="a"><b>${op ? '▾' : '▸'} ${esc(g.name)}</b><span class="h">${sub}</span></span>
+      <span class="r"><b class="num">${g.usd ? usd(g.usd) : ''}</b><span class="h num">${nf0.format(g.qty)} dona</span></span></button>`; };
+  const whRow = x => { const D = x.data || {}, op = TM.sigOpen === x.id, ord = String(D.order || '').split(', ').filter(Boolean);
+    return `<div class="tmrow tmsig l4${x.seen ? ' seen' : ''}" data-sid="${x.id}"><span class="a"><b>${esc(x.wh || '—')}</b>
+      <span class="h">${nf0.format(D.qty || 0)} dona${D.date ? ` · oxirgi kirim ${dm(D.date)}` : ''}${D.supplier ? ' · ' + esc(D.supplier) : ''}</span>
+      ${ord.length ? `<span class="h">${esc(ord.slice(0, 3).join(', '))}${ord.length > 3 ? ` +${ord.length - 3}` : ''}</span>` : ''}
       ${x.note ? `<span class="h">💬 ${esc(x.note)}</span>` : ''}
-      ${op ? `<span class="tmsact"><input class="pkin sm" id="tmNote" placeholder="izoh (ixtiyoriy)" value="${esc(x.note || '')}"><button class="pkgo" data-seen="${x.id}">${x.seen ? "↺ Yangi qilish" : "✓ Ko'rildi"}</button></span>` : ''}</span>
-      <span class="r"><b class="num">${D.usd ? usd(D.usd) : ''}</b></span></div>`; };
-  host.innerHTML = `${tmSeg()}<div class="hint">yuklangan kirim fayllaridan · yangilari botga ham darhol keladi</div>
+      ${op ? `<span class="tmsact"><input class="pkin sm" id="tmNote" placeholder="izoh (ixtiyoriy)" value="${esc(x.note || '')}"><button class="pkgo" data-seen="${x.id}">${x.seen ? '↺ Yangi qilish' : "✓ Ko'rildi"}</button></span>` : ''}</span>
+      <span class="r"><b class="num">${D.usd ? usd(D.usd) : ''}</b>${x.seen ? '<span class="h">✓</span>' : ''}</span></div>`; };
+  const bulk = g => TM.sigF === 'new' ? `<button class="tmbulk" data-bulk="${esc(g.k)}">✓ Hammasi ko'rildi (${g.ids.length})</button>` : '';
+  const tree = by(C).map(c => head(c, 1, `${c.B.size} brend · ${c.ids.length} signal`) + (TM.so.has(c.k) ? `<div class="tmsub">${bulk(c)}${by(c.B).map(b =>
+      head(b, 2, `${b.P.size} tovar · ${b.ids.length} signal`) + (TM.so.has(b.k) ? by(b.P).map(p =>
+        head(p, 3, `${p.W.length} omborda`) + (TM.so.has(p.k) ? p.W.sort((a, b) => (b.data.usd || 0) - (a.data.usd || 0)).map(whRow).join('') : '')).join('') : '')).join('')}</div>` : '')).join('');
+  TM.sgIdx = new Map(); for (const c of C.values()) { TM.sgIdx.set(c.k, c.ids); for (const b of c.B.values()) TM.sgIdx.set(b.k, b.ids); }
+  host.innerHTML = `${tmSeg()}<div class="hint">🚫 matritsada yo'q tovar kirimi — shu ombor filiallarining birortasi matritsasida yo'q · yangilari botga ham keladi</div>
     <div class="tmgrp"><span class="seg mini" id="tmSf">${[['new', `Yangi ${S.count.new}`], ['seen', "Ko'rilgan"], ['all', `Hammasi ${S.count.all}`]].map(([k, l]) => `<button data-f="${k}" aria-pressed="${TM.sigF === k}">${l}</button>`).join('')}</span></div>
-    ${items.length ? `<div class="ablock">${items.map(row).join('')}</div><div class="hint">Signalni bossangiz — «✓ Ko'rildi» va izoh.</div>` : `<div class="card"><div class="empty">${TM.sigF === 'new' ? "Yangi signal yo'q 👍" : "Signal yo'q"}</div></div>`}`;
+    ${items.length ? `<div class="ablock">${tree}</div><div class="hint">Kategoriya → brend → tovar → ombor. Ombor qatorini bossangiz — «✓ Ko'rildi» va izoh.</div>` : `<div class="card"><div class="empty">${TM.sigF === 'new' ? "Yangi signal yo'q 👍" : "Signal yo'q"}</div></div>`}`;
   tmWire(host);
   host.querySelectorAll('#tmSf [data-f]').forEach(b => b.onclick = () => { TM.sigF = b.dataset.f; tmSignals(host); });
+  host.querySelectorAll('[data-tk]').forEach(b => b.onclick = () => { const k = b.dataset.tk; TM.so.has(k) ? TM.so.delete(k) : TM.so.add(k); tmSignals(host); });
   host.querySelectorAll('.tmsig').forEach(r => r.onclick = e => { if (e.target.closest('.tmsact')) return; const id = +r.dataset.sid; TM.sigOpen = TM.sigOpen === id ? null : id; tmSignals(host); });
   host.querySelectorAll('[data-seen]').forEach(b => b.onclick = async e => {
-    e.stopPropagation(); const id = +b.dataset.seen, x = S.items.find(i => i.id === id);
-    try { await api(`supply/signals/${id}/seen`, {note: ($('tmNote') || {}).value || null, unseen: !!x.seen}); } catch (er) { return; }
-    x.note = ($('tmNote') || {}).value || x.note; x.seen = x.seen ? null : new Date().toISOString(); S.count.new += x.seen ? -1 : 1; TM.sigOpen = null; tmSignals(host);
+    e.stopPropagation(); const id = +b.dataset.seen, x = S.items.find(i => i.id === id), note = ($('tmNote') || {}).value || null;
+    try { await api(`supply/signals/${id}/seen`, {note, unseen: !!x.seen}); } catch (er) { return; }
+    if (note) x.note = note; x.seen = x.seen ? null : new Date().toISOString(); S.count.new += x.seen ? -1 : 1; TM.sigOpen = null; tmSignals(host);
+  });
+  host.querySelectorAll('[data-bulk]').forEach(b => b.onclick = async e => {
+    e.stopPropagation(); const ids = TM.sgIdx.get(b.dataset.bulk) || []; b.disabled = true;
+    try { await api('supply/signals/seen', {ids}); } catch (er) { b.disabled = false; return; }
+    const now = new Date().toISOString(); let n = 0;
+    for (const x of S.items) if (ids.includes(x.id) && !x.seen) { x.seen = now; n++; }
+    S.count.new -= n; tmSignals(host);
   });
 }
 // ============================================================ QOLDIQ
