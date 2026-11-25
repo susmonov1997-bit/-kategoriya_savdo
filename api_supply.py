@@ -98,28 +98,38 @@ async def kirim(f: Filters, request: Request, user: User = Depends(current_user)
                              f.model_dump(mode="json", exclude={"share_by", "cur"}), run)
 
 
-@router.get("/signals")
-async def signals(request: Request, status: str = "all", user: User = Depends(current_user)):
-    allowed = await allowed_categories(user)
-    cond = {"new": "s.seen_at IS NULL", "seen": "s.seen_at IS NOT NULL"}.get(status, "TRUE")
+async def _signals(con, f: Filters, user: User, status: str = "all") -> dict:
+    """Signallar tepadagi filtrlar bilan: doira (kategoriyalar, ruxsat), brend/status/xususiyat/SKU/mas'ul,
+    joy filtri (hudud/klaster/filial) — shu filiallar biriktirilgan omborlar."""
+    from api_stock import _SQL
+    cats, attrs, _ = await _M().scope_ctx(con, f, user)
+    q = _SQL(f, cats, attrs)
+    w_ = q.ctes()
+    locf = bool(f.region_ids or f.cluster_ids or f.branch_ids)
+    wcond = "AND s.warehouse_id IN (SELECT warehouse_id FROM bb WHERE warehouse_id IS NOT NULL)" if locf else ""
+    rows = await con.fetch(f"""WITH {w_}
+SELECT s.id, s.kind, s.data, s.created_at, s.seen_at, s.note, s.product_id, p.name pname, p.brand,
+       c.name cname, p.category_id, w.name wname
+FROM supply_signals s JOIN products p ON p.product_id = s.product_id
+JOIN categories c ON c.id = p.category_id LEFT JOIN warehouses w ON w.id = s.warehouse_id
+WHERE s.product_id IN (SELECT product_id FROM pd) {wcond}
+ORDER BY s.seen_at IS NOT NULL, s.created_at DESC, (s.data->>'usd')::float8 DESC NULLS LAST
+LIMIT 5000""", *q.params)
+    items = [{"id": r["id"], "kind": r["kind"], "pid": r["product_id"], "name": r["pname"], "brand": r["brand"],
+              "cat": r["cname"], "wh": r["wname"], "created": r["created_at"], "seen": r["seen_at"], "note": r["note"],
+              "data": r["data"] if isinstance(r["data"], dict) else json.loads(r["data"] or "{}")} for r in rows]
+    cnt = {"all": len(items), "new": sum(1 for x in items if not x["seen"])}
+    if status == "new":
+        items = [x for x in items if not x["seen"]]
+    elif status == "seen":
+        items = [x for x in items if x["seen"]]
+    return {"count": cnt, "items": items}
+
+
+@router.post("/signals")
+async def signals(f: Filters, request: Request, status: str = "all", user: User = Depends(current_user)):
     async with request.app.state.pool.acquire() as con:
-        rows = await con.fetch(
-            f"""SELECT s.id, s.kind, s.data, s.created_at, s.seen_at, s.note, s.product_id, p.name pname, p.brand,
-                       c.name cname, p.category_id, w.name wname
-                FROM supply_signals s LEFT JOIN products p ON p.product_id = s.product_id
-                LEFT JOIN categories c ON c.id = p.category_id LEFT JOIN warehouses w ON w.id = s.warehouse_id
-                WHERE {cond} AND ($1::int[] IS NULL OR p.category_id = ANY($1::int[]))
-                ORDER BY s.seen_at IS NOT NULL, s.created_at DESC, (s.data->>'usd')::float8 DESC NULLS LAST
-                LIMIT 3000""", list(allowed) if allowed is not None else None)
-        cnt = await con.fetchrow(
-            """SELECT count(*) n, count(*) FILTER (WHERE s.seen_at IS NULL) new FROM supply_signals s
-               LEFT JOIN products p ON p.product_id = s.product_id
-               WHERE $1::int[] IS NULL OR p.category_id = ANY($1::int[])""",
-            list(allowed) if allowed is not None else None)
-    return {"count": {"all": cnt["n"], "new": cnt["new"]},
-            "items": [{"id": r["id"], "kind": r["kind"], "pid": r["product_id"], "name": r["pname"], "brand": r["brand"],
-                       "cat": r["cname"], "wh": r["wname"], "created": r["created_at"], "seen": r["seen_at"], "note": r["note"],
-                       "data": r["data"] if isinstance(r["data"], dict) else json.loads(r["data"] or "{}")} for r in rows]}
+        return await _signals(con, f, user, status)
 
 
 class SeenReq(BaseModel):
@@ -220,12 +230,13 @@ def signals_xlsx(items: list[dict], status: str) -> bytes:
 
 
 @router.post("/signals/export")
-async def signals_export(request: Request, status: str = "new", user: User = Depends(current_user)):
+async def signals_export(f: Filters, request: Request, status: str = "new", user: User = Depends(current_user)):
     import config
     from datetime import datetime, timezone
     from aiogram import Bot
     from aiogram.types import BufferedInputFile
-    d = await signals(request, status, user)
+    async with request.app.state.pool.acquire() as con:
+        d = await _signals(con, f, user, status)
     if not d["items"]:
         raise HTTPException(404, "Signal yo'q")
     if not config.BOT_TOKEN:

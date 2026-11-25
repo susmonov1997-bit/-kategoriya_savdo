@@ -1941,7 +1941,7 @@ function tmWire(host) {
 }
 async function renderTm() {
   const host = $('tmBody'), seq = ++TM.seq;
-  if (!TM.sig) api('supply/signals?status=all').then(r => { if (seq !== TM.seq && TM.sig) return; TM.sig = r; const s = $('tmSeg'); if (s) { s.outerHTML = tmSeg(); tmWire(host); } if (TM.sec === 's') renderTm(); }).catch(() => {});
+  if (!TM.sig) api('supply/signals?status=all', filters()).then(r => { if (seq !== TM.seq && TM.sig) return; TM.sig = r; const s = $('tmSeg'); if (s) { s.outerHTML = tmSeg(); tmWire(host); } if (TM.sec === 's') renderTm(); }).catch(() => {});
   if (TM.sec === 's') return tmSignals(host);
   if (TM.sec !== 'k') {
     const w = TM_WAIT[TM.sec];
@@ -2075,7 +2075,7 @@ function tmSignals(host) {
   const sx = $('tmSx');
   if (sx) sx.onclick = async () => {
     const t0 = sx.textContent; sx.disabled = true; sx.textContent = '⏳ Tayyorlanmoqda…';
-    try { await api('supply/signals/export?status=' + TM.sigF, {}); sx.textContent = '✅ Botga yuborildi'; }
+    try { await api('supply/signals/export?status=' + TM.sigF, filters()); sx.textContent = '✅ Botga yuborildi'; }
     catch (e) { sx.textContent = '❌ ' + e.message; }
     setTimeout(() => { sx.disabled = false; sx.textContent = t0; }, 4000);
   };
