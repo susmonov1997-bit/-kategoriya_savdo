@@ -38,7 +38,15 @@ async def resolve_stock(con: asyncpg.Connection) -> dict:
            SET qty = s.qty + EXCLUDED.qty, value_usd = coalesce(s.value_usd, 0) + coalesce(EXCLUDED.value_usd, 0)
            RETURNING 1)
            SELECT count(*) n, coalesce(sum(qty), 0) q FROM m""")
-    return {"stock_rows": b["n"] + w["n"], "stock_qty": float(b["q"] + w["q"])}
+    rc = {"rows": 0, "qty": 0.0}
+    try:                                   # kutayotgan omborga kirim (021_receipts.sql)
+        from loaders_receipts import resolve_receipts
+        async with con.transaction():
+            rc = await resolve_receipts(con)
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).exception("Kutayotgan kirim ulanmadi")
+    return {"stock_rows": b["n"] + w["n"], "stock_qty": float(b["q"] + w["q"]), "rec_rows": rc["rows"], "rec_qty": rc["qty"]}
 
 
 async def resolve_pending(con: asyncpg.Connection) -> dict:
@@ -91,10 +99,13 @@ async def resolve_pending(con: asyncpg.Connection) -> dict:
 
 def format_resolved(r: dict) -> str:
     """Spravochnik hisobotiga qo'shiladigan qism (bo'sh bo'lsa — "")."""
-    if not r or not (r["rows"] or r["comp_rows"] or r.get("stock_rows")):
+    if not r or not (r["rows"] or r["comp_rows"] or r.get("stock_rows") or r.get("rec_rows")):
         return ""
     stock = (f"\n📦 <b>Kutayotgan qoldiq ulandi:</b> {r['stock_rows']} qator · "
              f"{r['stock_qty']:,.0f} dona".replace(",", " ")) if r.get("stock_rows") else ""
+    if r.get("rec_rows"):
+        stock += (f"\n📥 <b>Kutayotgan kirim ulandi:</b> {r['rec_rows']} qator · "
+                  f"{r['rec_qty']:,.0f} dona".replace(",", " "))
     if not (r["rows"] or r["comp_rows"]):
         return stock
     d = r["dates"]

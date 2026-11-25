@@ -517,9 +517,12 @@ async def on_document(m: Message, bot: Bot, pool: asyncpg.Pool) -> None:
         # adminlarga to'liq hisobot, savdo bo'lsa — hammaga "yangilandi" xabari (fonda)
         _bg(broadcast_upload(pool, kind, text, upload_id, m.from_user.id,
                                              m.from_user.full_name, "bot", doc.file_name, bot))
-        if kind in ("sales", "stock_branch", "stock_wh", "branches", "products"):
+        if kind in ("sales", "stock_branch", "stock_wh", "branches", "products", "receipts"):
             # spravochnikda yo'q filial / tanilmagan ombor bo'limi — adminlarga tugmali so'rov
             _bg(prompt_new(pool, bot))
+        if kind == "receipts":                 # ta'minot signallari (matritsada yo'q tovar kirimi)
+            from supply import notify_signals
+            _bg(notify_signals(pool, bot))
         if kind in ("stock_branch", "stock_wh"):
             schedule_summary(pool)       # qoldiq xulosasi — oxirgi qoldiq yuklashidan ~2,5 daqiqa keyin bitta
     if kind in ("sales", "stock_branch", "stock_wh") and upload_id:

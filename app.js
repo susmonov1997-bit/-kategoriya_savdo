@@ -187,8 +187,8 @@ const CMP_SHORT = {mom: "o'tgan oy", prev: 'oldingi kunlar', yoy: "o'tgan yil", 
 const tashToday = () => new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10);
 const partialDay = () => (META && META.data_to && META.data_to === tashToday() ? META.data_to : null);
 const fullTo = () => { const p = partialDay(); return p && !st.today && (!META.data_from || addDays(p, -1) >= META.data_from) ? addDays(p, -1) : META.data_to; };
-function presetRange(k) {
-  const to = fullTo(), dow = (D(to).getUTCDay() + 6) % 7;          // Du = 0
+function presetRange(k, anchor) {
+  const to = anchor || fullTo(), dow = (D(to).getUTCDay() + 6) % 7;          // Du = 0
   const clamp = s => (META.data_from && s < META.data_from ? META.data_from : s);
   if (k === 'week') return [clamp(addDays(to, -dow)), to];
   if (k === 'lweek') { const mon = addDays(to, -dow - 7); return [clamp(mon), addDays(mon, 6)]; }
@@ -1121,11 +1121,11 @@ function showError(e) {
 }
 // Tablar bo'yicha yuklash: Umumiy (KPI, grafik, kategoriyalar) har doim; Qirqim va Tovarlar — faqat ochilganda.
 // Filtr/davr o'zgarsa ikkalasi "eskirgan" deb belgilanadi va ochilganda qayta olinadi.
-const STALE = {Qirqim: true, Tovarlar: true, Qoldiq: true, Matritsa: true};
+const STALE = {Qirqim: true, Tovarlar: true, Qoldiq: true, Matritsa: true, Taminot: true};
 let LIST = null;
 async function load() {
   renderHeader();
-  STALE.Qirqim = STALE.Tovarlar = STALE.Qoldiq = STALE.Matritsa = true;
+  STALE.Qirqim = STALE.Tovarlar = STALE.Qoldiq = STALE.Matritsa = STALE.Taminot = true;
   const F = filters(), seq = ++reqSeq.main;
   const secs = ['kpis', 'chart', 'catList'].map($);
   secs.forEach(s => s.classList.add('loading'));
@@ -1176,6 +1176,8 @@ async function loadTab(t) {
     loadStockTab();
   } else if (t === 'Matritsa') {
     loadMatrixTab();
+  } else if (t === 'Taminot') {
+    loadSupplyTab();
   } else if (t === 'Tovarlar') {
     const secs = ['ablocks', 'top'].map($); secs.forEach(s => s.classList.add('loading'));
     if (!$('ablocks').firstChild) $('ablocks').innerHTML = `<div class="empty">Yuklanmoqda…</div>`;
@@ -1512,8 +1514,8 @@ async function loadPlan(year) {
 let TAB = 'Umumiy';
 function setTab(t) {
   TAB = t;
-  ['Umumiy', 'Qirqim', 'Tovarlar', 'Qoldiq', 'Reja', 'Matritsa'].forEach(x => { $('pane' + x).hidden = x !== t; });
-  $('perBtn').hidden = $('metricSeg').hidden = t === 'Matritsa';   // matritsa — joriy holat, davrga bog'liq emas
+  ['Umumiy', 'Qirqim', 'Tovarlar', 'Qoldiq', 'Reja', 'Matritsa', 'Taminot'].forEach(x => { $('pane' + x).hidden = x !== t; });
+  $('perBtn').hidden = t === 'Matritsa'; $('metricSeg').hidden = t === 'Matritsa' || t === 'Taminot';   // matritsa — joriy holat, davrga bog'liq emas
   $('topAnalytics').classList.toggle('mxhide', t === 'Matritsa');     // matritsada Filtr — sarlavha yonida
   $('topFil').hidden = t !== 'Matritsa'; if (t === 'Matritsa') mxFilBtn();
   const rj = t === 'Reja';                            // reja — kategoriya/davr/filtrga bog'liq emas
@@ -1640,7 +1642,7 @@ async function sendMissing(btn, path) {
   catch (e) { btn.textContent = '❌ ' + e.message; btn.disabled = false; setTimeout(() => { btn.textContent = t; }, 4000); }
 }
 // ---------------------------------------------------------------- 📥 bo'limlari + ⏳ kutayotgan tovarlar (qo'lda to'ldirish)
-const PK = {sec: 'u', grp: null, last: null, list: null, lim: 30, form: null, f: null, cat: {}, res: null, busy: false};
+const PK = {sec: 'u', kind: 'id', kir: null, bind: null, grp: null, last: null, list: null, lim: 30, form: null, f: null, cat: {}, res: null, busy: false};
 function upSec(k) {
   PK.sec = k;
   $('upSeg').querySelectorAll('[data-u]').forEach(b => b.setAttribute('aria-pressed', b.dataset.u === k));
@@ -1656,12 +1658,13 @@ const pkChips = x => [x.sales_amount ? `<span class="pkc s">savdo ${x.sales_days
 async function pkLoad() {
   if (!META || !META.can_upload) return;
   try { PK.list = await api('pending/list'); } catch (e) { PK.list = {items: [], err: e.message}; }
-  const L = PK.list, n = L.items.length;
+  try { PK.kir = await api('pending/kirim'); } catch (e) { PK.kir = {items: []}; }
+  const L = PK.list, nk = PK.kir.items.length, n = L.items.length + nk;
   $('upKn').textContent = n ? ` · ${n}` : '';
-  $('upKsum').innerHTML = n ? `<div class="card pksum"><span>⏳ <b>${n} ta tovar</b> spravochnikda yo'q${L.sum.amount || L.sum.stock ? ` — ${[L.sum.amount ? 'savdo ' + money(L.sum.amount) : '', L.sum.stock ? 'qoldiq ' + nf0.format(Math.round(L.sum.stock)) + ' dona' : ''].filter(Boolean).join(', ')} kutmoqda` : ''}</span>
+  $('upKsum').innerHTML = n ? `<div class="card pksum"><span>⏳ <b>${n} ta tovar</b> spravochnikda yo'q${nk ? ` (shundan kirimda nomi topilmagan — ${nk})` : ''}${L.sum.amount || L.sum.stock ? ` — ${[L.sum.amount ? 'savdo ' + money(L.sum.amount) : '', L.sum.stock ? 'qoldiq ' + nf0.format(Math.round(L.sum.stock)) + ' dona' : ''].filter(Boolean).join(', ')} kutmoqda` : ''}</span>
       <button class="pkgo" id="pkSumGo">Ko'rish ›</button></div>` : '';
   const g = $('pkSumGo'); if (g) g.onclick = () => upSec('k');
-  if (PK.sec === 'k' && !PK.form) pkRenderList();
+  if (PK.sec === 'k' && !PK.form && !PK.bind) pkRenderList();
 }
 // kutayotganlar kategoriya bo'yicha (fayldagi kategoriya nomi): savdo summasi, keyin qoldiq summasi
 const pkKey = x => (x.category || '').trim() || '—';
@@ -1675,7 +1678,7 @@ function pkGroups() {
   const inBot = new Set((META.categories || []).map(c => (c.name || '').trim().toLowerCase()));
   return Object.values(G).map(g => ({...g, known: inBot.has(g.key.toLowerCase())})).sort(pkOrd);
 }
-function pkRenderList() {
+function pkRenderIds() {
   const host = $('pkBody'), L = PK.list;
   if (!L) { host.innerHTML = `<div class="empty">Yuklanmoqda…</div>`; return; }
   if (L.err) { host.innerHTML = `<div class="errbox">${esc(L.err)}</div>`; return; }
@@ -1704,16 +1707,86 @@ function pkRenderList() {
   host.querySelectorAll('[data-pk]').forEach(b => b.onclick = () => pkOpen(+b.dataset.pk));
   const mo = $('pkMore'); if (mo) mo.onclick = () => { PK.lim += 30; pkRenderList(); };
 }
+// --- kirim faylida nomi topilmagan tovarlar: bog'lash ---
+function pkSubSeg() {
+  const n1 = PK.list ? PK.list.items.length : 0, n2 = PK.kir ? PK.kir.items.length : 0;
+  if (!n2 && PK.kind !== 'kir') return '';
+  return `<div class="seg mini pksub"><button data-pkk="id" aria-pressed="${PK.kind !== 'kir'}">Tovar ID'lar · ${n1}</button><button data-pkk="kir" aria-pressed="${PK.kind === 'kir'}">Kirim: nom topilmadi · ${n2}</button></div>`;
+}
+function pkRenderList() {
+  const host = $('pkBody');
+  if (PK.bind) return pkRenderBind();
+  if (PK.kind === 'kir') pkRenderKir(); else pkRenderIds();
+  host.insertAdjacentHTML('afterbegin', pkSubSeg());
+  host.querySelectorAll('[data-pkk]').forEach(b => b.onclick = () => { if (PK.kind === b.dataset.pkk) return; PK.kind = b.dataset.pkk; PK.res = null; pkRenderList(); window.scrollTo(0, 0); });
+}
+function pkRenderKir() {
+  const host = $('pkBody'), K = PK.kir;
+  const res = PK.res ? `<div class="card pkok">${PK.res}</div>` : '';
+  if (!K) { host.innerHTML = `<div class="empty">Yuklanmoqda…</div>`; return; }
+  if (!K.items.length) { host.innerHTML = res + `<div class="card"><div class="empty">Kirimda nomi topilmagan tovar yo'q 👍</div></div>`; return; }
+  host.innerHTML = res + `<div class="hint pkh">Omborga kirim faylidagi tovar nomi spravochnikda topilmadi. Bog'lasangiz — kirimi darhol ulanadi, nom va «Товар коди» eslab qolinadi.</div>
+    <div class="pkl">${K.items.map((x, i) => `<div class="pkr"><div><b>${esc(x.name)}</b>
+      <span class="m">${esc(x.cat || '—')} · ${esc(x.brand || '—')}${x.codes ? ` · kod ${esc(x.codes)}` : ''}</span>
+      <div><span class="pkc q">kirim ${nf0.format(Math.round(x.qty))} dona${x.usd ? ' · ' + usd(x.usd) : ''}</span>${x.orders ? `<span class="pkc">${x.orders} zakaz</span>` : ''}</div></div>
+      <button class="pkgo" data-kb="${i}">Bog'lash</button></div>`).join('')}</div>`;
+  host.querySelectorAll('[data-kb]').forEach(b => b.onclick = () => pkBindOpen(K.items[+b.dataset.kb]));
+}
+async function pkBindOpen(x) {
+  PK.bind = {x, cand: null, sel: null, q: '', found: null, err: null};
+  PK.res = null; pkRenderBind(); window.scrollTo(0, 0);
+  try { PK.bind.cand = (await api('pending/kirim/cand?key=' + encodeURIComponent(x.key))).similar; }
+  catch (e) { PK.bind.cand = []; PK.bind.err = e.message; }
+  if (PK.bind && PK.bind.x === x) pkRenderBind();   // avtomatik tanlanmaydi — model kodi 1 harfga farq qilishi mumkin
+}
+function pkRenderBind() {
+  const B = PK.bind, x = B.x;
+  const opt = c => `<button class="pkcand${B.sel === c.id ? ' on' : ''}" data-sel="${c.id}"><span><b>${esc(c.name)}</b><br><span class="hint">ID ${c.id} · ${esc(c.cat || '')}${c.score != null ? ` · ${c.score}% o'xshash` : ''}</span></span>${B.sel === c.id ? '<span>✓</span>' : ''}</button>`;
+  $('pkBody').innerHTML = `<button class="tchip back" id="pkBback">‹ Kirim: nom topilmadi</button>
+  <div class="card pkform">
+    <div><b class="pkt">${esc(x.name)}</b><div class="hint">kirim faylida${x.codes ? ` · kod ${esc(x.codes)}` : ''} · ${esc(x.cat || '—')} · ${esc(x.brand || '—')}</div>
+      <div><span class="pkc q">kirim ${nf0.format(Math.round(x.qty))} dona${x.usd ? ' · ' + usd(x.usd) : ''}</span>${x.orders ? `<span class="pkc">${x.orders} zakaz</span>` : ''}</div></div>
+    <div class="hint">Spravochnikdagi qaysi tovar?${B.cand && B.cand.length ? ' (nomi o\'xshashlari)' : ''}</div>
+    ${B.cand == null ? '<div class="empty">Yuklanmoqda…</div>' : B.cand.length ? B.cand.map(opt).join('') : `<div class="hint">O'xshash nom topilmadi — qidiring</div>`}
+    <input class="pkin" id="pkQ" placeholder="🔍 Boshqa tovarni nomi yoki ID bo'yicha qidirish" value="${esc(B.q)}">
+    ${B.found ? (B.found.length ? B.found.map(opt).join('') : `<div class="hint">Topilmadi</div>`) : ''}
+    <div id="pkErr">${B.err ? `<div class="errbox">${esc(B.err)}</div>` : ''}</div>
+    <button class="btn primary" id="pkBind" ${B.sel ? '' : 'disabled'}>${PK.busy ? 'Saqlanmoqda…' : "Bog'lash"}</button>
+    <div class="pknew"><span class="hint">Spravochnikda umuman yo'q bo'lsa — yangi tovar:</span>
+      <div class="pkbtns"><input class="pkin" id="pkNewId" inputmode="numeric" placeholder="Товар Ид"><button class="btn" id="pkNewGo">Yangi tovar ›</button></div></div>
+  </div>`;
+  $('pkBback').onclick = () => { PK.bind = null; pkRenderList(); window.scrollTo(0, 0); };
+  document.querySelectorAll('[data-sel]').forEach(b => b.onclick = () => { B.sel = +b.dataset.sel; pkRenderBind(); });
+  let t = null;
+  $('pkQ').oninput = e => { B.q = e.target.value; clearTimeout(t); t = setTimeout(async () => {
+    if (B.q.trim().length < 2) { B.found = null; pkRenderBind(); return; }
+    try { const r = await api('pending/search?q=' + encodeURIComponent(B.q.trim())); if (PK.bind === B) { B.found = r.items; pkRenderBind(); const i = $('pkQ'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); } } catch (er) {}
+  }, 350); };
+  $('pkBind').onclick = async () => {
+    if (!B.sel || PK.busy) return;
+    PK.busy = true; pkRenderBind();
+    try {
+      const r = await api('pending/kirim/bind', {key: x.key, product_id: B.sel});
+      const nm = ((B.cand || []).concat(B.found || []).find(c => c.id === B.sel) || {}).name || B.sel;
+      PK.res = `<b>✅ Bog'landi: ${esc(x.name)}</b><div class="hint">→ ${esc(nm)} · ${r.rec_rows ? `kirim ulandi: ${nf0.format(Math.round(r.rec_qty))} dona` : 'kirim ulandi'} · keyingi fayllarda o'zi taniydi</div>`;
+      PK.bind = null; NEED_REFRESH = true; PK.kir.items = PK.kir.items.filter(i => i.key !== x.key);
+      pkRenderList(); window.scrollTo(0, 0); pkLoad();
+    } catch (e) { B.err = e.message; }
+    PK.busy = false; if (PK.bind) pkRenderBind();
+  };
+  $('pkNewGo').onclick = () => { const id = +($('pkNewId').value || '').trim(); if (!(id > 0)) { B.err = 'Товар Ид ni yozing (raqam)'; pkRenderBind(); return; } PK.bind = null; pkOpen(id, false, x.key); };
+}
 async function pkCat(cid) {
   if (!cid) return null;
   if (!PK.cat[cid]) PK.cat[cid] = await api('pending/cat/' + cid);
   return PK.cat[cid];
 }
-async function pkOpen(id, keepRes) {
+async function pkOpen(id, keepRes, kirKey) {
   if (!keepRes) PK.res = null;
   $('pkBody').innerHTML = `<div class="empty">Yuklanmoqda…</div>`; window.scrollTo(0, 0);
   try {
-    const d = await api('pending/item/' + id);
+    const d = await api('pending/item/' + id + (kirKey ? '?kirim=' + encodeURIComponent(kirKey) : ''));
+    d.kirim = kirKey || null;
     PK.form = d;
     const last = PK.last && PK.last.grp === PK.grp ? PK.last : null;   // shu kategoriyada oldingi saqlangan tovar
     PK.f = {name: d.item.name || '', category_id: d.cat_id || (last && last.category_id) || null, brand: d.item.brand || '',
@@ -1781,9 +1854,9 @@ async function pkSave(next) {
   PK.busy = true; pkRenderForm();
   try {
     const r = await api('pending/save', {product_id: x.id, name: f.name.trim(), category_id: f.category_id, brand: f.brand.trim(),
-                                         status: f.status || null, attrs: f.attrs});
+                                         status: f.status || null, attrs: f.attrs, kirim_key: PK.form.kirim || null});
     const parts = [r.sales_rows ? `savdo ${nf0.format(r.sales_rows)} qator (${money(r.sales_amount)})` : '',
-                   r.stock_rows ? `qoldiq ${nf0.format(Math.round(r.stock_qty))} dona` : '', r.mx_rows ? `matritsa ${nf0.format(r.mx_rows)} qator` : ''].filter(Boolean);
+                   r.stock_rows ? `qoldiq ${nf0.format(Math.round(r.stock_qty))} dona` : '', r.rec_rows ? `kirim ${nf0.format(Math.round(r.rec_qty))} dona` : '', r.mx_rows ? `matritsa ${nf0.format(r.mx_rows)} qator` : ''].filter(Boolean);
     PK.res = `<b>✅ Saqlandi: ${esc(f.name)}</b><div class="hint">${parts.length ? 'Ulandi: ' + parts.join(' · ') : 'Kutayotgan qator yo\'q edi'}</div>`;
     NEED_REFRESH = true;
     try { tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred('success'); } catch (e) {}
@@ -1847,6 +1920,134 @@ async function init() {
   st.cat = defaultScope();
   [st.from, st.to] = presetRange(st.preset);
   load();
+}
+// ============================================================ TA'MINOT
+// ⚠ Signallar · Zakaz · Yo'lda · Kirim · Prognoz · Ta'minotchi (021_receipts.sql). Hozircha: Kirim va signallar.
+const TM = {sec: 'k', dim: 'cat', open: new Set(), data: null, sig: null, sigF: 'new', sigOpen: null, seq: 0, lim: 30};
+const TM_SEC = [['s', '⚠'], ['z', 'Zakaz'], ['y', "Yo'lda"], ['k', 'Kirim'], ['p', 'Prognoz'], ['t', "Ta'minotchi"]];
+const TM_WAIT = {
+  z: ["Ta'minotchiga zakazlar", "ochiq zakazlar, kechikkanlar, qisman kelganlar va Matritsa → Zakaz bilan bog'lash", '2_taminotchiga_zakaz'],
+  y: ["Yo'ldagi tovarlar", "kelish taqvimi, «kelguncha qoldiq tugaydi» SKU'lar", '3_yoldagi_tovarlar'],
+  p: ['Oylik kirim prognozi', "prognoz bajarilishi, orqada qolgan SKU'lar, prognozdan tashqari kirim", '1_kirim_prognozi'],
+  t: ["Ta'minotchilar reytingi", "o'z vaqtida va to'liq yetkazish, haqiqiy muddat (zakaz fayli kerak)", '2_taminotchiga_zakaz'],
+};
+function loadSupplyTab() { STALE.Taminot = false; TM.data = null; TM.sig = null; renderTm(); }
+function tmSeg() {
+  const n = TM.sig ? TM.sig.count.new : 0;
+  return `<div class="seg tmseg" id="tmSeg">${TM_SEC.map(([k, l]) => `<button data-s="${k}" aria-pressed="${TM.sec === k}" class="${k === 's' ? 'tms' : ''}${k === 's' && n ? ' hot' : ''}">${k === 's' ? `⚠${n ? ' ' + n : ''}` : l}</button>`).join('')}</div>`;
+}
+function tmWire(host) {
+  host.querySelectorAll('#tmSeg [data-s]').forEach(b => b.onclick = () => { if (TM.sec === b.dataset.s) return; TM.sec = b.dataset.s; renderTm(); window.scrollTo(0, 0); });
+}
+async function renderTm() {
+  const host = $('tmBody'), seq = ++TM.seq;
+  if (!TM.sig) api('supply/signals?status=all').then(r => { if (seq !== TM.seq && TM.sig) return; TM.sig = r; const s = $('tmSeg'); if (s) { s.outerHTML = tmSeg(); tmWire(host); } if (TM.sec === 's') renderTm(); }).catch(() => {});
+  if (TM.sec === 's') return tmSignals(host);
+  if (TM.sec !== 'k') {
+    const w = TM_WAIT[TM.sec];
+    host.innerHTML = `${tmSeg()}<div class="card tmwait"><b>${w[0]}</b><span>${w[1]}</span>
+      <span class="hint">Bu bo'lim «${w[2]}» fayli botga yuklangach ishlaydi. Fayl formatini kelishib olamiz — shablon bor.</span></div>`;
+    return tmWire(host);
+  }
+  if (!TM.data) {
+    host.innerHTML = `${tmSeg()}<div class="empty">Yuklanmoqda…</div>`; tmWire(host);
+    try {
+      // davr — kirimning o'z oxirgi sanasidan (savdo boshqa kunda tugashi mumkin)
+      const F = filters();
+      if (st.preset && TM.last) [F.date_from, F.date_to] = presetRange(st.preset, TM.last);
+      let d = await api('supply/kirim', F);
+      if (st.preset && d.last && d.last !== TM.last) {
+        TM.last = d.last; [F.date_from, F.date_to] = presetRange(st.preset, d.last);
+        if (F.date_to !== d.to) d = await api('supply/kirim', F);
+      }
+      if (seq !== TM.seq) return; TM.data = d;
+    }
+    catch (e) { if (seq === TM.seq) { host.innerHTML = `${tmSeg()}<div class="errbox">${esc(e.message)}</div>`; tmWire(host); } return; }
+  }
+  tmKirim(host);
+}
+function tmAgg(d) {
+  const P = d.prods, S = d.sups, W = d.whs;
+  const key = {cat: r => P[r[0]] ? P[r[0]][1] : 0, sup: r => r[2], wh: r => r[1], brand: r => P[r[0]] ? P[r[0]][3] || '—' : '—'}[TM.dim];
+  const nm = {cat: (k, r) => P[r[0]] ? P[r[0]][2] : '—', sup: k => S[k] || '—', wh: k => W[k] || '—', brand: k => k}[TM.dim];
+  const G = new Map();
+  const g = (r) => { const k = key(r); if (!G.has(k)) G.set(k, {k, name: nm(k, r), usd: 0, qty: 0, pu: 0, pq: 0, ord: new Set(), sku: new Map()}); return G.get(k); };
+  for (const r of d.rows) {
+    const x = g(r); x.usd += r[5]; x.qty += r[4]; if (d.orders[r[3]]) x.ord.add(r[3]);
+    const s = x.sku.get(r[0]) || {pid: r[0], usd: 0, qty: 0, wh: new Map()}; s.usd += r[5]; s.qty += r[4]; s.wh.set(r[1], (s.wh.get(r[1]) || 0) + r[4]); x.sku.set(r[0], s);
+  }
+  for (const r of d.prev || []) { const x = g([r[0], r[1], r[2], 0]); x.pu += r[4]; x.pq += r[3]; }
+  return [...G.values()].filter(x => x.qty || x.pq).sort((a, b) => b.usd - a.usd || b.pu - a.pu);
+}
+function tmChart(daily) {
+  if (!daily || daily.length < 2) return '';
+  const W = 340, H = 120, n = daily.length, mx = Math.max(...daily.map(x => x[1]), 1), bw = (W - 16) / n;
+  const bars = daily.map((x, i) => { const h = x[1] / mx * (H - 22); return `<rect x="${8 + i * bw + bw * .16}" y="${H - 18 - h}" width="${bw * .68}" height="${Math.max(0, h)}" rx="1.5" fill="var(--accent)"><title>${dm(x[0])} · ${usd(x[1])} · ${nf0.format(x[2])} dona</title></rect>`; }).join('');
+  const step = Math.max(1, Math.ceil(n / 6));
+  let lbl = ''; for (let i = 0; i < n; i += step) lbl += `<text x="${8 + i * bw + bw / 2}" y="${H - 4}" font-size="9.5" fill="var(--muted)" text-anchor="middle">${dm(daily[i][0])}</text>`;
+  return `<div class="card"><div class="sh"><span class="label">Kunlik kirim · $</span><span class="hint" id="tmTip">ustunni bossangiz — kun</span></div>
+    <svg viewBox="0 0 ${W} ${H}" class="tmbars" style="width:100%;height:${H}px;display:block">${bars}${lbl}</svg></div>`;
+}
+function tmKirim(host) {
+  const d = TM.data;
+  if (!d.has) {
+    host.innerHTML = `${tmSeg()}<div class="card tmwait"><b>Omborga kirim hali yuklanmagan</b><span>«📥» orqali kirim faylini yuklang (kirim_tovarlar_….xlsx) — ustunlar: Буюртма коди, Таъминотчи, Омбор, Товар коди, Товар, Миқдори, Кабул вақти…</span></div>`;
+    return tmWire(host);
+  }
+  const G = tmAgg(d), T = G.reduce((a, x) => ({usd: a.usd + x.usd, qty: a.qty + x.qty, pu: a.pu + x.pu}), {usd: 0, qty: 0, pu: 0});
+  const ords = new Set(d.rows.map(r => r[3]).filter(i => d.orders[i])), sups = new Set(d.rows.map(r => r[2]));
+  const noOrd = d.rows.filter(r => !d.orders[r[3]]).reduce((a, r) => a + r[5], 0);
+  const dp = (c, p) => (p > 0 ? (c - p) / p * 100 : null);
+  const pill2 = v => (v == null ? '' : `<span class="num ${v >= 0 ? 'good' : 'bad'}">${v >= 0 ? '▲' : '▼'} ${nf1.format(Math.abs(v))}%</span>`);
+  const cw = d.cmp ? `${CMP_SHORT[st.compare]} ${dm(d.cmp[0])}–${dm(d.cmp[1])}` : '';
+  const skuRow = s => { const p = d.prods[s.pid] || ['ID ' + s.pid]; const wh = [...s.wh.entries()].sort((a, b) => b[1] - a[1]).map(([w, q]) => `${esc((d.whs[w] || '').replace(/ омбори$/, ''))} ${nf0.format(q)}`).join(' · ');
+    return `<div class="tmrow"><span class="a"><b>${esc(p[0])}</b><span class="h">${wh}</span></span><span class="r"><b class="num">${usd(s.usd)}</b><span class="h num">${nf0.format(s.qty)} dona</span></span></div>`; };
+  const rows = G.slice(0, TM.lim).map(x => { const op = TM.open.has(x.k);
+    return `<button class="tmrow tmb" data-k="${esc(String(x.k))}"><span class="a"><b>${op ? '▾' : '▸'} ${esc(x.name || '—')}</b><span class="h">${nf0.format(x.qty)} dona${x.ord.size ? ` · ${x.ord.size} zakaz` : ''}</span></span>
+      <span class="r"><b class="num">${usd(x.usd)}</b><span class="h">${d.cmp && T.pu ? pill2(dp(x.usd, x.pu)) || '<span class="hint">yangi</span>' : ''}</span></span></button>
+      ${op ? `<div class="tmsub">${[...x.sku.values()].sort((a, b) => b.usd - a.usd).slice(0, 40).map(skuRow).join('')}</div>` : ''}`; }).join('');
+  host.innerHTML = `${tmSeg()}
+    <div class="hint">${dm(d.from)}–${dm(d.to)}${cw ? ' · solishtirish: ' + cw : ''} · kirim ${dm(d.last)} gacha</div>
+    <div class="kpis mxk">
+      <div class="kpi mxhero"><span class="l">Kirim</span><span class="v num">${usd(T.usd)}</span><span class="p num">${d.cmp ? (T.pu ? `${pill2(dp(T.usd, T.pu))} · ${CMP_SHORT[st.compare]} ${usd(T.pu)}` : `${CMP_SHORT[st.compare]}: kirim ma'lumoti yo'q`) : ''}</span></div>
+      <div class="kpi"><span class="l">Dona</span><span class="v num">${nf0.format(T.qty)}</span><span class="p num">${ords.size} zakaz · ${sups.size} ta'minotchi</span></div>
+      <div class="kpi"><span class="l">Zakazsiz kirim</span><span class="v num">${usd(noOrd)}</span><span class="p">«Буюртма коди» bo'sh</span></div>
+      <button class="kpi tmkb" id="tmPend"><span class="l">⏳ Nomi topilmagan ›</span><span class="v num ${d.pending.skus ? 'bad' : ''}">${d.pending.skus} tovar</span><span class="p num">${nf0.format(d.pending.qty)} dona · hisobga kirmagan</span></button>
+    </div>
+    ${tmChart(d.daily)}
+    <div class="tmgrp"><span class="seg mini" id="tmDim">${[['cat', 'Kategoriya'], ['sup', "Ta'minotchi"], ['wh', 'Ombor'], ['brand', 'Brend']].map(([k, l]) => `<button data-d="${k}" aria-pressed="${TM.dim === k}">${l}</button>`).join('')}</span></div>
+    ${G.length ? `<div class="ablock">${rows}</div>${G.length > TM.lim ? `<button class="more" id="tmMore">Yana ${G.length - TM.lim} ta ▾</button>` : ''}` : `<div class="card"><div class="empty">Bu davrda kirim yo'q</div></div>`}`;
+  tmWire(host);
+  host.querySelectorAll('#tmDim [data-d]').forEach(b => b.onclick = () => { if (TM.dim === b.dataset.d) return; TM.dim = b.dataset.d; TM.open.clear(); TM.lim = 30; tmKirim(host); });
+  host.querySelectorAll('.tmb[data-k]').forEach(b => b.onclick = () => { const k = G.find(x => String(x.k) === b.dataset.k).k; TM.open.has(k) ? TM.open.delete(k) : TM.open.add(k); tmKirim(host); });
+  const mo = $('tmMore'); if (mo) mo.onclick = () => { TM.lim += 30; tmKirim(host); };
+  const pe = $('tmPend'); if (pe) pe.onclick = () => { if (!META.can_upload) return; PK.kind = 'kir'; PK.form = null; PK.bind = null; setView('upload'); upSec('k'); };
+  host.querySelectorAll('.tmbars rect').forEach((r, i) => r.addEventListener('pointerdown', () => { const x = d.daily[i]; $('tmTip').textContent = `${dm(x[0])} · ${usd(x[1])} · ${nf0.format(x[2])} dona`; }));
+}
+const TM_SIG = {kirim_nomx: ["🚫 matritsada yo'q — kirim", 'r']};
+function tmSignals(host) {
+  const S = TM.sig;
+  if (!S) { host.innerHTML = `${tmSeg()}<div class="empty">Yuklanmoqda…</div>`; return tmWire(host); }
+  const items = S.items.filter(x => TM.sigF === 'all' || (TM.sigF === 'new' ? !x.seen : x.seen));
+  const row = x => { const k = TM_SIG[x.kind] || [x.kind, 'y'], D = x.data || {}, op = TM.sigOpen === x.id;
+    return `<div class="tmrow tmsig${x.seen ? ' seen' : ''}" data-sid="${x.id}"><span class="a"><span class="pill2 ${k[1]}">${k[0]}</span><b>${esc(x.name || 'ID ' + x.pid)}</b>
+      <span class="h">${esc(x.wh || '')} · ${nf0.format(D.qty || 0)} dona${D.date ? ` · oxirgi kirim ${dm(D.date)}` : ''}</span>
+      <span class="h">${D.supplier ? esc(D.supplier) : ''}${D.order ? ` · ${esc(String(D.order).split(', ').slice(0, 3).join(', '))}${String(D.order).split(', ').length > 3 ? '…' : ''}` : ''}</span>
+      <span class="h">${esc(x.cat || '')} · shu ombor filiallarining birortasi matritsasida yo'q</span>
+      ${x.note ? `<span class="h">💬 ${esc(x.note)}</span>` : ''}
+      ${op ? `<span class="tmsact"><input class="pkin sm" id="tmNote" placeholder="izoh (ixtiyoriy)" value="${esc(x.note || '')}"><button class="pkgo" data-seen="${x.id}">${x.seen ? "↺ Yangi qilish" : "✓ Ko'rildi"}</button></span>` : ''}</span>
+      <span class="r"><b class="num">${D.usd ? usd(D.usd) : ''}</b></span></div>`; };
+  host.innerHTML = `${tmSeg()}<div class="hint">yuklangan kirim fayllaridan · yangilari botga ham darhol keladi</div>
+    <div class="tmgrp"><span class="seg mini" id="tmSf">${[['new', `Yangi ${S.count.new}`], ['seen', "Ko'rilgan"], ['all', `Hammasi ${S.count.all}`]].map(([k, l]) => `<button data-f="${k}" aria-pressed="${TM.sigF === k}">${l}</button>`).join('')}</span></div>
+    ${items.length ? `<div class="ablock">${items.map(row).join('')}</div><div class="hint">Signalni bossangiz — «✓ Ko'rildi» va izoh.</div>` : `<div class="card"><div class="empty">${TM.sigF === 'new' ? "Yangi signal yo'q 👍" : "Signal yo'q"}</div></div>`}`;
+  tmWire(host);
+  host.querySelectorAll('#tmSf [data-f]').forEach(b => b.onclick = () => { TM.sigF = b.dataset.f; tmSignals(host); });
+  host.querySelectorAll('.tmsig').forEach(r => r.onclick = e => { if (e.target.closest('.tmsact')) return; const id = +r.dataset.sid; TM.sigOpen = TM.sigOpen === id ? null : id; tmSignals(host); });
+  host.querySelectorAll('[data-seen]').forEach(b => b.onclick = async e => {
+    e.stopPropagation(); const id = +b.dataset.seen, x = S.items.find(i => i.id === id);
+    try { await api(`supply/signals/${id}/seen`, {note: ($('tmNote') || {}).value || null, unseen: !!x.seen}); } catch (er) { return; }
+    x.note = ($('tmNote') || {}).value || x.note; x.seen = x.seen ? null : new Date().toISOString(); S.count.new += x.seen ? -1 : 1; TM.sigOpen = null; tmSignals(host);
+  });
 }
 // ============================================================ QOLDIQ
 // «Qoldiq» tabi (⚠ Signallar · ▦ Xarita · 📦 Qoldiq) va boshqa tablardagi «📦 qoldiq» qatorlari.

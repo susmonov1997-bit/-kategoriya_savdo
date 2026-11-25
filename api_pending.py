@@ -57,12 +57,17 @@ def _lk(v) -> str:
 
 
 @router.get("/item/{pid}")
-async def pending_item(pid: int, request: Request, user: User = Depends(uploader)):
+async def pending_item(pid: int, request: Request, kirim: str | None = None, user: User = Depends(uploader)):
     async with request.app.state.pool.acquire() as con:
         if await con.fetchval("SELECT 1 FROM products WHERE product_id = $1", pid):
             raise HTTPException(409, "Bu tovar allaqachon spravochnikda bor")
         rep = await _report(con)
         s = next((x for x in rep.get("unknown_skus") or [] if x["product_id"] == pid), None)
+        if s is None and kirim:                 # kirim faylidagi nomi topilmagan tovar → yangi tovar sifatida
+            k = await con.fetchrow("""SELECT max(product_name) name, max(category) cat, max(brand) brand
+                                      FROM receipt_pending WHERE prod_key = $1 AND product_id IS NULL""", kirim)
+            if k and k["name"]:
+                s = {"product_id": pid, "name": k["name"], "category": k["cat"], "brand": k["brand"]}
         if s is None:
             raise HTTPException(404, "Kutayotganlar ro'yxatida bunday tovar yo'q")
         cats = [dict(r) for r in await con.fetch("SELECT id, name, grp FROM categories ORDER BY grp, name")]
@@ -118,6 +123,7 @@ class SaveReq(BaseModel):
     brand: str
     status: str | None = None
     attrs: dict[int, str | float | None] = {}
+    kirim_key: str | None = None        # kirim faylidagi nom (prod_key) — shu tovarga bog'lanadi
 
 
 @router.post("/save")
@@ -152,6 +158,8 @@ async def pending_save(req: SaveReq, request: Request, user: User = Depends(uplo
                 json.dumps(attrs, ensure_ascii=False))
             if not ok:
                 raise HTTPException(409, "Bu tovar allaqachon spravochnikda bor")
+            if req.kirim_key:
+                await _alias(con, req.kirim_key, req.product_id, user.id)
             res = await resolve_pending(con)
         mx = 0
         try:
@@ -164,4 +172,87 @@ async def pending_save(req: SaveReq, request: Request, user: User = Depends(uplo
         log.exception("sales_fact qayta qurilmadi — API keyingi so'rovda quradi")
     log.info("Kutayotgan tovar qo'lda qo'shildi: %s (%s) — user %s", req.product_id, name, user.id)
     return {"ok": True, "sales_rows": res["rows"], "sales_amount": res["amount"], "stock_rows": res.get("stock_rows", 0),
-            "stock_qty": res.get("stock_qty", 0), "mx_rows": mx}
+            "stock_qty": res.get("stock_qty", 0), "mx_rows": mx, "rec_rows": res.get("rec_rows", 0),
+            "rec_qty": res.get("rec_qty", 0)}
+
+
+# ---------------------------------------------------------------------------
+# Kirim faylida nomi topilmagan tovarlar (receipt_pending): bog'lash
+async def _alias(con, key: str, pid: int, uid: int) -> None:
+    """Kirimdagi nom va uning «Товар коди»lari → tovar (keyingi fayllarda o'zi bog'lanadi)."""
+    codes = [r[0] for r in await con.fetch("SELECT DISTINCT product_code FROM receipt_pending WHERE prod_key = $1 "
+                                           "AND product_code IS NOT NULL", key)]
+    await con.executemany(
+        """INSERT INTO product_aliases (alias_key, product_id, created_by) VALUES ($1, $2, $3)
+           ON CONFLICT (alias_key) DO UPDATE SET product_id = EXCLUDED.product_id, created_by = EXCLUDED.created_by,
+             created_at = now()""", [("n:" + key, pid, uid)] + [("c:" + c, pid, uid) for c in codes])
+
+
+@router.get("/kirim")
+async def kirim_list(request: Request, user: User = Depends(uploader)):
+    async with request.app.state.pool.acquire() as con:
+        rows = await con.fetch(
+            """SELECT prod_key, max(product_name) name, max(category) cat, max(brand) brand,
+                      string_agg(DISTINCT product_code, ', ') codes, sum(qty)::float8 qty,
+                      coalesce(sum(value_usd), 0)::float8 usd, count(DISTINCT nullif(order_code, '')) orders,
+                      count(DISTINCT loc_key) locs, min(rec_date) d1, max(rec_date) d2
+               FROM receipt_pending WHERE product_id IS NULL GROUP BY prod_key ORDER BY usd DESC, qty DESC""")
+    return {"items": [{"key": r["prod_key"], "name": r["name"], "cat": r["cat"], "brand": r["brand"], "codes": r["codes"],
+                       "qty": r["qty"], "usd": r["usd"], "orders": r["orders"], "locs": r["locs"],
+                       "d1": r["d1"], "d2": r["d2"]} for r in rows]}
+
+
+@router.get("/kirim/cand")
+async def kirim_cand(key: str, request: Request, user: User = Depends(uploader)):
+    async with request.app.state.pool.acquire() as con:
+        k = await con.fetchrow("""SELECT max(product_name) name, max(brand) brand, max(category) cat
+                                  FROM receipt_pending WHERE prod_key = $1 AND product_id IS NULL""", key)
+        if not k or not k["name"]:
+            raise HTTPException(404, "Bu tovar endi kutayotganlar ro'yxatida yo'q")
+        cand = []
+        if k["brand"]:
+            cand = await con.fetch("SELECT p.product_id, p.name, c.name cname FROM products p JOIN categories c "
+                                   "ON c.id = p.category_id WHERE lower(p.brand) = lower($1) LIMIT 8000", k["brand"])
+        if not cand:
+            cid = await con.fetchval("SELECT id FROM categories WHERE lower(name) = lower($1)", k["cat"] or "")
+            if cid:
+                cand = await con.fetch("SELECT p.product_id, p.name, c.name cname FROM products p JOIN categories c "
+                                       "ON c.id = p.category_id WHERE p.category_id = $1 LIMIT 8000", cid)
+    kk = _lk(k["name"])
+    sc = sorted(((difflib.SequenceMatcher(None, kk, _lk(r["name"])).ratio(), r) for r in cand), key=lambda x: -x[0])
+    return {"name": k["name"], "similar": [{"id": r["product_id"], "name": r["name"], "cat": r["cname"],
+                                            "score": round(s * 100)} for s, r in sc[:3] if s >= 0.5]}
+
+
+@router.get("/search")
+async def product_search(q: str, request: Request, user: User = Depends(uploader)):
+    q = (q or "").strip()
+    if len(q) < 2:
+        return {"items": []}
+    async with request.app.state.pool.acquire() as con:
+        pid = int(q) if q.isdigit() else None
+        words = [w for w in q.split() if w][:6]
+        cond = " AND ".join(f"p.name ILIKE ${i + 2}" for i in range(len(words))) or "FALSE"
+        rows = await con.fetch(
+            f"""SELECT p.product_id, p.name, c.name cname FROM products p JOIN categories c ON c.id = p.category_id
+                WHERE p.product_id = $1 OR ({cond}) ORDER BY p.product_id = $1 DESC, length(p.name) LIMIT 20""",
+            pid, *[f"%{w}%" for w in words])
+    return {"items": [{"id": r["product_id"], "name": r["name"], "cat": r["cname"]} for r in rows]}
+
+
+class BindReq(BaseModel):
+    key: str
+    product_id: int
+
+
+@router.post("/kirim/bind")
+async def kirim_bind(req: BindReq, request: Request, user: User = Depends(uploader)):
+    from pending import resolve_pending
+    async with request.app.state.pool.acquire() as con:
+        if not await con.fetchval("SELECT 1 FROM products WHERE product_id = $1", req.product_id):
+            raise HTTPException(404, "Tovar spravochnikda topilmadi")
+        async with con.transaction():
+            await _alias(con, req.key, req.product_id, user.id)
+            res = await resolve_pending(con)
+    log.info("Kirim nomi qo'lda bog'landi: %s → %s (user %s)", req.key, req.product_id, user.id)
+    return {"ok": True, "rec_rows": res.get("rec_rows", 0), "rec_qty": res.get("rec_qty", 0)}

@@ -93,8 +93,10 @@ async def sync_requests(con: asyncpg.Connection) -> None:
                       "OR EXISTS (SELECT 1 FROM branch_aliases a WHERE a.alias_key = r.name_key))")
     await con.execute(
         """INSERT INTO warehouse_requests (alias_key, sample_name)
-           SELECT loc_key, max(loc_name) FROM stock_pending sp
-           WHERE kind = 'w' AND NOT EXISTS (SELECT 1 FROM warehouse_aliases a WHERE a.alias_key = sp.loc_key)
+           SELECT loc_key, max(loc_name) FROM (
+               SELECT loc_key, loc_name FROM stock_pending WHERE kind = 'w'
+               UNION ALL SELECT loc_key, loc_name FROM receipt_pending WHERE product_id IS NOT NULL) sp
+           WHERE NOT EXISTS (SELECT 1 FROM warehouse_aliases a WHERE a.alias_key = sp.loc_key)
            GROUP BY loc_key
            ON CONFLICT (alias_key) DO NOTHING""")
     await con.execute("UPDATE warehouse_requests r SET done_at = now() WHERE done_at IS NULL "
@@ -456,7 +458,9 @@ async def wa_cb(c: CallbackQuery, pool: asyncpg.Pool) -> None:
     await safe_edit(c, 
         f"✅ «{esc(req['sample_name'])}» → <b>{esc(wname)}</b>. Keyingi fayllarda o'zi taniydi."
         + (f"\n📦 Kutayotgan qoldiq ulandi: {st['stock_rows']} qator · {_n(st['stock_qty'])} dona"
-           if st["stock_rows"] else ""))
+           if st["stock_rows"] else "")
+        + (f"\n📥 Kutayotgan kirim ulandi: {st['rec_rows']} qator · {_n(st['rec_qty'])} dona"
+           if st.get("rec_rows") else ""))
     await c.answer("Saqlandi")
 
 

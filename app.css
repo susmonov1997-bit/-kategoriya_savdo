@@ -667,3 +667,28 @@ button.mxbr{width:100%;border:0;border-top:1px solid var(--line);background:none
 .pkbtns{display:flex;gap:8px}
 .pkcat .m b{display:inline;font-size:inherit}
 .pkbtns .btn{white-space:nowrap}.pkbtns .primary{flex:1.8}
+.pksub{display:flex;margin:0 0 10px}.pksub button{flex:1}
+.pkcand{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;text-align:left;border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--card);color:var(--ink);font-size:13px}
+.pkcand.on{border-color:var(--accent);background:var(--accent-soft)}
+.pknew{display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--line);padding-top:10px}
+.pknew .pkin{flex:1}
+/* ta'minot */
+.tmseg{display:flex;margin:0 0 10px}.tmseg button{flex:1;padding:6px 3px;font-size:12.5px}
+.tmseg .tms{flex:.6}.tmseg .tms.hot:not([aria-pressed="true"]){color:var(--bad)}
+.tmrow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px 14px;border-top:1px solid var(--line);width:100%;background:none;border-left:0;border-right:0;border-bottom:0;color:var(--ink);font:inherit;text-align:left}
+.ablock>.tmrow:first-child{border-top:0}
+.tmrow .a{display:flex;flex-direction:column;gap:2px;min-width:0;font-size:14px}
+.tmrow .a b{font-weight:700;word-break:break-word}
+.tmrow .h{font-size:12px;color:var(--muted)}
+.tmrow .r{text-align:right;flex:none;display:flex;flex-direction:column;gap:2px;font-size:14px;align-items:flex-end}
+.tmsub{background:var(--card-2)}.tmsub .tmrow{padding-left:26px}
+.tmgrp{display:flex;justify-content:space-between;align-items:center;margin:2px 0}
+.tmwait{display:flex;flex-direction:column;gap:6px}
+.tmkb{text-align:left;border:0;font:inherit;color:var(--ink);cursor:pointer}
+.pill2{display:inline-block;align-self:flex-start;font-size:11px;font-weight:600;padding:2px 7px;border-radius:999px}
+.pill2.r{background:color-mix(in srgb,var(--bad) 14%,var(--card));color:var(--bad)}
+.pill2.y{background:color-mix(in srgb,var(--s4) 22%,var(--card));color:#7a5200}
+.tmsig{cursor:pointer}.tmsig.seen{opacity:.62}
+.tmsact{display:flex;gap:6px;align-items:center;margin-top:6px}.tmsact .pkin{flex:1;width:auto}
+.tabbar button{font-size:10.5px}
+.good{color:var(--good)}.bad{color:var(--bad)}

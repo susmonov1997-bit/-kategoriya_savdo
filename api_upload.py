@@ -141,8 +141,11 @@ async def _load(pool, job: dict) -> None:
             await _notify(job["user_id"], text)
             await broadcast_upload(pool, kind, text, upload_id, job["user_id"], job.get("user_name", ""),
                                    "miniapp", job["file_name"])
-            if kind in ("sales", "stock_branch", "stock_wh", "branches", "products"):
-                await prompt_new(pool)       # yangi filial / tanilmagan ombor bo'limi — adminlarga tugmali so'rov
+            if kind in ("sales", "stock_branch", "stock_wh", "branches", "products", "receipts"):
+                await prompt_new(pool)
+            if kind == "receipts":
+                from supply import notify_signals
+                await notify_signals(pool)       # yangi filial / tanilmagan ombor bo'limi — adminlarga tugmali so'rov
             if kind in ("stock_branch", "stock_wh"):
                 from stock_notify import schedule_summary
                 schedule_summary(pool)
