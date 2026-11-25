@@ -5,6 +5,7 @@ Tovarning ta'minotchisi (ustuvorlik bo'yicha):
   r — qoida: brend + kategoriya → ta'minotchi (sup_rules, qo'lda)
   k — tovarning o'z kirim tarixi (eng ko'p dona kelgan ta'minotchi)
   a — avtomatik qoida: shu brend + kategoriya kirimida eng katta summa (kirimi yo'q yangi tovar ham oladi)
+  b — brenddan: kategoriyada kirim yo'q — shu brendning KBT/MBT guruhidagi kirimi, bo'lmasa umumiy kirimi
 """
 from __future__ import annotations
 
@@ -76,6 +77,22 @@ _AR = """cb AS (SELECT p.category_id, COALESCE(p.brand, '—') brand, k.sid, sum
                FROM k JOIN products p USING (product_id) GROUP BY 1, 2, 3),
          ar AS (SELECT DISTINCT ON (category_id, brand) category_id, brand, sid FROM cb
                 ORDER BY category_id, brand, u DESC, q DESC, sid)"""
+# kirimi yo'q kategoriya × brend — brenddan: shu brendning shu guruhdagi (KBT/MBT) kategoriyalari kirimi,
+# bo'lmasa brendning umumiy kirimi (eng katta summa). auto: a — kategoriya kirimidan, b — brenddan
+_AUTO = _AR + """,
+         bg AS (SELECT COALESCE(c.grp, '') grp, cb.brand, cb.sid, sum(cb.u) u, sum(cb.q) q FROM cb
+                JOIN categories c ON c.id = cb.category_id WHERE cb.brand <> '—' GROUP BY 1, 2, 3),
+         bgx AS (SELECT DISTINCT ON (grp, brand) grp, brand, sid FROM bg ORDER BY grp, brand, u DESC, q DESC, sid),
+         bbx AS (SELECT DISTINCT ON (brand) brand, sid FROM (SELECT brand, sid, sum(u) u, sum(q) q FROM bg GROUP BY 1, 2) z
+                 ORDER BY brand, u DESC, q DESC, sid),
+         auto AS (SELECT pc.category_id, pc.brand, COALESCE(ar.sid, bgx.sid, bbx.sid) sid,
+                         CASE WHEN ar.sid IS NOT NULL THEN 'a' ELSE 'b' END src
+                  FROM (SELECT DISTINCT category_id, COALESCE(brand, '—') brand FROM products) pc
+                  JOIN categories c ON c.id = pc.category_id
+                  LEFT JOIN ar ON ar.category_id = pc.category_id AND ar.brand = pc.brand
+                  LEFT JOIN bgx ON bgx.grp = COALESCE(c.grp, '') AND bgx.brand = pc.brand
+                  LEFT JOIN bbx ON bbx.brand = pc.brand
+                  WHERE COALESCE(ar.sid, bgx.sid, bbx.sid) IS NOT NULL)"""
 
 
 async def refresh(con: asyncpg.Connection) -> int:
@@ -83,17 +100,17 @@ async def refresh(con: asyncpg.Connection) -> int:
     r = await con.fetchrow(f"""
 WITH {_K},
 kp AS (SELECT DISTINCT ON (product_id) product_id, sid FROM k ORDER BY product_id, q DESC, u DESC, sid),
-{_AR},
+{_AUTO},
 res AS (
     SELECT p.product_id,
-           COALESCE(x.supplier_id, mr.supplier_id, kp.sid, ar.sid) sid,
+           COALESCE(x.supplier_id, mr.supplier_id, kp.sid, au.sid) sid,
            CASE WHEN x.supplier_id IS NOT NULL THEN 'x' WHEN mr.supplier_id IS NOT NULL THEN 'r'
-                WHEN kp.sid IS NOT NULL THEN 'k' ELSE 'a' END src
+                WHEN kp.sid IS NOT NULL THEN 'k' ELSE au.src END src
     FROM products p
     LEFT JOIN sup_product x ON x.product_id = p.product_id
     LEFT JOIN sup_rules mr ON mr.category_id = p.category_id AND mr.brand = COALESCE(p.brand, '—')
     LEFT JOIN kp ON kp.product_id = p.product_id
-    LEFT JOIN ar ON ar.category_id = p.category_id AND ar.brand = COALESCE(p.brand, '—')
+    LEFT JOIN auto au ON au.category_id = p.category_id AND au.brand = COALESCE(p.brand, '—')
 ),
 fin AS (SELECT res.product_id, res.sid, s.group_id, res.src FROM res JOIN suppliers s ON s.id = res.sid),
 up AS (INSERT INTO product_supplier AS t (product_id, supplier_id, group_id, src)

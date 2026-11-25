@@ -80,7 +80,7 @@ async def load_rules(pool, data: bytes, file_name: str | None, tg_user_id: int |
                 if q is not None and (cc := _col(q, "Kategoriya ID")) and (cb := _col(q, "Brend")) \
                         and (cs := _col(q, "Ta'minotchi")):
                     auto = {(r["category_id"], r["brand"]): r["sid"] for r in await con.fetch(
-                        f"WITH {S._K}, {S._AR} SELECT category_id, brand, sid FROM ar")}
+                        f"WITH {S._K}, {S._AUTO} SELECT category_id, brand, sid FROM auto")}
                     manual = {(r["category_id"], r["brand"]): r["supplier_id"] for r in await con.fetch(
                         "SELECT category_id, brand, supplier_id FROM sup_rules")}
                     cats = {r[0] for r in await con.fetch("SELECT id FROM categories")}

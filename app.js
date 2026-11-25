@@ -2243,7 +2243,7 @@ function supGroups(host, head, wire) {
 }
 function supRules(host, head, wire) {
   const d = SUP.r, SN = id => (d.sups[id] ? d.sups[id][0] : '—');
-  const need = r => r.st === 'd' || r.st === 'n';
+  const need = r => r.st === 'n';
   const list = d.rules.filter(r => SUP.rf === 'all' || (SUP.rf === 'need' ? need(r) : r.st === 'm'));
   const B = new Map();
   for (const r of list) { const b = B.get(r.brand) || {name: r.brand, usd: 0, rules: [], need: 0}; b.usd += r.usd; b.rules.push(r); b.need += need(r) ? 1 : 0; B.set(r.brand, b); }
@@ -2251,26 +2251,27 @@ function supRules(host, head, wire) {
   const cnt = {all: d.rules.length, need: d.rules.filter(need).length, m: d.rules.filter(r => r.st === 'm').length};
   const shares = r => r.auto.length > 1 ? r.auto.map(a => `${esc(SN(a[0]))} ${r.usd ? Math.round(a[1] / r.usd * 100) : 0}%`).join(' · ') : '';
   const tag = r => {
-    const [c, l] = r.st === 'm' ? ['b', "qo'lda ✎"] : r.st === 'k' ? ['g', 'kirimdan ✓'] : r.st === 'd' ? ['y', `${r.auto.length} ta — tanlang ▾`] : ['y', 'tanlang ▾'];
+    const [c, l] = r.st === 'm' ? ['b', "qo'lda ✎"] : r.st === 'k' ? ['g', 'kirimdan ✓'] : r.st === 'd' ? ['g2', `kirimdan · ${r.auto.length} ta ▾`]
+      : r.st === 'b' ? ['g2', 'brenddan ▾'] : ['y', 'tanlang ▾'];
     return d.can_edit ? `<button class="pill2 ${c}" data-rk="${r.cid}|${esc(r.brand)}">${l}</button>` : `<span class="pill2 ${c}">${l}</span>`;
   };
   const rule = r => `<div class="tmrow l2"><span class="a"><b>${esc(r.brand)} · ${esc(r.cname)}</b>
-      <span class="h">→ ${r.eff ? esc(SN(r.eff)) : "? (kirim yo'q)"}</span>${shares(r) ? `<span class="h">kirim: ${shares(r)}</span>` : ''}</span>
+      <span class="h">→ ${r.eff ? esc(SN(r.eff)) : "? (kirim yo'q)"}${r.st === 'b' ? ' · kirim yo\'q, brendning boshqa kategoriyalaridan' : ''}</span>${shares(r) ? `<span class="h">kirim: ${shares(r)}</span>` : ''}</span>
       <span class="r">${tag(r)}<span class="h num">${r.usd ? usd(r.usd) + ' · ' : ''}${nf0.format(r.skus)} SKU</span></span></div>`;
   const brands = bs.slice(0, SUP.blim).map(b => { const op = SUP.bopen.has(b.name) || bs.length === 1;
     return `<button class="tmrow tmsg l1" data-bo="${esc(b.name)}"><span class="a"><b>${op ? '▾' : '▸'} ${esc(b.name)}</b>
-        <span class="h">${b.rules.length} qoida${b.need ? ` · <b class="bad">${b.need} tasi tanlanmagan</b>` : ''}</span></span>
+        <span class="h">${b.rules.length} qoida${b.need ? ` · <b class="bad">${b.need} tasi aniqlanmagan</b>` : ''}</span></span>
       <span class="r"><b class="num">${b.usd ? usd(b.usd) : ''}</b></span></button>${op ? `<div class="tmsub">${b.rules.map(rule).join('')}</div>` : ''}`; }).join('');
   const multi = d.multi.map(m => `<div class="tmrow l2"><span class="a"><b>${esc(m.name)}</b>
       <span class="h">${esc(m.brand)} · ${esc(m.cname)}</span>
       <span class="h">${m.ks.map(a => `${esc(SN(a[0]))} ${nf0.format(a[1])} dona`).join(' · ')}</span></span>
       <span class="r">${d.can_edit ? `<button class="pill2 ${m.ovr ? 'b' : 'y'}" data-pp="${m.pid}">${esc(SN(m.eff))}${m.ovr ? ' (asosiy)' : ''} ▾</button>` : `<span class="h">${esc(SN(m.eff))}</span>`}</span></div>`).join('');
   host.innerHTML = `${head}
-    <div class="hint">Qoida: <b>brend + kategoriya → ta'minotchi</b>. Kirim tarixidan avtomatik; kirimi yo'q yangi tovar ham shu qoidadan oladi. Ustuvorlik: tovar istisnosi → qoida (qo'lda) → tovarning o'z kirimi → avtomatik qoida.</div>
-    <div class="tmgrp"><span class="seg mini" id="supRf">${[['all', `Hammasi ${cnt.all}`], ['need', `Tanlash kerak ${cnt.need}`], ['m', `Qo'lda ${cnt.m}`]]
+    <div class="hint">Qoida: <b>brend + kategoriya → ta'minotchi</b>. Avtomatik: shu kategoriya kirimidan; kirim bo'lmasa — brendning shu guruhdagi (KBT/MBT) kirimidan. Xato bo'lsa — belgini bosib o'zgartirasiz. Ustuvorlik: tovar istisnosi → qo'lda qoida → tovarning o'z kirimi → avtomatik.</div>
+    <div class="tmgrp"><span class="seg mini" id="supRf">${[['all', `Hammasi ${cnt.all}`], ['need', `Aniqlanmagan ${cnt.need}`], ['m', `Qo'lda ${cnt.m}`]]
       .map(([k, l]) => `<button data-f="${k}" aria-pressed="${SUP.rf === k}">${l}</button>`).join('')}</span></div>
     ${bs.length ? `<div class="ablock">${brands}</div>${bs.length > SUP.blim ? `<button class="more" id="supMore">Yana ${bs.length - SUP.blim} ta brend</button>` : ''}`
-      : `<div class="card"><div class="empty">${SUP.rf === 'need' ? "Tanlash kerak qoida yo'q 👍" : "Qoida yo'q"}</div></div>`}
+      : `<div class="card"><div class="empty">${SUP.rf === 'need' ? "Aniqlanmagan qoida yo'q 👍" : "Qoida yo'q"}</div></div>`}
     ${d.multi.length ? `<div class="card supmulti"><div class="sh"><span class="label">⚠️ Bir nechta ta'minotchidan kelgan tovarlar · ${d.multi.length}</span><span class="hint">asosiysini tanlang</span></div>${multi}</div>` : ''}
     <button class="btn mxzx" id="supX">⬇ Qoidalar Excel — botga yuborish</button>
     <div class="hint">Excel'da sariq ustunni tuzatib, faylni botga qayta yuborsangiz — qoidalar, guruhlar va tovar istisnolari yangilanadi.</div>`;

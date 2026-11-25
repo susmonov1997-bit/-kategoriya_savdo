@@ -157,7 +157,7 @@ async def rules_data(con, user: User) -> dict:
     last = await con.fetchval("SELECT max(sale_date) FROM sales_daily") or date.today()
     combos = await con.fetch(f"""
 WITH {S._K},
-{S._AR},
+{S._AUTO},
 sd AS (SELECT DISTINCT product_id FROM sales_daily WHERE sale_date > $2::date - 90),
 act AS (SELECT p.product_id, p.category_id, COALESCE(p.brand, '—') brand FROM products p
         WHERE p.category_id = ANY($1::int[]) AND (
@@ -167,14 +167,15 @@ cmb AS (SELECT category_id, brand, count(*) skus FROM act GROUP BY 1, 2)
 SELECT cmb.category_id cid, c.name cname, cmb.brand, cmb.skus,
        (SELECT array_agg(ARRAY[sid::float8, u::float8, q::float8] ORDER BY u DESC, q DESC) FROM cb
         WHERE cb.category_id = cmb.category_id AND cb.brand = cmb.brand) auto,
-       ar.sid asid, r.supplier_id manual
+       au.sid asid, au.src asrc, r.supplier_id manual
 FROM cmb JOIN categories c ON c.id = cmb.category_id
-LEFT JOIN ar ON ar.category_id = cmb.category_id AND ar.brand = cmb.brand
+LEFT JOIN auto au ON au.category_id = cmb.category_id AND au.brand = cmb.brand
 LEFT JOIN sup_rules r ON r.category_id = cmb.category_id AND r.brand = cmb.brand""", cats, last)
     rules = []
     for r in combos:
         auto = [[int(a[0]), a[1], a[2]] for a in (r["auto"] or [])]
-        st = "m" if r["manual"] else ("n" if not auto else "k" if len(auto) == 1 else "d")
+        # m — qo'lda, k — kirimdan (bitta), d — kirimdan (bir nechta, eng kattasi), b — brenddan, n — aniqlanmadi
+        st = "m" if r["manual"] else "k" if len(auto) == 1 else "d" if auto else "b" if r["asid"] else "n"
         rules.append({"cid": r["cid"], "cname": r["cname"], "brand": r["brand"], "skus": r["skus"], "auto": auto,
                       "manual": r["manual"], "eff": r["manual"] or r["asid"], "st": st,
                       "usd": sum(a[1] for a in auto)})
@@ -270,7 +271,7 @@ async def set_product(req: ProdReq, request: Request, user: User = Depends(curre
 
 # ---------------------------------------------------------------------------
 # Excel: qoidalar (+ guruhlar, tovarlar) — tuzatib botga qayta yuklanadi (loaders_suprules)
-SRC_NAMES = {"m": "qo'lda", "k": "kirimdan", "d": "kirimdan (bir nechta)", "n": "kirim yo'q"}
+SRC_NAMES = {"m": "qo'lda", "k": "kirimdan", "d": "kirimdan (bir nechta)", "b": "brenddan (taxmin)", "n": "aniqlanmadi"}
 
 
 def rules_xlsx(rd: dict, gd: dict) -> bytes:
