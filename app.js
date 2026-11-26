@@ -2094,6 +2094,10 @@ function tmKirim(host) {
   const pe = $('tmPend'); if (pe) pe.onclick = () => { if (!META.can_upload) return; PK.kind = 'kir'; PK.form = null; PK.bind = null; setView('upload'); upSec('k'); };
   host.querySelectorAll('.tmbars rect').forEach((r, i) => r.addEventListener('pointerdown', () => { const x = d.daily[i]; $('tmTip').textContent = `${dm(x[0])} · ${usd(x[1])} · ${nf0.format(x[2])} dona`; }));
 }
+// nega «matritsada yo'q» (api_supply._mx_hints)
+const mxWhy = m => !m ? '' : m.k === 'id' ? `<br><b class="bad">⚠ Matritsada shu nom boshqa ID bilan: ${m.id} (${m.n} filial) — spravochnikda ikki ID, kirim boshqasiga tushgan</b>`
+  : m.k === 'pend' ? `<br><b class="bad">⚠ Matritsada bor (${m.n} filial), lekin ID bog'lanmagan${m.ext ? ` (Товар ИД ${m.ext})` : ''} — 📥 → ⏳ Kutayotgan</b>`
+  : `<br>matritsada faqat boshqa omborlar filiallarida (${m.n} filial)`;
 function tmSignals(host) {
   const S = TM.sig;
   if (!S) { host.innerHTML = `${tmSeg()}<div class="empty">Yuklanmoqda…</div>`; return tmWire(host); }
@@ -2105,7 +2109,7 @@ function tmSignals(host) {
     const D = x.data || {}, ck = x.cat || '—', bk = x.brand || '—', pk = x.pid;
     const c = C.get(ck) || {k: 'c|' + ck, name: ck, usd: 0, qty: 0, ids: [], B: new Map()}; C.set(ck, c);
     const b = c.B.get(bk) || {k: c.k + '|' + bk, name: bk, usd: 0, qty: 0, ids: [], P: new Map()}; c.B.set(bk, b);
-    const p = b.P.get(pk) || {k: b.k + '|' + pk, name: x.name || 'ID ' + pk, usd: 0, qty: 0, ids: [], W: []}; b.P.set(pk, p);
+    const p = b.P.get(pk) || {k: b.k + '|' + pk, name: x.name || 'ID ' + pk, usd: 0, qty: 0, ids: [], W: [], pid: pk, mx: x.mx}; b.P.set(pk, p);
     for (const g of [c, b, p]) { g.usd += D.usd || 0; g.qty += D.qty || 0; g.ids.push(x.id); }
     p.W.push(x);
   }
@@ -2123,7 +2127,7 @@ function tmSignals(host) {
   const bulk = g => TM.sigF === 'new' ? `<button class="tmbulk" data-bulk="${esc(g.k)}">✓ Hammasi ko'rildi (${g.ids.length})</button>` : '';
   const tree = by(C).map(c => head(c, 1, `${c.B.size} brend · ${c.ids.length} signal`) + (TM.so.has(c.k) ? `<div class="tmsub">${bulk(c)}${by(c.B).map(b =>
       head(b, 2, `${b.P.size} tovar · ${b.ids.length} signal`) + (TM.so.has(b.k) ? by(b.P).map(p =>
-        head(p, 3, `${p.W.length} omborda`) + (TM.so.has(p.k) ? p.W.sort((a, b) => (b.data.usd || 0) - (a.data.usd || 0)).map(whRow).join('') : '')).join('') : '')).join('')}</div>` : '')).join('');
+        head(p, 3, `ID ${p.pid} · ${p.W.length} omborda${mxWhy(p.mx)}`) + (TM.so.has(p.k) ? p.W.sort((a, b) => (b.data.usd || 0) - (a.data.usd || 0)).map(whRow).join('') : '')).join('') : '')).join('')}</div>` : '')).join('');
   TM.sgIdx = new Map(); for (const c of C.values()) { TM.sgIdx.set(c.k, c.ids); for (const b of c.B.values()) TM.sgIdx.set(b.k, b.ids); }
   host.innerHTML = `${tmSeg()}<div class="hint">🚫 matritsada yo'q tovar kirimi — shu ombor filiallarining birortasi matritsasida yo'q · yangilari botga ham keladi</div>
     <div class="tmgrp"><span class="seg mini" id="tmSf">${[['new', `Yangi ${S.count.new}`], ['seen', "Ko'rilgan"], ['all', `Hammasi ${S.count.all}`]].map(([k, l]) => `<button data-f="${k}" aria-pressed="${TM.sigF === k}">${l}</button>`).join('')}</span></div>

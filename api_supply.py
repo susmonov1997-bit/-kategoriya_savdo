@@ -104,6 +104,8 @@ async def _signals(con, f: Filters, user: User, status: str = "all") -> dict:
     """Signallar tepadagi filtrlar bilan: doira (kategoriyalar, ruxsat), brend/status/xususiyat/SKU/mas'ul,
     joy filtri (hudud/klaster/filial) — shu filiallar biriktirilgan omborlar."""
     from api_stock import _SQL
+    from supply import recheck_signals
+    await recheck_signals(con)
     cats, attrs, _ = await _M().scope_ctx(con, f, user)
     q = _SQL(f, cats, attrs)
     w_ = q.ctes()
@@ -120,12 +122,52 @@ LIMIT 5000""", *q.params)
     items = [{"id": r["id"], "kind": r["kind"], "pid": r["product_id"], "name": r["pname"], "brand": r["brand"],
               "cat": r["cname"], "wh": r["wname"], "created": r["created_at"], "seen": r["seen_at"], "note": r["note"],
               "data": r["data"] if isinstance(r["data"], dict) else json.loads(r["data"] or "{}")} for r in rows]
+    hints = await _mx_hints(con, {(x["pid"], x["name"]) for x in items if not x["seen"]})
+    for x in items:
+        if x["pid"] in hints:
+            x["mx"] = hints[x["pid"]]
     cnt = {"all": len(items), "new": sum(1 for x in items if not x["seen"])}
     if status == "new":
         items = [x for x in items if not x["seen"]]
     elif status == "seen":
         items = [x for x in items if x["seen"]]
     return {"count": cnt, "items": items}
+
+
+async def _mx_hints(con, prods: set) -> dict:
+    """Nega «matritsada yo'q»: matritsada shu nomli qator boshqa ID'ga bog'langan / bog'lanmagan (kutayotgan) /
+    shu ID faqat boshqa omborlar filiallarida. {pid: {k: other|id|pend, ...}}"""
+    if not prods:
+        return {}
+    from matrix_sync import loose_key
+    pids = [p for p, _ in prods]
+    out: dict = {}
+    other = {r["product_id"]: r["n"] for r in await con.fetch(
+        "SELECT product_id, count(DISTINCT branch_id) n FROM matrix_rows WHERE product_id = ANY($1::bigint[]) GROUP BY 1", pids)}
+    want = {}
+    for pid, name in prods:
+        k = loose_key(name)
+        if k:
+            want.setdefault(k, []).append(pid)
+    by = {}
+    for r in await con.fetch("SELECT product_name, product_id, max(product_ext) ext, count(DISTINCT branch_name) n "
+                             "FROM matrix_rows GROUP BY 1, 2"):
+        k = loose_key(r["product_name"])
+        if k in want:
+            by.setdefault(k, []).append(r)
+    for k, ps in want.items():
+        for pid in ps:
+            rows = [r for r in by.get(k, []) if r["product_id"] != pid]
+            bound = [r for r in rows if r["product_id"]]
+            if bound:
+                r = max(bound, key=lambda r: r["n"])
+                out[pid] = {"k": "id", "id": r["product_id"], "n": r["n"]}
+            elif rows:
+                r = max(rows, key=lambda r: r["n"])
+                out[pid] = {"k": "pend", "ext": r["ext"], "n": r["n"]}
+            elif other.get(pid):
+                out[pid] = {"k": "other", "n": other[pid]}
+    return out
 
 
 @router.post("/signals")
@@ -214,12 +256,18 @@ def signals_xlsx(items: list[dict], status: str) -> bytes:
     rows = []
     for x in sorted(items, key=lambda x: (x["cat"] or "", x["brand"] or "", x["name"] or "", -(x["data"].get("usd") or 0))):
         d = x["data"]
+        m = x.get("mx") or {}
+        why = (f"Matritsada shu nom boshqa ID bilan: {m['id']} ({m['n']} filial)" if m.get("k") == "id" else
+               f"Matritsada bor ({m['n']} filial), ID bog'lanmagan" + (f" (Товар ИД {m['ext']})" if m.get("ext") else "")
+               if m.get("k") == "pend" else f"Faqat boshqa omborlar filiallari matritsasida ({m['n']} filial)"
+               if m.get("k") == "other" else "")
         rows.append([x["cat"], x["brand"], x["pid"], x["name"], x["wh"], d.get("qty"), round(float(d.get("usd") or 0)),
                      str(d.get("date") or "")[:10], d.get("supplier"), d.get("order"),
-                     "ko'rilgan" if x["seen"] else "yangi", x["note"]])
+                     "ko'rilgan" if x["seen"] else "yangi", x["note"], why])
     sheet(wb.create_sheet("Signallar"),
           ["Kategoriya", "Brend", "Товар Ид", "Tovar", "Ombor", "Dona", "Summa, $", "Oxirgi kirim", "Ta'minotchi",
-           "Zakazlar", "Holat", "Izoh"], rows, money_cols=(6, 7), widths=[28, 14, 11, 44, 20, 8, 12, 12, 24, 36, 11, 28])
+           "Zakazlar", "Holat", "Izoh", "Sabab (matritsa)"], rows, money_cols=(6, 7),
+          widths=[28, 14, 11, 44, 20, 8, 12, 12, 24, 36, 11, 28, 50])
     wi = wb.create_sheet("Izoh")
     for r in [["Signal", "Matritsada yo'q tovar kirimi — tovar kategoriyasi matritsada bor, lekin shu ombor filiallarining birortasi matritsasida bu tovar yo'q."],
               ["Birlik", "bitta signal = ombor × tovar × oy (oy ichida qayta kelsa — dona va summa yangilanadi)"],

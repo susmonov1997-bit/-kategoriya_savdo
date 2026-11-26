@@ -237,6 +237,8 @@ async def load_receipts(pool: asyncpg.Pool, data: bytes, file_name: str | None =
                                   float(r.qty), nn(r.value_usd), int(r.pid) if nn(r.pid) is not None else None, upload_id)
                                  for r in pend.itertuples()])
                 rep.signals = await make_signals(con, all_dates, upload_id)
+                from supply import recheck_signals
+                await recheck_signals(con)
 
             rep.dates = [d.isoformat() for d in all_dates]
             rep.date_from, rep.date_to, rep.days = rep.dates[0], rep.dates[-1], len(all_dates)

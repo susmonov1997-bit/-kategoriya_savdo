@@ -22,6 +22,19 @@ def _usd(v) -> str:
     return f"{v / 1e6:,.2f} mln $".replace(",", " ").replace(".", ",") if v >= 1e6 else f"{v / 1e3:,.1f} ming $".replace(",", " ").replace(".", ",")
 
 
+async def recheck_signals(con) -> int:
+    """Matritsa yangilangach (yoki tovar qayta bog'langach): endi shu ombor filiallari matritsasida bor tovarning
+    ochiq signallari avtomatik yopiladi. Yopilganlar soni. (UPDATE faqat kerak bo'lsa — kesh bekorga eskirmasin.)"""
+    ids = [r[0] for r in await con.fetch(
+        """SELECT s.id FROM supply_signals s WHERE s.kind = 'kirim_nomx' AND s.seen_at IS NULL
+           AND EXISTS (SELECT 1 FROM matrix_rows m JOIN branches b ON b.id = m.branch_id
+                       WHERE m.product_id = s.product_id AND b.warehouse_id = s.warehouse_id)""")]
+    if ids:
+        await con.execute("UPDATE supply_signals SET seen_at = now(), note = COALESCE(note, $2) WHERE id = ANY($1::int[])",
+                          ids, "✓ matritsaga qo'shildi — avtomatik yopildi")
+    return len(ids)
+
+
 async def notify_signals(pool: asyncpg.Pool, bot=None) -> int:
     """Hali yuborilmagan signallar — bitta xabar (kind bo'yicha), adminlarga. Yuborilganlar belgilanadi."""
     if not config.BOT_TOKEN:

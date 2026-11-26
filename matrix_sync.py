@@ -405,6 +405,11 @@ async def sync(pool: asyncpg.Pool, trigger: str = "auto", user_id: int | None = 
             del values
             async with pool.acquire() as con:
                 stats = await bind_and_store(con, rows)
+                try:                                   # matritsaga qo'shilgan tovarlar — ta'minot signallari yopiladi
+                    from supply import recheck_signals
+                    stats["signals_closed"] = await recheck_signals(con)
+                except Exception:  # noqa: BLE001
+                    log.exception("Signallar qayta tekshirilmadi")
                 try:                                   # kunlik chartlar uchun matritsa versiyasi
                     await snapshot_hist(con)
                 except Exception:  # noqa: BLE001
