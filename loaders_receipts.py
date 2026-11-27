@@ -290,6 +290,9 @@ async def make_signals(con, dates: list, upload_id: int | None = None) -> int:
                       WHERE date_trunc('month', r.rec_date)::date = ANY($1::date[])
                         AND p.category_id IN (SELECT category_id FROM mc)
                         AND NOT EXISTS (SELECT 1 FROM wmx WHERE wmx.warehouse_id = r.warehouse_id AND wmx.product_id = r.product_id)
+                        -- zakaz / jo'natma bosqichida signal berilgan — kirimda takrorlanmaydi
+                        AND NOT EXISTS (SELECT 1 FROM supply_signals g WHERE g.skey = 'sn:' || to_char(r.rec_date, 'YYYY-MM')
+                                        || ':' || r.warehouse_id || ':' || r.product_id)
                       GROUP BY 1, 2, 3)
            INSERT INTO supply_signals AS s (kind, skey, warehouse_id, product_id, data, upload_id)
            SELECT 'kirim_nomx', 'kn:' || to_char(mon, 'YYYY-MM') || ':' || warehouse_id || ':' || product_id,

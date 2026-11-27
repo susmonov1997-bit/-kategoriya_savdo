@@ -780,6 +780,8 @@ from api_supply import router as supply_router  # noqa: E402
 app.include_router(supply_router)
 from api_suppliers import router as suppliers_router  # noqa: E402
 app.include_router(suppliers_router)
+from api_ship import router as ship_router  # noqa: E402
+app.include_router(ship_router)
 
 
 @app.get("/", include_in_schema=False)

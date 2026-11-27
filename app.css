@@ -723,3 +723,10 @@ button.pill2{border:0;font-family:var(--font);cursor:pointer;align-self:flex-end
 .fgrp .opt.fsub{padding-left:40px;background:var(--card-2)}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .pill2.y{color:#F5C66B}}
 :root[data-theme="dark"] .pill2.y{color:#F5C66B}
+/* zakaz / yo'lda (023_shipments.sql) */
+.tmkp{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tmkp .c{background:var(--card);border-radius:14px;padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.tmkp .c b{font-size:18px}.tmkp .c span{font-size:12px;color:var(--muted)}.tmkp .c span.bad,.tmkp .c b.bad{color:var(--bad)}
+.shunb{display:block;width:100%;text-align:left;border:0;font:inherit;font-size:13px;color:var(--ink);cursor:pointer}
+.tmrow.l3{padding-left:40px}.tmsub .tmsg.l2{padding-left:26px}
+.pill2.nx{background:color-mix(in srgb,var(--bad) 14%,var(--card));color:var(--bad)}

@@ -10,7 +10,8 @@ import config
 
 log = logging.getLogger(__name__)
 
-SIG_NAMES = {"kirim_nomx": "🚫 Matritsada yo'q tovar kirim qilindi"}
+SIG_NAMES = {"kirim_nomx": "🚫 Matritsada yo'q tovar kirim qilindi",
+             "ship_nomx": "🚫 Matritsada yo'q tovar zakaz qilindi / jo'natildi (hali kelmagan)"}
 
 
 def _f(v) -> str:
@@ -26,7 +27,7 @@ async def recheck_signals(con) -> int:
     """Matritsa yangilangach (yoki tovar qayta bog'langach): endi shu ombor filiallari matritsasida bor tovarning
     ochiq signallari avtomatik yopiladi. Yopilganlar soni. (UPDATE faqat kerak bo'lsa — kesh bekorga eskirmasin.)"""
     ids = [r[0] for r in await con.fetch(
-        """SELECT s.id FROM supply_signals s WHERE s.kind = 'kirim_nomx' AND s.seen_at IS NULL
+        """SELECT s.id FROM supply_signals s WHERE s.kind IN ('kirim_nomx', 'ship_nomx') AND s.seen_at IS NULL
            AND EXISTS (SELECT 1 FROM matrix_rows m JOIN branches b ON b.id = m.branch_id
                        WHERE m.product_id = s.product_id AND b.warehouse_id = s.warehouse_id)""")]
     if ids:
@@ -60,6 +61,7 @@ async def notify_signals(pool: asyncpg.Pool, bot=None) -> int:
             break
         dt = str(d.get("date") or "")
         lines.append(f"• {e(r['pname'])} · {e(r['wname'])} · {_f(d.get('qty'))} dona"
+                     + (f" · {e(d['stage'])}" if d.get("stage") else "")
                      + (f" · {_usd(d['usd'])}" if d.get("usd") else "")
                      + (f" · {dt[8:10]}.{dt[5:7]}" if dt else "")
                      + (f" · {e(d.get('order'))}" if d.get("order") else ""))

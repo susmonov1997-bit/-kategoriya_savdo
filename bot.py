@@ -520,7 +520,7 @@ async def on_document(m: Message, bot: Bot, pool: asyncpg.Pool) -> None:
         if kind in ("sales", "stock_branch", "stock_wh", "branches", "products", "receipts"):
             # spravochnikda yo'q filial / tanilmagan ombor bo'limi — adminlarga tugmali so'rov
             _bg(prompt_new(pool, bot))
-        if kind == "receipts":                 # ta'minot signallari (matritsada yo'q tovar kirimi)
+        if kind in ("receipts", "ship"):                 # ta'minot signallari (matritsada yo'q tovar kirimi)
             from supply import notify_signals
             _bg(notify_signals(pool, bot))
         if kind in ("stock_branch", "stock_wh"):

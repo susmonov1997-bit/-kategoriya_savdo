@@ -1769,7 +1769,7 @@ function pkRenderIds() {
 function pkSubSeg() {
   const n1 = PK.list ? PK.list.items.length : 0, n2 = PK.kir ? PK.kir.items.length : 0;
   if (!n2 && PK.kind !== 'kir') return '';
-  return `<div class="seg mini pksub"><button data-pkk="id" aria-pressed="${PK.kind !== 'kir'}">Tovar ID'lar · ${n1}</button><button data-pkk="kir" aria-pressed="${PK.kind === 'kir'}">Kirim: nom topilmadi · ${n2}</button></div>`;
+  return `<div class="seg mini pksub"><button data-pkk="id" aria-pressed="${PK.kind !== 'kir'}">Tovar ID'lar · ${n1}</button><button data-pkk="kir" aria-pressed="${PK.kind === 'kir'}">Kirim / Artel kodi · ${n2}</button></div>`;
 }
 function pkRenderList() {
   const host = $('pkBody');
@@ -1783,10 +1783,10 @@ function pkRenderKir() {
   const res = PK.res ? `<div class="card pkok">${PK.res}</div>` : '';
   if (!K) { host.innerHTML = `<div class="empty">Yuklanmoqda…</div>`; return; }
   if (!K.items.length) { host.innerHTML = res + `<div class="card"><div class="empty">Kirimda nomi topilmagan tovar yo'q 👍</div></div>`; return; }
-  host.innerHTML = res + `<div class="hint pkh">Omborga kirim faylidagi tovar nomi spravochnikda topilmadi. Bog'lasangiz — kirimi darhol ulanadi, nom va «Товар коди» eslab qolinadi.</div>
+  host.innerHTML = res + `<div class="hint pkh">Omborga kirim faylidagi tovar nomi yoki Artel jo'natmasidagi kod spravochnikda topilmadi. Bog'lasangiz — darhol ulanadi va eslab qolinadi.</div>
     <div class="pkl">${K.items.map((x, i) => `<div class="pkr"><div><b>${esc(x.name)}</b>
-      <span class="m">${esc(x.cat || '—')} · ${esc(x.brand || '—')}${x.codes ? ` · kod ${esc(x.codes)}` : ''}</span>
-      <div><span class="pkc q">kirim ${nf0.format(Math.round(x.qty))} dona${x.usd ? ' · ' + usd(x.usd) : ''}</span>${x.orders ? `<span class="pkc">${x.orders} zakaz</span>` : ''}</div></div>
+      <span class="m">${x.src === 'a' ? `Artel kodi ${esc(x.codes)}` : `${esc(x.cat || '—')} · ${esc(x.brand || '—')}${x.codes ? ` · kod ${esc(x.codes)}` : ''}`}</span>
+      <div><span class="pkc q">${x.src === 'a' ? "jo'natma" : 'kirim'} ${nf0.format(Math.round(x.qty))} dona${x.usd ? ' · ' + usd(x.usd) : ''}</span>${x.orders ? `<span class="pkc">${x.orders} ${x.src === 'a' ? 'hujjat' : 'zakaz'}</span>` : ''}</div></div>
       <button class="pkgo" data-kb="${i}">Bog'lash</button></div>`).join('')}</div>`;
   host.querySelectorAll('[data-kb]').forEach(b => b.onclick = () => pkBindOpen(K.items[+b.dataset.kb]));
 }
@@ -1800,9 +1800,9 @@ async function pkBindOpen(x) {
 function pkRenderBind() {
   const B = PK.bind, x = B.x;
   const opt = c => `<button class="pkcand${B.sel === c.id ? ' on' : ''}" data-sel="${c.id}"><span><b>${esc(c.name)}</b><br><span class="hint">ID ${c.id} · ${esc(c.cat || '')}${c.score != null ? ` · ${c.score}% o'xshash` : ''}</span></span>${B.sel === c.id ? '<span>✓</span>' : ''}</button>`;
-  $('pkBody').innerHTML = `<button class="tchip back" id="pkBback">‹ Kirim: nom topilmadi</button>
+  $('pkBody').innerHTML = `<button class="tchip back" id="pkBback">‹ Kirim / Artel kodi</button>
   <div class="card pkform">
-    <div><b class="pkt">${esc(x.name)}</b><div class="hint">kirim faylida${x.codes ? ` · kod ${esc(x.codes)}` : ''} · ${esc(x.cat || '—')} · ${esc(x.brand || '—')}</div>
+    <div><b class="pkt">${esc(x.name)}</b><div class="hint">${x.src === 'a' ? `Artel jo'natmasida · kod ${esc(x.codes)}` : `kirim faylida${x.codes ? ` · kod ${esc(x.codes)}` : ''} · ${esc(x.cat || '—')} · ${esc(x.brand || '—')}`}</div>
       <div><span class="pkc q">kirim ${nf0.format(Math.round(x.qty))} dona${x.usd ? ' · ' + usd(x.usd) : ''}</span>${x.orders ? `<span class="pkc">${x.orders} zakaz</span>` : ''}</div></div>
     <div class="hint">Spravochnikdagi qaysi tovar?${B.cand && B.cand.length ? ' (nomi o\'xshashlari)' : ''}</div>
     ${B.cand == null ? '<div class="empty">Yuklanmoqda…</div>' : B.cand.length ? B.cand.map(opt).join('') : `<div class="hint">O'xshash nom topilmadi — qidiring</div>`}
@@ -1826,7 +1826,8 @@ function pkRenderBind() {
     try {
       const r = await api('pending/kirim/bind', {key: x.key, product_id: B.sel});
       const nm = ((B.cand || []).concat(B.found || []).find(c => c.id === B.sel) || {}).name || B.sel;
-      PK.res = `<b>✅ Bog'landi: ${esc(x.name)}</b><div class="hint">→ ${esc(nm)} · ${r.rec_rows ? `kirim ulandi: ${nf0.format(Math.round(r.rec_qty))} dona` : 'kirim ulandi'} · keyingi fayllarda o'zi taniydi</div>`;
+      PK.res = `<b>✅ Bog'landi: ${esc(x.name)}</b><div class="hint">→ ${esc(nm)} · ${x.src === 'a' ? `jo'natmalar ulandi: ${nf0.format(r.ship_rows || 0)} qator` : r.rec_rows ? `kirim ulandi: ${nf0.format(Math.round(r.rec_qty))} dona` : 'kirim ulandi'} · keyingi fayllarda o'zi taniydi</div>`;
+      if (x.src === 'a') { SH.o = null; SH.t = null; }
       PK.bind = null; NEED_REFRESH = true; PK.kir.items = PK.kir.items.filter(i => i.key !== x.key);
       pkRenderList(); window.scrollTo(0, 0); pkLoad();
     } catch (e) { B.err = e.message; }
@@ -1989,7 +1990,7 @@ const TM_WAIT = {
   p: ['Oylik kirim prognozi', "prognoz bajarilishi, orqada qolgan SKU'lar, prognozdan tashqari kirim", '1_kirim_prognozi'],
   t: ["Ta'minotchilar reytingi", "o'z vaqtida va to'liq yetkazish, haqiqiy muddat (zakaz fayli kerak)", '2_taminotchiga_zakaz'],
 };
-function loadSupplyTab() { STALE.Taminot = false; TM.data = null; TM.sig = null; SUP.g = null; SUP.r = null; renderTm(); }
+function loadSupplyTab() { STALE.Taminot = false; TM.data = null; TM.sig = null; SUP.g = null; SUP.r = null; SH.o = null; SH.t = null; renderTm(); }
 function tmSeg() {
   const n = TM.sig ? TM.sig.count.new : 0;
   return `<div class="seg tmseg" id="tmSeg">${TM_SEC.map(([k, l]) => `<button data-s="${k}" aria-pressed="${TM.sec === k}" class="${k === 's' ? 'tms' : ''}${k === 's' && n ? ' hot' : ''}">${k === 's' ? `⚠${n ? ' ' + n : ''}` : l}</button>`).join('')}</div>`;
@@ -2002,6 +2003,8 @@ async function renderTm() {
   if (!TM.sig) api('supply/signals?status=all', filters()).then(r => { if (seq !== TM.seq && TM.sig) return; TM.sig = r; const s = $('tmSeg'); if (s) { s.outerHTML = tmSeg(); tmWire(host); } if (TM.sec === 's') renderTm(); }).catch(() => {});
   if (TM.sec === 's') return tmSignals(host);
   if (TM.sec === 't') return tmSup(host);
+  if (TM.sec === 'z') return tmZakaz(host);
+  if (TM.sec === 'y') return tmYolda(host);
   if (TM.sec !== 'k') {
     const w = TM_WAIT[TM.sec];
     host.innerHTML = `${tmSeg()}<div class="card tmwait"><b>${w[0]}</b><span>${w[1]}</span>
@@ -2119,7 +2122,7 @@ function tmSignals(host) {
       <span class="r"><b class="num">${g.usd ? usd(g.usd) : ''}</b><span class="h num">${nf0.format(g.qty)} dona</span></span></button>`; };
   const whRow = x => { const D = x.data || {}, op = TM.sigOpen === x.id, ord = String(D.order || '').split(', ').filter(Boolean);
     return `<div class="tmrow tmsig l4${x.seen ? ' seen' : ''}" data-sid="${x.id}"><span class="a"><b>${esc(x.wh || '—')}</b>
-      <span class="h">${nf0.format(D.qty || 0)} dona${D.date ? ` · oxirgi kirim ${dm(D.date)}` : ''}${D.supplier ? ' · ' + esc(D.supplier) : ''}</span>
+      <span class="h">${nf0.format(D.qty || 0)} dona${D.date ? (x.kind === 'ship_nomx' ? ` · Artel hujjati ${dm(D.date)} · ${esc(D.stage || '')} (hali kelmagan)` : ` · oxirgi kirim ${dm(D.date)}`) : ''}${D.supplier ? ' · ' + esc(D.supplier) : ''}</span>
       ${ord.length ? `<span class="h">${esc(ord.slice(0, 3).join(', '))}${ord.length > 3 ? ` +${ord.length - 3}` : ''}</span>` : ''}
       ${x.note ? `<span class="h">💬 ${esc(x.note)}</span>` : ''}
       ${op ? `<span class="tmsact"><input class="pkin sm" id="tmNote" placeholder="izoh (ixtiyoriy)" value="${esc(x.note || '')}"><button class="pkgo" data-seen="${x.id}">${x.seen ? '↺ Yangi qilish' : "✓ Ko'rildi"}</button></span>` : ''}</span>
@@ -2156,6 +2159,110 @@ function tmSignals(host) {
     for (const x of S.items) if (ids.includes(x.id) && !x.seen) { x.seen = now; n++; }
     S.count.new -= n; tmSignals(host);
   });
+}
+// ---- Zakaz va Yo'lda (023_shipments.sql) — ta'minotchi jo'natmalari fayli (Artel)
+const SH = {o: null, t: null, g: 'w', open: new Set(), seq: 0};
+const shWh = (d, wid) => (d.whs[wid] || '—');
+const shCap = s => (s ? s[0].toUpperCase() + s.slice(1) : '—');
+function shKp(cards) {
+  return `<div class="tmkp">${cards.map(([l, v, s, bad]) => `<div class="c"><span class="${bad ? 'bad' : ''}">${l}</span><b class="${bad ? 'bad' : ''}">${v}</b><span>${s}</span></div>`).join('')}</div>`;
+}
+function shUnb(d) {
+  return d.unbound && d.unbound.n ? `<button class="card shunb" id="shUnb">⏳ <b>${d.unbound.n} ta Artel kodi bog'lanmagan</b> (${usd(d.unbound.usd)}) — hisobga kirmadi. ${META.can_upload ? 'Bog\'lash ›' : ''}</button>` : '';
+}
+function shNoData(host, what) {
+  host.innerHTML = `${tmSeg()}<div class="card tmwait"><b>${what}</b><span>Artel jo'natmalari fayli (SAP: ДатаДокум, Материал, КумулКлчЗк, Статус, Номер заказа на поставку…) hali yuklanmagan. 📥 orqali botga yoki shu yerga yuklang — har kuni.</span>
+    <span class="hint">«Artel kodi ↔ Товар ид» jadvalini ham bir marta yuklang — tovarlar shu bo'yicha bog'lanadi.</span></div>`;
+  tmWire(host);
+}
+async function shLoad(host, k) {
+  const seq = ++SH.seq;
+  host.innerHTML = `${tmSeg()}<div class="empty">Yuklanmoqda…</div>`; tmWire(host);
+  try { const d = await api(k === 'o' ? 'supply/ship/orders' : 'supply/ship/transit', filters()); if (seq !== SH.seq) return false; SH[k] = d; return true; }
+  catch (e) { if (seq === SH.seq) { host.innerHTML = `${tmSeg()}<div class="errbox">${esc(e.message)}</div>`; tmWire(host); } return false; }
+}
+function shWire(host, again) {
+  tmWire(host);
+  host.querySelectorAll('[data-so]').forEach(b => b.onclick = () => { const k = b.dataset.so; SH.open.has(k) ? SH.open.delete(k) : SH.open.add(k); again(); });
+  const u = $('shUnb');
+  if (u) u.onclick = () => { if (!META.can_upload) return; PK.kind = 'kir'; PK.form = null; PK.bind = null; setView('upload'); upSec('k'); };
+}
+const shHead = (k, lvl, name, sub, r1, r2) => { const op = SH.open.has(k);
+  return `<button class="tmrow tmsg l${lvl}" data-so="${esc(k)}"><span class="a"><b>${op ? '▾' : '▸'} ${name}</b><span class="h">${sub}</span></span>
+    <span class="r"><b class="num">${r1}</b><span class="h num">${r2}</span></span></button>`; };
+const shItem = (name, sub, r1, r2, cls = '') => `<div class="tmrow l3 ${cls}"><span class="a"><b>${name}</b><span class="h">${sub}</span></span>
+    <span class="r"><b class="num">${r1}</b><span class="h num">${r2}</span></span></div>`;
+
+async function tmYolda(host) {
+  if (!SH.t && !(await shLoad(host, 't'))) return;
+  if (TM.sec !== 'y') return;
+  const d = SH.t;
+  if (!d.has) return shNoData(host, "Yo'ldagi tovarlar");
+  const P = d.prods, docs = d.docs;
+  const W = new Map();
+  for (const x of docs) { const w = W.get(x.wid) || {wid: x.wid, docs: [], usd: 0, qty: 0}; w.docs.push(x); w.usd += x.rem_usd; w.qty += x.rem; W.set(x.wid, w); }
+  const ws = [...W.values()].sort((a, b) => b.usd - a.usd);
+  const T = docs.reduce((a, x) => ({usd: a.usd + x.rem_usd, qty: a.qty + x.rem}), {usd: 0, qty: 0});
+  const late = docs.filter(x => x.late), L = late.reduce((a, x) => a + x.rem_usd, 0);
+  const lead = w => d.lead[w] != null ? `odatda ${nf1.format(d.lead[w])} kunda yetadi` : `muddat: ~${d.default_lead} kun (tarix kam)`;
+  const docRow = (x, k) => {
+    const sub = `${x.age} kun yo'lda${x.base ? ` · ${esc(x.base)} bazasidan` : ''}${x.got > 0 ? ` · qisman keldi: ${nf0.format(x.got)} / ${nf0.format(x.qty)}` : ''}`
+      + (x.late ? ` <span class="pill2 y">⚠ kechikmoqda</span>` : '');
+    return shHead(k, 2, `№ ${x.doc} · ${dm(x.date)}`, sub, usd(x.rem_usd), `${nf0.format(x.rem)} dona`)
+      + (SH.open.has(k) ? x.items.map(i => { const p = P[i[0]] || ['ID ' + i[0]];
+        return shItem(esc(p[0]), `jo'natildi ${nf0.format(i[1])} · keldi ${nf0.format(i[2])}`, usd(i[4]), `${nf0.format(i[3])} dona`); }).join('') : '');
+  };
+  const tree = ws.map(w => { const k = 'y|' + w.wid;
+    return shHead(k, 1, esc(shWh(d, w.wid)), `${w.docs.length} jo'natma · ${lead(w.wid)}`, usd(w.usd), `${nf0.format(w.qty)} dona`)
+      + (SH.open.has(k) ? `<div class="tmsub">${w.docs.sort((a, b) => b.late - a.late || a.date.localeCompare(b.date)).map(x => docRow(x, k + '|' + x.doc)).join('')}</div>` : ''); }).join('');
+  const D = new Map();
+  for (const r of d.direct) { const g = D.get(r[2]) || {k: r[2], usd: 0, qty: 0, rows: []}; g.usd += r[5]; g.qty += r[4]; g.rows.push(r); D.set(r[2], g); }
+  const direct = [...D.values()].map(g => { const k = 'yd|' + g.k;
+    return shHead(k, 1, `Filialga: ${esc(shCap(g.k))}`, `${new Set(g.rows.map(r => r[0])).size} jo'natma · oxirgi 14 kun · kelgani kirimda ko'rinmaydi`, usd(g.usd), `${nf0.format(g.qty)} dona`)
+      + (SH.open.has(k) ? `<div class="tmsub">${g.rows.map(r => shItem(esc((P[r[3]] || ['ID ' + r[3]])[0]), `№ ${r[0]} · ${dm(r[1])}`, usd(r[5]), `${nf0.format(r[4])} dona`)).join('')}</div>` : ''); }).join('');
+  host.innerHTML = `${tmSeg()}
+    <div class="hint">Artel jo'natmalari (Исполнено) − shu omborga Artel'dan kelgan kirim. Jo'natma fayli ${dm(d.last)} gacha${d.kirim_last ? `, kirim ${dm(d.kirim_last)} gacha` : ''}. Odatdagi muddat — kirim tarixidan.</div>
+    ${shKp([["Yo'lda", usd(T.usd), `${nf0.format(T.qty)} dona · ${docs.length} jo'natma`], ['⚠ Kechikmoqda', usd(L), `${late.length} jo'natma · muddatdan >${d.late_extra} kun`, late.length > 0]])}
+    ${shUnb(d)}
+    ${ws.length || D.size ? `<div class="ablock">${tree}${direct}</div>` : `<div class="card"><div class="empty">Yo'lda tovar yo'q — jo'natilganlarning hammasi kirim bo'lib kelgan 👍</div></div>`}
+    <div class="hint">Ombor → jo'natma (Artel hujjati) → tovar. Tepadagi filtr (kategoriya, brend, joy) ishlaydi; davr — hozirgi holat.</div>`;
+  shWire(host, () => tmYolda(host));
+}
+
+async function tmZakaz(host) {
+  if (!SH.o && !(await shLoad(host, 'o'))) return;
+  if (TM.sec !== 'z') return;
+  const d = SH.o;
+  if (!d.has) return shNoData(host, "Ta'minotchiga zakazlar");
+  const P = d.prods, rows = d.rows, today = d.today;
+  const age = s => Math.round((Date.parse(today) - Date.parse(s)) / 864e5);
+  const T = rows.reduce((a, r) => ({usd: a.usd + r[8], qty: a.qty + r[7]}), {usd: 0, qty: 0});
+  const nm = rows.filter(r => r[9] === 0), NM = nm.reduce((a, r) => a + r[8], 0);
+  const where = r => (r[2] ? shWh(d, r[2]) : r[3] ? 'Filialga: ' + shCap(r[4]) : "Manzil noma'lum: " + shCap(r[4]));
+  const grp = (key, name) => { const G = new Map(); for (const r of rows) { const k = key(r); const g = G.get(k) || {k, name: name(r), usd: 0, qty: 0, rows: []}; g.usd += r[8]; g.qty += r[7]; g.rows.push(r); G.set(k, g); } return [...G.values()]; };
+  const prodRow = r => { const p = P[r[6]] || ['ID ' + r[6]];
+    return shItem(`${r[9] === 0 ? '<span class="bad">🚫</span> ' : ''}${esc(p[0])}`, `${SH.g === 'c' ? esc(where(r)) + ' · ' : ''}№ ${r[0]} · ${dm(r[1])}`, usd(r[8]), `${nf0.format(r[7])} dona`); };
+  const docsOf = (g, k0) => { const D = new Map(); for (const r of g.rows) { const x = D.get(r[0]) || {doc: r[0], date: r[1], base: r[5], usd: 0, qty: 0, rows: []}; x.usd += r[8]; x.qty += r[7]; x.rows.push(r); D.set(r[0], x); }
+    return [...D.values()].sort((a, b) => a.date.localeCompare(b.date)).map(x => { const k = k0 + '|' + x.doc, a = age(x.date);
+      return shHead(k, 2, `№ ${x.doc} · ${dm(x.date)}`, `${a} kundan beri kutilmoqda${x.base ? ` · ${esc(x.base)} bazasi` : ''}${a > 7 ? ' <span class="pill2 y">⏳ uzoq</span>' : ''}${x.rows.some(r => r[9] === 0) ? ' <span class="pill2 nx">🚫 matritsada yo\'q</span>' : ''}`, usd(x.usd), `${nf0.format(x.qty)} dona`)
+        + (SH.open.has(k) ? x.rows.sort((a, b) => b[8] - a[8]).map(prodRow).join('') : ''); }).join(''); };
+  let groups, sub;
+  if (SH.g === 'c') { groups = grp(r => (P[r[6]] || [0, '—'])[1], r => (P[r[6]] || [0, '—'])[1]); sub = g => `${new Set(g.rows.map(r => r[6])).size} tovar · ${new Set(g.rows.map(r => r[0])).size} hujjat`; }
+  else if (SH.g === 'd') { groups = grp(r => r[1], r => dm(r[1])).sort((a, b) => b.k.localeCompare(a.k)); sub = g => `${age(g.k)} kun oldin · ${new Set(g.rows.map(r => r[0])).size} hujjat`; }
+  else { groups = grp(r => where(r), r => where(r)); sub = g => { const ds = g.rows.map(r => r[1]).sort(); return `${new Set(g.rows.map(r => r[0])).size} hujjat · ${dm(ds[0])}–${dm(ds[ds.length - 1])}`; }; }
+  if (SH.g !== 'd') groups.sort((a, b) => b.usd - a.usd);
+  const tree = groups.map(g => { const k = 'z' + SH.g + '|' + g.k;
+    return shHead(k, 1, esc(g.name), sub(g), usd(g.usd), `${nf0.format(g.qty)} dona`)
+      + (SH.open.has(k) ? `<div class="tmsub">${SH.g === 'c' ? g.rows.slice().sort((a, b) => b[8] - a[8]).map(prodRow).join('') : docsOf(g, k)}</div>` : ''); }).join('');
+  host.innerHTML = `${tmSeg()}
+    <div class="hint">Artel'da «в работе» — buyurtma qilingan, hali jo'natilmagan. Fayl ${dm(d.last)} gacha.</div>
+    ${shKp([['Zakazda', usd(T.usd), `${nf0.format(T.qty)} dona · ${new Set(rows.map(r => r[0])).size} hujjat`], ["🚫 Matritsada yo'q", usd(NM), `${new Set(nm.map(r => r[6] + ':' + r[2])).size} tovar×ombor — signal`, nm.length > 0]])}
+    ${shUnb(d)}
+    <div class="tmgrp"><span class="seg mini" id="shG">${[['w', 'Ombor'], ['c', 'Kategoriya'], ['d', 'Sana']].map(([k, l]) => `<button data-g="${k}" aria-pressed="${SH.g === k}">${l}</button>`).join('')}</span></div>
+    ${rows.length ? `<div class="ablock">${tree}</div>` : `<div class="card"><div class="empty">Ochiq zakaz yo'q</div></div>`}
+    <div class="hint">⏳ uzoq — 7 kundan ortiq jo'natilmagan. 🚫 — shu ombor filiallarining birortasi matritsasida yo'q.</div>`;
+  shWire(host, () => tmZakaz(host));
+  host.querySelectorAll('#shG [data-g]').forEach(b => b.onclick = () => { SH.g = b.dataset.g; tmZakaz(host); });
 }
 // ---- Ta'minotchi: Guruhlar · Qoidalar · Reyting (022_suppliers.sql)
 const SUP = {sub: 'g', g: null, r: null, open: new Set(), bopen: new Set(), rf: 'all', blim: 30, seq: 0};

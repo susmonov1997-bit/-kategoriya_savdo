@@ -143,7 +143,7 @@ async def _load(pool, job: dict) -> None:
                                    "miniapp", job["file_name"])
             if kind in ("sales", "stock_branch", "stock_wh", "branches", "products", "receipts"):
                 await prompt_new(pool)
-            if kind == "receipts":
+            if kind in ("receipts", "ship"):
                 from supply import notify_signals
                 await notify_signals(pool)       # yangi filial / tanilmagan ombor bo'limi — adminlarga tugmali so'rov
             if kind in ("stock_branch", "stock_wh"):

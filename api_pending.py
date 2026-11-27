@@ -191,19 +191,29 @@ async def _alias(con, key: str, pid: int, uid: int) -> None:
 @router.get("/kirim")
 async def kirim_list(request: Request, user: User = Depends(uploader)):
     async with request.app.state.pool.acquire() as con:
+        # Artel jo'natmalaridagi bog'lanmagan kodlar (kalit «a:<material>»)
+        arts = await con.fetch(
+            """SELECT material, max(mat_name) name, sum(qty)::float8 qty, coalesce(sum(value_usd), 0)::float8 usd,
+                      count(DISTINCT doc_no) docs, min(doc_date) d1, max(doc_date) d2
+               FROM sup_ship WHERE product_id IS NULL GROUP BY 1 ORDER BY usd DESC""")
         rows = await con.fetch(
             """SELECT prod_key, max(product_name) name, max(category) cat, max(brand) brand,
                       string_agg(DISTINCT product_code, ', ') codes, sum(qty)::float8 qty,
                       coalesce(sum(value_usd), 0)::float8 usd, count(DISTINCT nullif(order_code, '')) orders,
                       count(DISTINCT loc_key) locs, min(rec_date) d1, max(rec_date) d2
                FROM receipt_pending WHERE product_id IS NULL GROUP BY prod_key ORDER BY usd DESC, qty DESC""")
-    return {"items": [{"key": r["prod_key"], "name": r["name"], "cat": r["cat"], "brand": r["brand"], "codes": r["codes"],
+    return {"items": sorted([{"key": r["prod_key"], "name": r["name"], "cat": r["cat"], "brand": r["brand"], "codes": r["codes"],
                        "qty": r["qty"], "usd": r["usd"], "orders": r["orders"], "locs": r["locs"],
-                       "d1": r["d1"], "d2": r["d2"]} for r in rows]}
+                       "d1": r["d1"], "d2": r["d2"]} for r in rows]
+                      + [{"key": "a:" + r["material"], "name": r["name"] or r["material"], "cat": None, "brand": None,
+                          "codes": r["material"], "qty": r["qty"], "usd": r["usd"], "orders": r["docs"], "locs": 0,
+                          "d1": r["d1"], "d2": r["d2"], "src": "a"} for r in arts], key=lambda x: -(x["usd"] or 0))}
 
 
 @router.get("/kirim/cand")
 async def kirim_cand(key: str, request: Request, user: User = Depends(uploader)):
+    if key.startswith("a:"):
+        return await _art_cand(request, key[2:])
     async with request.app.state.pool.acquire() as con:
         k = await con.fetchrow("""SELECT max(product_name) name, max(brand) brand, max(category) cat
                                   FROM receipt_pending WHERE prod_key = $1 AND product_id IS NULL""", key)
@@ -222,6 +232,52 @@ async def kirim_cand(key: str, request: Request, user: User = Depends(uploader))
     sc = sorted(((difflib.SequenceMatcher(None, kk, _lk(r["name"])).ratio(), r) for r in cand), key=lambda x: -x[0])
     return {"name": k["name"], "similar": [{"id": r["product_id"], "name": r["name"], "cat": r["cname"],
                                             "score": round(s * 100)} for s, r in sc[:3] if s >= 0.5]}
+
+
+# Artel nomi («Ст м/а AVL-WM7060 B Neo Чёрный») → spravochnik: model kodi + rang
+_COL = {"бел": ("white", "оқ", "white"), "чер": ("black", "қора"), "чёр": ("black", "қора"), "сер": ("gray", "grey", "silver", "кулранг"),
+        "кор": ("brown", "жигарранг"), "беж": ("beige",), "зол": ("gold",), "син": ("blue",), "крас": ("red",), "кра": ("red",),
+        "нерж": ("inox", "steel", "нерж"), "инокс": ("inox",), "inx": ("inox",), "мат": ("mat",), "зел": ("green",),
+        "мок": ("asphalt",), "асф": ("asphalt",)}
+
+
+def _model_tokens(name: str) -> list[str]:
+    import re
+    out = []
+    for t in re.split(r"[\s(),/]+", name or ""):
+        c = re.sub(r"[^0-9a-zа-я]", "", t.lower())
+        if re.search(r"\d", c) and re.search(r"[a-zа-я]", c) and len(c) >= 4 and not re.fullmatch(r"\d+(кг|л|kw|s)", c):
+            out.append(c)
+    return sorted(out, key=len, reverse=True)
+
+
+async def _art_cand(request, material: str):
+    import re
+    async with request.app.state.pool.acquire() as con:
+        name = await con.fetchval("SELECT max(mat_name) FROM sup_ship WHERE material = $1 AND product_id IS NULL", material)
+        if name is None:
+            raise HTTPException(404, "Bu kod endi kutayotganlar ro'yxatida yo'q")
+        toks = _model_tokens(name)
+        cand = []
+        for t in toks[:2]:
+            cand = await con.fetch(
+                """SELECT p.product_id, p.name, c.name cname FROM products p JOIN categories c ON c.id = p.category_id
+                   WHERE regexp_replace(lower(p.name), '[^0-9a-zа-я]', '', 'g') LIKE '%' || $1 || '%' LIMIT 300""", t)
+            if cand:
+                break
+    low = (name or "").lower()
+    cols = [v for k, v in _COL.items() if re.search(r"(^|[\s/])" + k, low)]
+    kk = _lk(name)
+
+    def score(r):
+        n = r["name"].lower()
+        s = difflib.SequenceMatcher(None, kk, _lk(r["name"])).ratio() * 0.5 + 0.4
+        if cols and any(any(w in n for w in ws) for ws in cols):
+            s += 0.1
+        return min(s, 0.99)
+    sc = sorted(((score(r), r) for r in cand), key=lambda x: -x[0])
+    return {"name": name, "similar": [{"id": r["product_id"], "name": r["name"], "cat": r["cname"],
+                                        "score": round(s * 100)} for s, r in sc[:5]]}
 
 
 @router.get("/search")
@@ -251,6 +307,16 @@ async def kirim_bind(req: BindReq, request: Request, user: User = Depends(upload
     async with request.app.state.pool.acquire() as con:
         if not await con.fetchval("SELECT 1 FROM products WHERE product_id = $1", req.product_id):
             raise HTTPException(404, "Tovar spravochnikda topilmadi")
+        if req.key.startswith("a:"):               # Artel kodi → Товар ИД
+            from loaders_ship import rebind_ship
+            async with con.transaction():
+                await con.execute(
+                    """INSERT INTO product_aliases (alias_key, product_id, created_by) VALUES ($1, $2, $3)
+                       ON CONFLICT (alias_key) DO UPDATE SET product_id = EXCLUDED.product_id, created_by = EXCLUDED.created_by,
+                       created_at = now()""", "am:" + req.key[2:], req.product_id, user.id)
+                n = await rebind_ship(con)
+            log.info("Artel kodi bog'landi: %s → %s (user %s)", req.key, req.product_id, user.id)
+            return {"ok": True, "ship_rows": n, "rec_rows": 0, "rec_qty": 0}
         async with con.transaction():
             await _alias(con, req.key, req.product_id, user.id)
             res = await resolve_pending(con)

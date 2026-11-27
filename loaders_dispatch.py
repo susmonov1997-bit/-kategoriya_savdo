@@ -13,6 +13,7 @@ import loaders_owners as owners
 import loaders_plan as plan
 import loaders_products as products
 import loaders_receipts as receipts
+import loaders_ship as ship
 import loaders_sales as sales
 import loaders_stock as stock
 from fact import ensure_fact
@@ -24,7 +25,8 @@ log = logging.getLogger(__name__)
 KIND_NAMES = {"products": "Tovar spravochnigi", "branches": "Filial spravochnigi", "sales": "Savdo fayli",
               "bonus": "Qo'shimcha daromad %", "owners": "Mas'ullar ro'yxati",
               "plan": "Savdo rejasi", "stock_branch": "Filial qoldig'i", "stock_wh": "Ombor qoldig'i",
-              "receipts": "Omborga kirim", "sup_rules": "Ta'minotchi qoidalari"}
+              "receipts": "Omborga kirim", "sup_rules": "Ta'minotchi qoidalari",
+              "ship": "Artel jo'natmalari", "ship_map": "Artel kodi ↔ Товар ид"}
 
 
 def detect_kind(data: bytes) -> str | None:
@@ -35,6 +37,8 @@ def detect_kind(data: bytes) -> str | None:
     for h in rows:
         if {"Kategoriya ID", "Brend"} <= set(h) and any("minotchi" in x for x in h):
             return "sup_rules"
+        if ship.is_ship_file(h):
+            return "ship"
         if receipts.is_receipts_file(h):
             return "receipts"
         if stock.is_wh_stock_file(h):
@@ -53,6 +57,8 @@ def detect_kind(data: bytes) -> str | None:
             return "owners"
         if plan.is_plan_file(h):
             return "plan"
+    if ship.is_map_file(data):                 # istalgan varaqda «Материал» + «Товар ид»
+        return "ship_map"
     return None
 
 
@@ -132,6 +138,12 @@ async def _load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int
     if kind == "receipts":
         r = await receipts.load_receipts(pool, data, file_name, tg_user_id)
         return kind, receipts.format_report(r) + await _sup_note(pool), r.upload_id
+    if kind == "ship":
+        r = await ship.load_ship(pool, data, file_name, tg_user_id)
+        return kind, ship.format_report(r), r.upload_id
+    if kind == "ship_map":
+        r = await ship.load_map(pool, data, file_name, tg_user_id)
+        return kind, ship.format_map_report(r), r["upload_id"]
     if kind == "sup_rules":
         import loaders_suprules
         r = await loaders_suprules.load_rules(pool, data, file_name, tg_user_id)
@@ -152,6 +164,8 @@ async def _load_any_ex(pool, data: bytes, file_name: str | None, tg_user_id: int
         "• Filial spravochnigi: Территория, Филиал, Кластер (+ Омбор)\n"
         "• Filial qoldig'i: Filial, Tovar Id, Qoldiq (sana — fayl nomida: …_17.10.2026.xlsx)\n"
         "• Ombor qoldig'i: ID, Омбор, Мижоз учун қолдиқ (sana — fayl nomida)\n"
+        "• Artel jo'natmalari: ДатаДокум, Материал, КумулКлчЗк, Статус, Номер заказа на поставку\n"
+        "• Artel kodi ↔ Товар ид: Материал, Товар ид\n"
         "• Omborga kirim: Таъминотчи, Омбор, Товар, Миқдори, Кабул вақти (+ Буюртма коди, Товар коди, Кирим нархи, Валюта)\n"
         "• Qo'shimcha daromad: Категория, Бренд, Қўшимча даромад %\n"
         "• Mas'ullar ro'yxati: Группа, Категория, Жавобгар КМ\n"
